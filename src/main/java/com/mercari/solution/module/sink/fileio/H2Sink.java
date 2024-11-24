@@ -7,6 +7,7 @@ import com.mercari.solution.util.gcp.JdbcUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.pipeline.union.UnionValue;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
+import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
 import org.apache.avro.Schema;
 import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.metrics.Counter;
@@ -43,8 +44,22 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
 
     private transient List<UnionValue> buffer;
     private transient Connection connection;
-    private transient Map<String, PreparedStatement> preparedStatements;
+    private transient Map<String, PreparedStatementWithTemplate> preparedStatements;
     private transient OutputStream outputStream;
+
+    private static class PreparedStatementWithTemplate {
+        final PreparedStatementTemplate template;
+        final PreparedStatement preparedStatement;
+
+        PreparedStatementWithTemplate(PreparedStatementTemplate template, PreparedStatement preparedStatement) {
+            this.template = template;
+            this.preparedStatement = preparedStatement;
+        }
+
+        PreparedStatementTemplate.PlaceholderSetterProxy createSetterProxy() {
+            return this.template.createPlaceholderSetterProxy(this.preparedStatement);
+        }
+    }
 
     private H2Sink(
             final String name,
@@ -112,8 +127,8 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
                 this.connection = DriverManager.getConnection("jdbc:h2:file:" + databasePath, "sa", "");
                 this.connection.setAutoCommit(false);
 
-                for(final PreparedStatement preparedStatement : this.preparedStatements.values()) {
-                    preparedStatement.close();
+                for(final PreparedStatementWithTemplate ps : this.preparedStatements.values()) {
+                    ps.preparedStatement.close();
                 }
 
                 for(final H2Util.Config config : configs) {
@@ -129,10 +144,10 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
                     //final Schema tableSchema = JdbcUtil.createAvroSchemaFromTable(connection, config.getTable());
                     final Schema inputSchema = AvroSchemaUtil.convertSchema(inputSchemas.get(config.getInput()));
 
-                    final String statement = JdbcUtil.createStatement(config.getTable(), inputSchema, config.getOp(), JdbcUtil.DB.H2, config.getKeyFields());
-                    LOG.info("setup preparedStatement: " + statement);
-                    final PreparedStatement preparedStatement = connection.prepareStatement(statement);
-                    this.preparedStatements.put(config.getInput(), preparedStatement);
+                    final PreparedStatementTemplate statementTemplate = JdbcUtil.createStatement(config.getTable(), inputSchema, config.getOp(), JdbcUtil.DB.H2, config.getKeyFields());
+                    LOG.info("setup preparedStatement: " + statementTemplate);
+                    final PreparedStatement preparedStatement = connection.prepareStatement(statementTemplate.getStatementString());
+                    this.preparedStatements.put(config.getInput(), new PreparedStatementWithTemplate(statementTemplate, preparedStatement));
                 }
             }
         } catch (final SQLException e) {
@@ -162,33 +177,35 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
     }
 
     private void teardown() {
-        try {
-            this.connection.close();
-        } catch (SQLException e) {
-            throw new IllegalStateException("Failed to close connection", e);
+        if(this.connection != null) {
+            try {
+                this.connection.close();
+            } catch (SQLException e) {
+                throw new IllegalStateException("Failed to close connection", e);
+            }
         }
     }
 
     private void flushBuffer() {
         try {
-            for(final PreparedStatement statement : preparedStatements.values()) {
-                //statement.clearParameters();
+            for(final PreparedStatementWithTemplate ps : preparedStatements.values()) {
+                //ps.preparedStatement.clearParameters();
             }
 
             for(final UnionValue unionValue : buffer) {
                 final String inputName = inputNames.get(unionValue.getIndex());
-                final PreparedStatement preparedStatement = preparedStatements.get(inputName);
+                final PreparedStatementWithTemplate ps = preparedStatements.get(inputName);
                 final H2Util.Config config = configMap.get(inputName);
-                if(preparedStatement == null || config == null) {
+                if(ps == null || config == null) {
                     LOG.warn("Skip statement");
                     continue;
                 }
-                ToStatementConverter.convertUnionValue(unionValue, preparedStatement, config.getKeyFields());
-                preparedStatement.addBatch();
+                ToStatementConverter.convertUnionValue(unionValue, ps.createSetterProxy(), config.getKeyFields());
+                ps.preparedStatement.addBatch();
             }
 
-            for(final PreparedStatement statement : preparedStatements.values()) {
-                final int[] result = statement.executeBatch();
+            for(final PreparedStatementWithTemplate ps : preparedStatements.values()) {
+                final int[] result = ps.preparedStatement.executeBatch();
                 LOG.info("Execute statement : " + Arrays.stream(result).sum());
             }
 

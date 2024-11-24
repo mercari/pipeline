@@ -29,7 +29,6 @@ import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.sql.DataSource;
 import java.io.IOException;
 import java.io.Serializable;
 import java.sql.*;
@@ -198,12 +197,15 @@ public class JdbcSource {
             }
 
             if(table != null && keyFields.size() == 0) {
-                final DataSource dataSource = JdbcUtil.createDataSource(
-                        driver, url, user, password, true);
-                try(final Connection connection = dataSource.getConnection()) {
-                    keyFields = JdbcUtil.getPrimaryKeyNames(connection, null, null, table);
-                } catch (SQLException e) {
-                    throw new IllegalStateException("Failed to get primaryKeys for table: " + table, e);
+                try (final JdbcUtil.CloseableDataSource dataSource = JdbcUtil.createDataSource(
+                        driver, url, user, password, true)) {
+                    try(final Connection connection = dataSource.getConnection()) {
+                        keyFields = JdbcUtil.getPrimaryKeyNames(connection, null, null, table);
+                    } catch (SQLException e) {
+                        throw new IllegalStateException("Failed to get primaryKeys for table: " + table, e);
+                    }
+                } catch (IOException e) {
+                } finally {
                 }
             }
         }
@@ -388,7 +390,7 @@ public class JdbcSource {
             private final String outputSchemaString;
 
             private transient Schema outputSchema;
-            private transient DataSource dataSource;
+            private transient JdbcUtil.CloseableDataSource dataSource;
             private transient Connection connection;
 
             QueryDoFn(final JdbcSourceParameters parameters,
@@ -416,7 +418,22 @@ public class JdbcSource {
 
             @Teardown
             public void teardown() throws SQLException {
-                this.connection.close();
+                if(this.connection != null) {
+                    try {
+                        this.connection.close();
+                    } finally {
+                        this.connection = null;
+                    }
+                }
+
+                if(this.dataSource != null) {
+                    try {
+                        this.dataSource.close();
+                    } catch (IOException e) {
+                    } finally {
+                        this.dataSource = null;
+                    }
+                }
             }
 
             @ProcessElement
@@ -583,7 +600,7 @@ public class JdbcSource {
             protected final String outputSchemaString;
 
             protected transient Schema outputSchema;
-            protected transient DataSource dataSource;
+            protected transient JdbcUtil.CloseableDataSource dataSource;
             protected transient Connection connection;
 
             protected transient List<Schema.Field> parameterFields;
@@ -637,7 +654,22 @@ public class JdbcSource {
             }
 
             protected void teardown() throws SQLException {
-                this.connection.close();
+                if(this.connection != null) {
+                    try {
+                        this.connection.close();
+                    } finally {
+                        this.connection = null;
+                    }
+                }
+
+                if(this.dataSource != null) {
+                    try {
+                        this.dataSource.close();
+                    } catch (IOException e) {
+                    } finally {
+                        this.dataSource = null;
+                    }
+                }
             }
 
             protected void process(

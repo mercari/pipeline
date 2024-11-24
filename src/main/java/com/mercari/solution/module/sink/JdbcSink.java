@@ -1,19 +1,22 @@
 package com.mercari.solution.module.sink;
 
+import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
 import com.google.gson.Gson;
 import com.mercari.solution.config.SinkConfig;
 import com.mercari.solution.module.FCollection;
 import com.mercari.solution.util.converter.ToStatementConverter;
 import com.mercari.solution.util.gcp.JdbcUtil;
+import com.mercari.solution.util.gcp.SecretManagerUtil;
+import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
+import com.mercari.solution.util.sql.stmt.PreparedStatementSetter;
 import org.apache.beam.sdk.coders.ListCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.io.jdbc.JdbcIO;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.values.PCollection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.sql.DataSource;
+import java.io.IOException;
 import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -123,6 +126,19 @@ public class JdbcSink {
                 keyFields = new ArrayList<>();
             }
         }
+
+        public void replaceParameters() {
+            if(SecretManagerUtil.isSecretName(user) || SecretManagerUtil.isSecretName(password)) {
+                try(final SecretManagerServiceClient secretClient = SecretManagerUtil.createClient()) {
+                    if(SecretManagerUtil.isSecretName(user)) {
+                        user = SecretManagerUtil.getSecret(secretClient, user).toStringUtf8();
+                    }
+                    if(SecretManagerUtil.isSecretName(password)) {
+                        password = SecretManagerUtil.getSecret(secretClient, password).toStringUtf8();
+                    }
+                }
+            }
+        }
     }
 
     public String getName() { return "jdbc"; }
@@ -145,6 +161,7 @@ public class JdbcSink {
         final JdbcSinkParameters parameters = new Gson().fromJson(config.getParameters(), JdbcSinkParameters.class);
         parameters.validate();
         parameters.setDefaults();
+        parameters.replaceParameters();
 
         final JdbcWrite write = switch (collection.getDataType()) {
             case AVRO -> new JdbcWrite<>(collection, parameters, ToStatementConverter::convertRecord);
@@ -171,12 +188,12 @@ public class JdbcSink {
         private FCollection<?> inputCollection;
         private final JdbcSinkParameters parameters;
 
-        private final JdbcIO.PreparedStatementSetter<InputT> formatter;
+        private final PreparedStatementSetter<InputT> formatter;
 
         private JdbcWrite(
                 final FCollection<?> inputCollection,
                 final JdbcSinkParameters parameters,
-                final JdbcIO.PreparedStatementSetter<InputT> formatter) {
+                final PreparedStatementSetter<InputT> formatter) {
 
             this.inputCollection = inputCollection;
             this.parameters = parameters;
@@ -211,14 +228,14 @@ public class JdbcSink {
                         .setCoder(input.getCoder());
             }
 
-            final String statementString = JdbcUtil.createStatement(
+            final PreparedStatementTemplate statementTemplate = JdbcUtil.createStatement(
                     parameters.getTable(), inputCollection.getAvroSchema(),
                     JdbcUtil.OP.valueOf(parameters.getOp()), db,
                     parameters.getKeyFields());
 
             return tableReady.apply("WriteJdbc", ParDo.of(new WriteDoFn<>(
                     parameters.getDriver(), parameters.getUrl(), parameters.getUser(), parameters.getPassword(),
-                    statementString, parameters.getBatchSize(), formatter)));
+                    statementTemplate, parameters.getBatchSize(), formatter)));
         }
 
         private JdbcUtil.DB getDB(final String driver) {
@@ -239,23 +256,23 @@ public class JdbcSink {
         private final String url;
         private final String user;
         private final String password;
-        private final String statement;
+        private final PreparedStatementTemplate statementTemplate;
         private final int batchSize;
-        private final JdbcIO.PreparedStatementSetter<T> setter;
+        private final PreparedStatementSetter<T> setter;
 
-        private transient DataSource dataSource;
+        private transient JdbcUtil.CloseableDataSource dataSource;
         private transient Connection connection = null;
         private transient PreparedStatement preparedStatement;
 
         private transient int bufferSize;
 
         public WriteDoFn(final String driver, final String url, final String user, final String password,
-                         final String statement, final int batchSize, final JdbcIO.PreparedStatementSetter<T> setter) {
+                         final PreparedStatementTemplate statementTemplate, final int batchSize, final PreparedStatementSetter<T> setter) {
             this.driver = driver;
             this.url = url;
             this.user = user;
             this.password = password;
-            this.statement = statement;
+            this.statementTemplate = statementTemplate;
             this.batchSize = batchSize;
             this.setter = setter;
         }
@@ -266,12 +283,17 @@ public class JdbcSink {
             this.dataSource = JdbcUtil.createDataSource(driver, url, user, password);
         }
 
+        @Teardown
+        public void teardown() throws Exception {
+            cleanUpDataSource();
+        }
+
         @StartBundle
         public void startBundle(StartBundleContext c) throws Exception {
             if (connection == null) {
                 connection = dataSource.getConnection();
                 connection.setAutoCommit(false);
-                preparedStatement = connection.prepareStatement(statement);
+                preparedStatement = connection.prepareStatement(statementTemplate.getStatementString());
             }
             bufferSize = 0;
         }
@@ -280,7 +302,7 @@ public class JdbcSink {
         public void processElement(ProcessContext c) throws Exception {
             try {
                 preparedStatement.clearParameters();
-                setter.setParameters(c.element(), preparedStatement);
+                setter.setParameters(c.element(), this.statementTemplate.createPlaceholderSetterProxy(preparedStatement));
                 preparedStatement.addBatch();
                 bufferSize += 1;
 
@@ -312,26 +334,33 @@ public class JdbcSink {
             }
         }
 
-        protected void finalize() throws Throwable {
-            cleanUpStatementAndConnection();
+        private void cleanUpStatementAndConnection() throws Exception {
+            if (preparedStatement != null) {
+                try {
+                    preparedStatement.close();
+                } finally {
+                    preparedStatement = null;
+                }
+            }
+
+            if(connection != null) {
+                try {
+                    connection.close();
+                } finally {
+                    connection = null;
+                }
+            }
         }
 
-        private void cleanUpStatementAndConnection() throws Exception {
-            try {
-                if (preparedStatement != null) {
-                    try {
-                        preparedStatement.close();
-                    } finally {
-                        preparedStatement = null;
-                    }
-                }
-            } finally {
-                if (connection != null) {
-                    try {
-                        connection.close();
-                    } finally {
-                        connection = null;
-                    }
+        private void cleanUpDataSource() throws Exception {
+            cleanUpStatementAndConnection();
+
+            if(dataSource != null) {
+                try {
+                    dataSource.close();
+                } catch (IOException e) {
+                } finally {
+                    dataSource = null;
                 }
             }
         }
@@ -360,12 +389,14 @@ public class JdbcSink {
                 c.output("ok");
                 return;
             }
-            try(final Connection connection = JdbcUtil.createDataSource(driver, url, user, password).getConnection()) {
-                for(final String sql : ddl) {
-                    LOG.info("ExecuteDDL: " + sql);
-                    connection.createStatement().executeUpdate(sql);
-                    connection.commit();
-                    LOG.info("ExecutedDDL: " + sql);
+            try(final JdbcUtil.CloseableDataSource dataSource = JdbcUtil.createDataSource(driver, url, user, password)) {
+                try(final Connection connection = dataSource.getConnection()) {
+                    for(final String sql : ddl) {
+                        LOG.info("ExecuteDDL: " + sql);
+                        connection.createStatement().executeUpdate(sql);
+                        connection.commit();
+                        LOG.info("ExecutedDDL: " + sql);
+                    }
                 }
             }
             c.output("ok");

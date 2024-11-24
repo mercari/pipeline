@@ -8,6 +8,7 @@ import com.google.firestore.v1.Document;
 import com.mercari.solution.util.pipeline.union.UnionValue;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.RowSchemaUtil;
+import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.schemas.Schema;
@@ -29,12 +30,12 @@ public class ToStatementConverter {
 
     private static final Logger LOG = LoggerFactory.getLogger(ToStatementConverter.class);
 
-    public static void convertRecord(final GenericRecord record, final PreparedStatement statement) throws SQLException {
+    public static void convertRecord(final GenericRecord record, final PreparedStatementTemplate.PlaceholderSetterProxy statement) throws SQLException {
         convertRecordWithKeys(record, statement, null);
     }
 
     public static void convertRecordWithKeys(
-            final GenericRecord record, final PreparedStatement statement,
+            final GenericRecord record, final PreparedStatementTemplate.PlaceholderSetterProxy statement,
             final List<String> keyFields) throws SQLException {
 
         int index = 1;
@@ -146,11 +147,11 @@ public class ToStatementConverter {
             index++;
         }
     }
-    public static void convertRow(final Row row, final PreparedStatement statement) throws SQLException {
+    public static void convertRow(final Row row, final PreparedStatementTemplate.PlaceholderSetterProxy statement) throws SQLException {
         convertRowWithKeys(row, statement, null);
     }
 
-    public static void convertRowWithKeys(final Row row, final PreparedStatement statement,
+    public static void convertRowWithKeys(final Row row, final PreparedStatementTemplate.PlaceholderSetterProxy statement,
                                           final List<String> keyFields) throws SQLException {
 
         int index = 1;
@@ -250,11 +251,11 @@ public class ToStatementConverter {
         }
     }
 
-    public static void convertStruct(final Struct struct, final PreparedStatement statement) throws SQLException {
+    public static void convertStruct(final Struct struct, final PreparedStatementTemplate.PlaceholderSetterProxy statement) throws SQLException {
         convertStructWithKeys(struct, statement, null);
     }
 
-    public static void convertStructWithKeys(final Struct struct, final PreparedStatement statement,
+    public static void convertStructWithKeys(final Struct struct, final PreparedStatementTemplate.PlaceholderSetterProxy statement,
                                              final List<String> keyFields) throws SQLException {
         int index = 1;
         for(final Type.StructField field : struct.getType().getStructFields()) {
@@ -319,11 +320,11 @@ public class ToStatementConverter {
         }
     }
 
-    public static void convertEntity(final Entity entity, final PreparedStatement statement) throws SQLException {
+    public static void convertEntity(final Entity entity, final PreparedStatementTemplate.PlaceholderSetterProxy statement) throws SQLException {
         convertEntityWithKeys(entity, statement, null);
     }
 
-    public static void convertEntityWithKeys(final Entity entity, final PreparedStatement statement,
+    public static void convertEntityWithKeys(final Entity entity, final PreparedStatementTemplate.PlaceholderSetterProxy statement,
                                              final List<String> keyFields) throws SQLException {
         int index = 1;
         for(final Map.Entry<String, Value> entry : entity.getPropertiesMap().entrySet()) {
@@ -360,11 +361,11 @@ public class ToStatementConverter {
         }
     }
 
-    public static void convertDocument(final Document document, final PreparedStatement statement) throws SQLException {
+    public static void convertDocument(final Document document, final PreparedStatementTemplate.PlaceholderSetterProxy statement) throws SQLException {
         convertDocumentWithKeys(document, statement, null);
     }
 
-    public static void convertDocumentWithKeys(final Document document, final PreparedStatement statement,
+    public static void convertDocumentWithKeys(final Document document, final PreparedStatementTemplate.PlaceholderSetterProxy statement,
                                              final List<String> keyFields) throws SQLException {
         int index = 1;
         for(final Map.Entry<String, com.google.firestore.v1.Value> entry : document.getFieldsMap().entrySet()) {
@@ -401,7 +402,7 @@ public class ToStatementConverter {
         }
     }
 
-    public static void convertUnionValue(final UnionValue unionValue, final PreparedStatement statement, final List<String> keyFields) throws SQLException {
+    public static void convertUnionValue(final UnionValue unionValue, final PreparedStatementTemplate.PlaceholderSetterProxy statement, final List<String> keyFields) throws SQLException {
         switch (unionValue.getType()) {
             case AVRO -> convertRecordWithKeys((GenericRecord) unionValue.getValue(), statement, keyFields);
             case ROW -> convertRowWithKeys((Row) unionValue.getValue(), statement, keyFields);

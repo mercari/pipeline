@@ -503,9 +503,11 @@ public class WebSocketSource {
             @Teardown
             public void teardown() throws InterruptedException, ExecutionException {
                 LOG.info("WebSocket[" + name + "] teardown");
-                final CompletableFuture<java.net.http.WebSocket> comp = socket.sendClose(java.net.http.WebSocket.NORMAL_CLOSURE, "");
-                this.socket = comp.get();
-            }
+                if(this.socket != null) {
+                    final CompletableFuture<java.net.http.WebSocket> comp = this.socket.sendClose(java.net.http.WebSocket.NORMAL_CLOSURE, "");
+                    this.socket = comp.get();
+                }
+           }
 
             @ProcessElement
             public void processElement(final ProcessContext c,

@@ -18,8 +18,8 @@ Sink module to write the input data to a specified RDB table.
 | table | required | String | Destination table name. |
 | url | required | String | Connection destination for reading data in JDBC. |
 | driver | required | String | Specify driver class such as `com.mysql.cj.jdbc.Driver`, `org.postgresql.Driver` |
-| user | required | String | User name to access the database |
-| password | required | String | User password to access the database |
+| user | required | String | User name to access the database. You can also specify a Secret Manager resource name like `projects/{myproj}/secrets/{mysecret}/versions/latest`. |
+| password | required | String | User password to access the database. You can also specify a Secret Manager resource name like `projects/{myproj}/secrets/{mysecret}/versions/latest`. |
 | keyFields | required | Array<String\> | Specify the primary key fields. |
 | op | optional | String | One of `INSERT`, `INSERT_OR_UPDATE`(only MySQL support), or `INSERT_OR_DONOTHING`. The default is `INSERT` |
 | createTable | optional | Boolean | Specify true if you want to generate the table automatically if the destination table does not exist. |

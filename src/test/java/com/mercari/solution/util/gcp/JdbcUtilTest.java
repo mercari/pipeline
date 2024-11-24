@@ -1,6 +1,10 @@
 package com.mercari.solution.util.gcp;
 
+import com.mercari.solution.util.schema.AvroSchemaUtil;
+import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
 import org.apache.commons.codec.binary.Hex;
 import org.junit.Assert;
 import org.junit.Test;
@@ -11,6 +15,10 @@ import java.util.Arrays;
 import java.util.List;
 
 public class JdbcUtilTest {
+
+    private static int[] toIntArray(List<Integer> list) {
+        return list.stream().mapToInt(x->x).toArray();
+    }
 
     @Test
     public void testCreateSeekConditions() {
@@ -216,5 +224,294 @@ public class JdbcUtilTest {
         JdbcUtil.IndexPosition stopPosition = JdbcUtil.IndexPosition.of(Arrays.asList(JdbcUtil.IndexOffset.of("f1", Schema.Type.BYTES, true, ByteBuffer.wrap(end))), false);
         Assert.assertFalse(startPosition.isOverTo(stopPosition));
     }
-    
+
+    @Test
+    public void testCreateMySQLStatementInsert() {
+        Schema schema = SchemaBuilder.builder()
+            .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+            .endRecord();
+
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT, JdbcUtil.DB.MYSQL, null);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "INSERT INTO people (id,name,age,created_at)" +
+                " VALUES (?,?,?,?)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreateMySQLStatementInsertOrUpdate() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_UPDATE, JdbcUtil.DB.MYSQL, keyFields);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "INSERT INTO people (id,name,age,created_at)" +
+                " VALUES (?,?,?,?)" +
+                " ON DUPLICATE KEY UPDATE " +
+                "`name` = VALUES(`name`)," +
+                "`age` = VALUES(`age`)," +
+                "`created_at` = VALUES(`created_at`)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreateMySQLStatementInsertOrDoNothing() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_DONOTHING, JdbcUtil.DB.MYSQL, keyFields);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "INSERT INTO people (id,name,age,created_at)" +
+                " VALUES (?,?,?,?)" +
+                " ON DUPLICATE KEY UPDATE " +
+                "`id` = VALUES(`id`)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreatePostgreSQLStatementInsert() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT, JdbcUtil.DB.POSTGRESQL, null);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "INSERT INTO people (id,name,age,created_at)" +
+                " VALUES (?,?,?,?::timestamp)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreatePostgreSQLStatementInsertOrUpdate() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_UPDATE, JdbcUtil.DB.POSTGRESQL, keyFields);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "MERGE INTO people " +
+                "USING (VALUES (?,?,?,?::timestamp)) AS item (id,name,age,created_at) ON item.id = people.id" +
+                " WHEN MATCHED THEN" +
+                " UPDATE SET " +
+                "name = item.name," +
+                "age = item.age," +
+                "created_at = item.created_at" +
+                " WHEN NOT MATCHED THEN" +
+                " INSERT (id,name,age,created_at)" +
+                " VALUES (item.id,item.name,item.age,item.created_at)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreatePostgreSQLStatementInsertOrDoNothing() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_DONOTHING, JdbcUtil.DB.POSTGRESQL, keyFields);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "MERGE INTO people " +
+                "USING (VALUES (?,?,?,?::timestamp)) AS item (id,name,age,created_at) ON item.id = people.id" +
+                " WHEN MATCHED THEN" +
+                " DO NOTHING" +
+                " WHEN NOT MATCHED THEN" +
+                " INSERT (id,name,age,created_at)" +
+                " VALUES (item.id,item.name,item.age,item.created_at)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreateSQLServerStatementInsert() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT, JdbcUtil.DB.SQLSERVER, null);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "INSERT INTO people (id,name,age,created_at)" +
+                " VALUES (?,?,?,?)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreateSQLServerStatementInsertOrUpdate() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+
+        Assert.assertThrows("SQLServer does not support INSERT_OR_UPDATE.", IllegalArgumentException.class, () -> {
+           JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_UPDATE, JdbcUtil.DB.SQLSERVER, keyFields);
+        });
+    }
+
+    @Test
+    public void testCreateSQLServerStatementInsertOrDoNothing() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+
+        Assert.assertThrows("SQLServer does not support INSERT_OR_DONOTHING.", IllegalArgumentException.class, () -> {
+            JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_DONOTHING, JdbcUtil.DB.SQLSERVER, keyFields);
+        });
+    }
+
+    @Test
+    public void testCreateH2StatementInsert() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT, JdbcUtil.DB.H2, null);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "INSERT INTO people (id,name,age,created_at)" +
+                " VALUES (?,?,?,?)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreateH2StatementInsertOrUpdate() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+        PreparedStatementTemplate template = JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_UPDATE, JdbcUtil.DB.H2, keyFields);
+        List<List<Integer>> mappings = template.getPlaceholderMappings().getMappings();
+
+        String expectedStatement =
+                "MERGE INTO people (id,name,age,created_at) KEY (id)" +
+                " VALUES (?,?,?,?)";
+
+        Assert.assertEquals(expectedStatement, template.getStatementString());
+        Assert.assertArrayEquals(new int[]{1}, toIntArray(mappings.get(1)));
+        Assert.assertArrayEquals(new int[]{2}, toIntArray(mappings.get(2)));
+        Assert.assertArrayEquals(new int[]{3}, toIntArray(mappings.get(3)));
+        Assert.assertArrayEquals(new int[]{4}, toIntArray(mappings.get(4)));
+    }
+
+    @Test
+    public void testCreateH2StatementInsertOrDoNothing() {
+        Schema schema = SchemaBuilder.builder()
+                .record("root").fields()
+                .requiredInt("id")
+                .requiredString("name")
+                .requiredInt("age")
+                .name("created_at").type(AvroSchemaUtil.REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE).noDefault()
+                .endRecord();
+        List<String> keyFields = Arrays.stream(new String[]{"id"}).toList();
+
+        Assert.assertThrows("H2 does not support INSERT_OR_DONOTHING.", IllegalArgumentException.class, () -> {
+            JdbcUtil.createStatement("people", schema, JdbcUtil.OP.INSERT_OR_DONOTHING, JdbcUtil.DB.H2, keyFields);
+        });
+    }
 }

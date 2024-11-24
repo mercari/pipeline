@@ -634,7 +634,6 @@ public class SpannerSource extends Source {
                 }
             }
         }
-
     }
 
     private static class ChangeStreamSource extends PTransform<PBegin, PCollection<MMutation>> {
