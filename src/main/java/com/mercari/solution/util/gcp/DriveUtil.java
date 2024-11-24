@@ -15,7 +15,8 @@ import com.google.auth.oauth2.GoogleCredentials;
 import com.google.auth.oauth2.ImpersonatedCredentials;
 import com.google.cloud.hadoop.util.ChainingHttpRequestInitializer;
 import com.google.common.collect.ImmutableList;
-import com.mercari.solution.util.converter.RowToRecordConverter;
+import com.mercari.solution.util.DateTimeUtil;
+import com.mercari.solution.util.schema.converter.RowToRecordConverter;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericRecord;
@@ -158,8 +159,88 @@ public class DriveUtil {
         return builder.build();
     }
 
+    public static com.mercari.solution.module.Schema createFileSchema2(final String fields) {
+        final com.mercari.solution.module.Schema.Builder builder = com.mercari.solution.module.Schema.builder();
+
+        final String fields_ = fields.trim().replaceAll(" ", "");
+        final Matcher matcher = PATTERN_FIELDS.matcher(fields_);
+
+        if(matcher.find()) {
+            final String group = matcher.group();
+            final int start = group.indexOf("(");
+            final int end = group.lastIndexOf(")");
+            if(start > 0 && end > 0) {
+                final String fields__ = fields_.substring(start + 1, end);
+                for(final String field : fields__.split(",")) {
+                    builder.withField(field, convertFieldType2(field));
+                }
+            }
+
+            /*
+            final String others = fields_.substring(end + 1);
+            for(final String field : others.split(",")) {
+                if(field.length() == 0) {
+                    continue;
+                }
+                builder.addField(field, convertFieldType(field));
+            }
+             */
+        } else {
+            throw new IllegalArgumentException("Failed to create schema from fields: " + fields_);
+        }
+
+        return builder.build();
+    }
+
     public static org.apache.avro.Schema createAvroFileSchema(final String fields) {
         return RowToRecordConverter.convertSchema(createFileSchema(fields));
+    }
+
+    public static Map<String, Object> convertPrimitives(final com.mercari.solution.module.Schema schema, final File file) {
+        final Map<String, Object> values = new HashMap<>();
+        for(final com.mercari.solution.module.Schema.Field field : schema.getFields()) {
+            final Object value = switch (field.getName()) {
+                // STRING
+                case "id", "driveId", "name", "description", "originalFilename", "kind", "mimeType", "fileExtension",
+                     "fullFileExtension", "resourceKey", "webContentLink", "webViewLink", "iconLink", "thumbnailLink",
+                     "folderColorRgb", "md5Checksum", "headRevisionId", "nextPageToken",
+                     // BOOLEAN
+                     "starred", "trashed", "explicitlyTrashed", "viewedByMe", "shared", "ownedByMe", "viewerCanCopyContent",
+                     "writerCanShare", "isAppAuthorized", "hasThumbnail", "modifiedByMe", "hasAugmentedPermissions",
+                     // INT64
+                     "size", "version", "quotaBytesUsed", "thumbnailVersion",
+                     // STRING ARRAY
+                     "parents", "spaces", "permissionIds" ->  file.get(field.getName());
+                // DATETIME
+                case "createdTime" -> file.getCreatedTime() == null ? null : DateTimeUtil.toEpochMicroSecond(file.getCreatedTime().toStringRfc3339());
+                case "modifiedTime" -> file.getModifiedTime() == null ? null : DateTimeUtil.toEpochMicroSecond(file.getModifiedTime().toStringRfc3339());
+                case "viewedByMeTime" -> file.getViewedByMeTime() == null ? null : DateTimeUtil.toEpochMicroSecond(file.getViewedByMeTime().toStringRfc3339());
+                case "modifiedByMeTime" -> file.getModifiedByMeTime() == null ? null : DateTimeUtil.toEpochMicroSecond(file.getModifiedByMeTime().toStringRfc3339());
+                case "sharedWithMeTime" -> file.getSharedWithMeTime() == null ? null : DateTimeUtil.toEpochMicroSecond(file.getSharedWithMeTime().toStringRfc3339());
+                case "trashedTime" -> file.getTrashedTime() == null ? null : DateTimeUtil.toEpochMicroSecond(file.getTrashedTime().toStringRfc3339());
+                // User
+                case "trashingUser" -> convertDriveUserMap(file.getTrashingUser());
+                case "sharingUser" -> convertDriveUserMap(file.getSharingUser());
+                case "lastModifyingUser" -> convertDriveUserMap(file.getLastModifyingUser());
+                // User ARRAY
+                case "owners" -> {
+                    if(file.getOwners() == null) {
+                        yield null;
+                    } else {
+                        final List<Map<String, Object>> owners = new ArrayList<>();
+                        for(final User owner : file.getOwners()) {
+                            if(owner != null) {
+                                owners.add(convertDriveUserMap(owner));
+                            }
+                        }
+                        yield owners;
+                    }
+                }
+                default -> throw new IllegalArgumentException();
+            };
+            values.put(field.getName(), value);
+        }
+        return values;
     }
 
     // https://developers.google.com/drive/api/v3/reference/files
@@ -363,6 +444,29 @@ public class DriveUtil {
         return builder.build();
     }
 
+    private static com.mercari.solution.module.Schema.FieldType convertFieldType2(final String field) {
+        return switch (field) {
+            case "id", "driveId", "name", "description", "originalFilename", "kind", "mimeType", "fileExtension",
+                 "fullFileExtension", "resourceKey", "webContentLink", "webViewLink", "iconLink", "thumbnailLink",
+                 "folderColorRgb", "md5Checksum", "headRevisionId", "nextPageToken"
+                    -> com.mercari.solution.module.Schema.FieldType.STRING.withNullable(true);
+            case "starred", "trashed", "explicitlyTrashed", "viewedByMe",
+                 "shared", "ownedByMe", "viewerCanCopyContent", "writerCanShare",
+                 "isAppAuthorized", "hasThumbnail", "modifiedByMe", "hasAugmentedPermissions"
+                    -> com.mercari.solution.module.Schema.FieldType.BOOLEAN.withNullable(true);
+            case "size", "version", "quotaBytesUsed", "thumbnailVersion"
+                    -> com.mercari.solution.module.Schema.FieldType.INT64.withNullable(true);
+            case "createdTime", "modifiedTime", "viewedByMeTime", "modifiedByMeTime", "sharedWithMeTime", "trashedTime"
+                    -> com.mercari.solution.module.Schema.FieldType.TIMESTAMP.withNullable(true);
+            case "parents", "spaces", "permissionIds"
+                    -> com.mercari.solution.module.Schema.FieldType.array(com.mercari.solution.module.Schema.FieldType.STRING).withNullable(true);
+            case "trashingUser", "sharingUser", "lastModifyingUser"
+                -> com.mercari.solution.module.Schema.FieldType.element(createDriveUserSchema2()).withNullable(true);
+            case "owners" -> com.mercari.solution.module.Schema.FieldType.array(com.mercari.solution.module.Schema.FieldType.element(createDriveUserSchema2())).withNullable(true);
+            default -> throw new IllegalStateException("Not supported field: " + field);
+        };
+    }
+
     private static Schema.FieldType convertFieldType(final String field) {
         switch (field) {
             case "id":
@@ -435,6 +539,18 @@ public class DriveUtil {
                 .build();
     }
 
+    private static com.mercari.solution.module.Schema createDriveUserSchema2() {
+        return com.mercari.solution.module.Schema.builder()
+                .withField("kind", com.mercari.solution.module.Schema.FieldType.STRING.withNullable(true))
+                .withField("displayName", com.mercari.solution.module.Schema.FieldType.STRING.withNullable(true))
+                .withField("photoLink", com.mercari.solution.module.Schema.FieldType.STRING.withNullable(true))
+                .withField("me", com.mercari.solution.module.Schema.FieldType.BOOLEAN.withNullable(true))
+                .withField("permissionId", com.mercari.solution.module.Schema.FieldType.STRING.withNullable(true))
+                .withField("emailAddress", com.mercari.solution.module.Schema.FieldType.STRING.withNullable(true))
+                .build();
+    }
+
+
     private static org.apache.avro.Schema createDriveUserAvroSchema() {
         return SchemaBuilder
                 .record("user")
@@ -447,6 +563,20 @@ public class DriveUtil {
                 .name("permissionId").type(AvroSchemaUtil.NULLABLE_STRING).noDefault()
                 .name("emailAddress").type(AvroSchemaUtil.NULLABLE_STRING).noDefault()
                 .endRecord();
+    }
+
+    private static Map<String,Object> convertDriveUserMap(final User user) {
+        if(user == null) {
+            return null;
+        }
+        final Map<String, Object> values = new HashMap<>();
+        values.put("kind", user.getKind());
+        values.put("displayName", user.getDisplayName());
+        values.put("photoLink", user.getPhotoLink());
+        values.put("me", user.getMe());
+        values.put("permissionId", user.getPermissionId());
+        values.put("emailAddress", user.getEmailAddress());
+        return values;
     }
 
     private static Row convertDriveUser(final User user) {

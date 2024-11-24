@@ -2,13 +2,13 @@
 
 ## Config file contents
 
-In the Config file, four modules, `settings`, `sources`, `transforms`, and `sinks`, are combined to define the processing contents.
+In the Config file, four modules, `options`, `sources`, `transforms`, and `sinks`, are combined to define the processing contents.
 `sources` is for input data acquisition, `transforms` is for data processing, and `sinks` is for data output.
-`settings` defines common settings for sources, transforms, and sinks.
+`options` defines pipeline options.
 
 ```JSON:config
 {
-  "settings": [
+  "options": [
     {...}
   ],
   "sources": [
@@ -31,17 +31,37 @@ Examples of configuration files are listed in the [Examples Page](../../examples
 
 Below is an overview of these built-in modules.
 
-## Module common parameter
+## Module common attributes
 
 In the three types of modules, the contents of input, processing, and output are described as JSON parameters.
 The common settings of the three types of modules are as follows.
 
-| parameter  | type                 | optional | description                                     |
-|------------|----------------------|----------|-------------------------------------------------|
-| name       | String               | required | Set unique name in Config JSON                  |
-| module     | String               | required | Set [module](module/README.md) name             |
-| parameters | Map<String, Object\> | required | Specify the parameters defined in each module.  |
-| skip       | Boolean              | optional | Specify true if you want to ignore this module. |
+| attribute  | type                 | optional | description                                                                                                                                                                                                                                                                                         |
+|------------|----------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| name       | String               | required | Set unique name in Config JSON                                                                                                                                                                                                                                                                      |
+| module     | String               | required | Set [module](module/README.md) name                                                                                                                                                                                                                                                                 |
+| parameters | Map<String, Object\> | required | Specify the parameters defined in each module.                                                                                                                                                                                                                                                      |
+| strategy   | Strategy             | optional | Specify beam windowing strategy([Window](https://beam.apache.org/documentation/programming-guide/#windowing), [Trigger](https://beam.apache.org/documentation/programming-guide/#triggers), [AccumulationMode](https://beam.apache.org/documentation/programming-guide/#window-accumulation-modes)) |
+| wait       | Array<String\>       | optional | If you want to wait for the completion of other steps and then start this step, assign a step Name to wait for completion.                                                                                                                                                                          |
+| failFast   | Boolean              | optional | Specify true if you want the job to fail immediately when an error occurs. The default is true for batch and false for streaming.                                                                                                                                                                   |
+| ignore     | Boolean              | optional | Specify true if you want to ignore this module.                                                                                                                                                                                                                                                     |
+
+
+### Module Common Properties Matrix
+
+|                    | source   | transform | sink     |
+|--------------------|----------|-----------|----------|
+| name               | required | required  | required |
+| module             | required | required  | required |
+| parameters         | required | required  | required |
+| inputs             | -        | required  | required |
+| sideInputs         | -        | optional  | optional |
+| wait               | -        | optional  | optional |
+| schema             | optional | -         | optional |
+| strategy           | -        | optional  | optional |
+| timestampAttribute | optional | -         | -        |
+| failFast           | optional | optional  | optional |
+| ignore             | optional | optional  | optional |
 
 
 ## Source modules
@@ -53,7 +73,6 @@ Common configuration items in the source module are as follows.
 |--------------------|-----------------------------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | schema             | [Schema](module/source/SCHEMA.md) | optional | Specifies the schema of the input resource. If the input resource has schema information, no specification is required.                                                        |
 | timestampAttribute | String                            | optional | Defines which fields of the source record should be treated as EventTime. The default is the time of input.                                                                    |
-| microbatch         | Boolean                           | optional | Specify true if you want to retrieve data in near real time using the Micorobatch method. Default is false. (You need to start Dataflow in streaming mode if microbatch mode.) |
 
 
 ## Transform modules
@@ -61,9 +80,10 @@ Common configuration items in the source module are as follows.
 The transform module defines what to do with the data.
 The common settings of the transform module are as follows.
 
-| parameter | type           | optional | description                                                                                                   |
-|-----------|----------------|----------|---------------------------------------------------------------------------------------------------------------|
-| inputs    | Array<String\> | required | Specify the names of the module from which you want to process the data, including the name of the transform. |
+| parameter  | type           | optional | description                                                                                                   |
+|------------|----------------|----------|---------------------------------------------------------------------------------------------------------------|
+| inputs     | Array<String\> | required | Specify the names of the module from which you want to process the data, including the name of the transform. |
+| sideInputs | Array<String\> | optional | Specify the name of the input when additional information is needed for processing.                           |
 
 
 ## Sink modules
@@ -73,22 +93,22 @@ The common settings of the sink module are as follows
 
 | parameter  | type           | optional | description                                                                                                                 |
 |------------|----------------|----------|-----------------------------------------------------------------------------------------------------------------------------|
-| input      | String         | required | Specify the name of the module from which you want to output data. source or transform name.                                |
-| wait       | Array<String\> | optional | If you want to wait for the completion of other steps and then start the output, assign a step Name to wait for completion. |
+| inputs     | Array<String\> | required | Specify the name of the module from which you want to output data. source or transform name.                                |
 | sideInputs | Array<String\> | optional | Specify the name of the input when additional information is needed for writing.                                            |
 
-## Settings
+## Options
 
-The settings defines common settings for all modules.
-The following items can be defined as settings.
+The options defines pipeline options.
+The following items can be defined.
 
-See the [Settings page](module/setting/README.md) for details.
+See the [Options page](options/README.md) for details.
 
 | parameter | description                                                      |
 |-----------|------------------------------------------------------------------|
 | streaming | Specify whether the dataflow job starts in streaming mode or not |
-| dataflow  | Specify Cloud Dataflow runtime job parameters                    |
-| beamsql   | Specify Beam SQL common settings                                 |
+| dataflow  | Specify Dataflow runner job options                              |
+| direct    | Specify Direct runner job options                                |
+| beamsql   | Specify Beam SQL options                                         |
 
 
 ## Rewriting the configuration file at runtime

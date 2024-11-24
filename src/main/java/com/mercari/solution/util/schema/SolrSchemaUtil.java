@@ -2,7 +2,7 @@ package com.mercari.solution.util.schema;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.XmlUtil;
+import com.mercari.solution.util.domain.text.XmlUtil;
 import org.apache.beam.sdk.schemas.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

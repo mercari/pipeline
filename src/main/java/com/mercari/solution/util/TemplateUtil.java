@@ -1,8 +1,9 @@
 package com.mercari.solution.util;
 
+import com.mercari.solution.module.Schema;
 import freemarker.core.Environment;
+import freemarker.ext.beans.BeansWrapper;
 import freemarker.template.*;
-import org.apache.avro.Schema;
 import org.apache.commons.csv.CSVRecord;
 
 import java.io.IOException;
@@ -18,9 +19,12 @@ import java.util.stream.Collectors;
 public class TemplateUtil {
 
     public static Template createSafeTemplate(final String name, final String template) {
-        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_32);
+
+        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_33);
         templateConfig.setNumberFormat("computer");
         templateConfig.setTemplateExceptionHandler(new ImputeSameVariablesTemplateExceptionHandler());
+        templateConfig.setLogTemplateExceptions(false);
+        templateConfig.setSharedVariable("statics", BeansWrapper.getDefaultInstance().getStaticModels());
         try {
             return new Template(name, new StringReader(template), templateConfig);
         } catch (IOException e) {
@@ -29,8 +33,9 @@ public class TemplateUtil {
     }
 
     public static Template createStrictTemplate(final String name, final String template) {
-        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_32);
+        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_33);
         templateConfig.setNumberFormat("computer");
+        templateConfig.setSharedVariable("statics", BeansWrapper.getDefaultInstance().getStaticModels());
         //templateConfig.setObjectWrapper(new CSVWrapper(Configuration.VERSION_2_3_30));
         try {
             return new Template(name, new StringReader(template), templateConfig);
@@ -57,33 +62,20 @@ public class TemplateUtil {
         if(text == null) {
             return false;
         }
-        return text.contains("${");
+        return text.contains("${") && text.contains("}");
     }
 
     public static List<String> extractTemplateArgs(final String text, final Schema inputSchema) {
-        final List<String> args = new ArrayList<>();
-        if(!isTemplateText(text)) {
-            return args;
-        }
-        for(final Schema.Field field : inputSchema.getFields()) {
-            if(text.contains(field.name())) {
-                args.add(field.name());
-            }
-        }
-        return args;
-    }
-
-    public static List<String> extractTemplateArgs(final String text, final org.apache.beam.sdk.schemas.Schema inputSchema) {
         return extractTemplateArgs(text, inputSchema.getFields());
     }
 
-    public static List<String> extractTemplateArgs(final String text, final List<org.apache.beam.sdk.schemas.Schema.Field> inputFields) {
+    public static List<String> extractTemplateArgs(final String text, final List<Schema.Field> fields) {
         final List<String> args = new ArrayList<>();
         if(!isTemplateText(text)) {
             return args;
         }
-        for(final org.apache.beam.sdk.schemas.Schema.Field field : inputFields) {
-            if(text.contains(field.getName())) {
+        for(final com.mercari.solution.module.Schema.Field field : fields) {
+            if(text.contains(field.getName()) && !args.contains(field.getName())) {
                 args.add(field.getName());
             }
         }

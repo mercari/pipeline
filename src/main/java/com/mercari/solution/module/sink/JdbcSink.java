@@ -3,7 +3,6 @@ package com.mercari.solution.module.sink;
 import com.google.gson.Gson;
 import com.mercari.solution.config.SinkConfig;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
 import com.mercari.solution.util.converter.ToStatementConverter;
 import com.mercari.solution.util.gcp.JdbcUtil;
 import org.apache.beam.sdk.coders.ListCoder;
@@ -21,7 +20,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.*;
 
-public class JdbcSink implements SinkModule {
+public class JdbcSink {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcSink.class);
 
@@ -128,7 +127,6 @@ public class JdbcSink implements SinkModule {
 
     public String getName() { return "jdbc"; }
 
-    @Override
     public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
         if(inputs == null || inputs.size() != 1) {
             throw new IllegalArgumentException("jdbc sink module requires input parameter");
@@ -157,11 +155,14 @@ public class JdbcSink implements SinkModule {
             default -> throw new IllegalArgumentException("Not supported input type: " + collection.getDataType());
         };
         PCollection output = (PCollection) (collection.getCollection().apply(config.getName(), write));
+        /*
         try {
             config.outputAvroSchema(collection.getAvroSchema());
         } catch (Exception e) {
             LOG.error("Failed to output avro schema for " + config.getName() + " to path: " + config.getOutputAvroSchema(), e);
         }
+
+         */
         return FCollection.update(collection, output);
     }
 
@@ -311,7 +312,6 @@ public class JdbcSink implements SinkModule {
             }
         }
 
-        @Override
         protected void finalize() throws Throwable {
             cleanUpStatementAndConnection();
         }

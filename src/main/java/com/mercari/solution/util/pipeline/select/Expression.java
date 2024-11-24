@@ -1,8 +1,8 @@
 package com.mercari.solution.util.pipeline.select;
 
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.ExpressionUtil;
 import org.joda.time.Instant;
 
 import java.util.*;
@@ -26,9 +26,9 @@ public class Expression implements SelectFunction {
 
         this.inputFields = new ArrayList<>();
         for(String variable : expressionVariables) {
-            this.inputFields.add(Schema.Field.of(variable, Schema.FieldType.DOUBLE.withNullable(true)));
+            this.inputFields.add(Schema.Field.of(variable, Schema.FieldType.FLOAT64.withNullable(true)));
         }
-        this.outputFieldType = Schema.FieldType.DOUBLE.withNullable(true);
+        this.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
         this.ignore = ignore;
     }
 

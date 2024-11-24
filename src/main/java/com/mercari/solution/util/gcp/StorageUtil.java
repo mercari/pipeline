@@ -313,6 +313,39 @@ public class StorageUtil {
     }
 
     public static Schema getParquetSchema(final String bucket, final String object) {
+        InputFile inputFile = new InputFile() {
+            @Override
+            public long getLength() throws IOException {
+                return 0;
+            }
+
+            @Override
+            public SeekableInputStream newStream() throws IOException {
+                return null;
+            }
+        };
+
+        // TODO
+        /*
+        try {
+            final InputStream is = storage()
+                    .objects()
+                    .get(bucket, object)
+                    .executeMediaAsInputStream();
+
+            com.google.cloud.storage.Storage storage = StorageOptions.newBuilder().build().getService();
+            storage.reader()
+
+
+            final ParquetMetadata metadata = ParquetFileReader.readFooter(inputFile, ParquetReadOptions.builder().build(), is);
+            MessageType messageType = metadata.getFileMetaData().getSchema();
+            return new AvroSchemaConverter().convert(messageType);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed", e);
+        }
+
+         */
+
         try(final ParquetFileReader f = ParquetFileReader.open(new ParquetStream(readBytes(storage(), bucket, object)))) {
             return new AvroSchemaConverter().convert(f.getFooter().getFileMetaData().getSchema());
         } catch (Exception e) {

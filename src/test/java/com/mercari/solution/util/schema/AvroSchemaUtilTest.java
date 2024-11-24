@@ -3,10 +3,15 @@ package com.mercari.solution.util.schema;
 import com.mercari.solution.TestDatum;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.io.BinaryEncoder;
+import org.apache.avro.io.Decoder;
+import org.apache.avro.io.DecoderFactory;
+import org.apache.avro.io.EncoderFactory;
 import org.joda.time.Instant;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -176,6 +181,41 @@ public class AvroSchemaUtilTest {
         Assert.assertFalse(AvroSchemaUtil.isValidFieldName("parent/field"));
         Assert.assertFalse(AvroSchemaUtil.isValidFieldName("parent@field"));
         Assert.assertFalse(AvroSchemaUtil.isValidFieldName(null));
+    }
+
+    @Test
+    public void testPrimitiveEncodeDecode() throws IOException {
+
+        Boolean b = true;
+        byte[] bytes = AvroSchemaUtil.encode(b);
+        Object o = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.BOOLEAN, bytes);
+        Assert.assertEquals(b, o);
+
+        Integer i = 12345;
+        bytes = AvroSchemaUtil.encode(i);
+        o = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.INT32, bytes);
+        Assert.assertEquals(i, o);
+
+        Long l = 1234567890L;
+        bytes = AvroSchemaUtil.encode(l);
+        o = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.INT64, bytes);
+        Assert.assertEquals(l, o);
+
+        Float f = 12345.67890F;
+        bytes = AvroSchemaUtil.encode(f);
+        o = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.FLOAT32, bytes);
+        Assert.assertEquals(f, o);
+
+        Double d = 1234567890.987654D;
+        bytes = AvroSchemaUtil.encode(d);
+        o = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.FLOAT64, bytes);
+        Assert.assertEquals(d, o);
+
+        String s = "あいうえおかきくけこ123456789abcdefg";
+        bytes = AvroSchemaUtil.encode(s);
+        o = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.STRING, bytes);
+        Assert.assertEquals(s, o);
+
     }
 
 }

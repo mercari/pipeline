@@ -3,11 +3,11 @@ package com.mercari.solution.module.source;
 import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
 import com.google.gson.Gson;
 import com.mercari.solution.config.SourceConfig;
+import com.mercari.solution.config.options.DataflowOptions;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SourceModule;
 import com.mercari.solution.util.converter.DataTypeTransform;
-import com.mercari.solution.util.converter.ResultSetToRecordConverter;
+import com.mercari.solution.util.schema.converter.ResultSetToRecordConverter;
 import com.mercari.solution.util.gcp.JdbcUtil;
 import com.mercari.solution.util.gcp.SecretManagerUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
@@ -16,7 +16,6 @@ import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.generic.GenericRecordBuilder;
-import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
@@ -38,7 +37,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 
-public class JdbcSource implements SourceModule {
+public class JdbcSource {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcSource.class);
 
@@ -247,7 +246,7 @@ public class JdbcSource implements SourceModule {
             throw new IllegalArgumentException("Jdbc source module parameters must not be empty!");
         }
         if(parameters.getUser() == null) {
-            final String serviceAccount = begin.getPipeline().getOptions().as(DataflowPipelineOptions.class).getServiceAccount();
+            final String serviceAccount = DataflowOptions.getServiceAccount(begin.getPipeline().getOptions());//.as(DataflowPipelineOptions.class).getServiceAccount();
             LOG.info("Using worker service account: '" + serviceAccount + "' for database user");
             parameters.user = serviceAccount.replace(".gserviceaccount.com", "");
             parameters.password = "dummy";
@@ -260,11 +259,7 @@ public class JdbcSource implements SourceModule {
         parameters.setDefaults();
         parameters.replaceParameters();
 
-        if (config.getMicrobatch() != null && config.getMicrobatch()) {
-            return Collections.emptyMap();
-        } else {
-            return Collections.singletonMap(config.getName(), batch(begin, config, parameters));
-        }
+        return Collections.singletonMap(config.getName(), batch(begin, config, parameters));
     }
 
     public static FCollection<GenericRecord> batch(final PBegin begin, final SourceConfig config, final JdbcSourceParameters parameters) {

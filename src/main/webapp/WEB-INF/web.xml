@@ -1,0 +1,13 @@
+<web-app>
+    <display-name>Mercari Pipeline Server</display-name>
+
+    <servlet>
+        <servlet-name>MPipelineServer</servlet-name>
+        <servlet-class>com.mercari.solution.MPipelineServer</servlet-class>
+    </servlet>
+
+    <servlet-mapping>
+        <servlet-name>MPipelineServer</servlet-name>
+        <url-pattern>/api/*</url-pattern>
+    </servlet-mapping>
+</web-app>

@@ -1,6 +1,6 @@
-# Mercari Dataflow Template
+# Mercari Pipeline
 
-The Mercari Dataflow Template enables you to run various pipelines without writing programs by simply defining a configuration file.
+The Mercari Pipeline enables you to run various pipelines without writing programs by simply defining a configuration file.
 
 Mercari Dataflow Template is implemented as a [FlexTemplate](https://cloud.google.com/dataflow/docs/guides/templates/using-flex-templates) for [Cloud Dataflow](https://cloud.google.com/dataflow). Pipelines are assembled based on the defined configuration file and can be executed as Cloud Dataflow Jobs.
 
@@ -59,7 +59,7 @@ Therefore, the Mercari Dataflow Template should be deployed according to the Fle
 
 ### Requirements
 
-* Java 17
+* Java 21
 * [Maven 3](https://maven.apache.org/index.html)
 * [gcloud command-line tool](https://cloud.google.com/sdk/gcloud)
 

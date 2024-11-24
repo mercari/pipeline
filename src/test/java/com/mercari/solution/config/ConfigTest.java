@@ -47,7 +47,7 @@ public class ConfigTest {
                 "SpannerInput.table=ohmytable",
                 "SpannerOutput.instanceId=ohmyinstance"
         };
-        final Config config = Config.parse(configJson, args);
+        final Config config = Config.parse(configJson, args, true);
 
         Assert.assertEquals(2, config.getSources().size());
         Assert.assertEquals(1, config.getTransforms().size());

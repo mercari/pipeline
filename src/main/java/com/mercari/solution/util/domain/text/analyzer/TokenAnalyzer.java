@@ -7,7 +7,6 @@ import opennlp.tools.lemmatizer.LemmatizerModel;
 import opennlp.tools.postag.POSModel;
 import opennlp.tools.sentdetect.SentenceModel;
 import opennlp.tools.tokenize.TokenizerModel;
-import org.apache.commons.collections.ListUtils;
 import org.apache.lucene.analysis.*;
 import org.apache.lucene.analysis.charfilter.HTMLStripCharFilter;
 import org.apache.lucene.analysis.charfilter.MappingCharFilter;
@@ -912,7 +911,9 @@ public class TokenAnalyzer extends Analyzer {
                     if(words == null) {
                         final List<String> japaneseStopWords = JapaneseAnalyzer.getDefaultStopSet().stream().map(Object::toString).collect(Collectors.toList());
                         final List<String> englishStopWords = EnglishAnalyzer.getDefaultStopSet().stream().map(Object::toString).collect(Collectors.toList());
-                        words = ListUtils.union(japaneseStopWords, englishStopWords);
+                        words = new ArrayList<>();
+                        words.addAll(japaneseStopWords);
+                        words.addAll(englishStopWords);
                     }
                     break;
                 }

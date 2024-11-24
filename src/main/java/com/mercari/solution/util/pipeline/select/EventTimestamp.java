@@ -1,6 +1,6 @@
 package com.mercari.solution.util.pipeline.select;
 
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.Schema;
 import org.joda.time.Instant;
 
 import java.util.ArrayList;
@@ -19,7 +19,7 @@ public class EventTimestamp implements SelectFunction {
     EventTimestamp(String name, boolean ignore) {
         this.name = name;
         this.inputFields = new ArrayList<>();
-        this.outputFieldType = Schema.FieldType.DATETIME.withNullable(true);
+        this.outputFieldType = Schema.FieldType.TIMESTAMP.withNullable(true);
         this.ignore = ignore;
     }
 

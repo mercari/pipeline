@@ -30,6 +30,7 @@ public class PubSubUtil {
     private static final Logger LOG = LoggerFactory.getLogger(PubSubUtil.class);
 
     private static final Pattern PATTERN_SUBSCRIPTION = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/subscriptions\\/[a-zA-Z0-9_-]+$");
+    private static final Pattern PATTERN_SNAPSHOT = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/snapshots\\/[a-zA-Z0-9_-]+$");
 
     public static Pubsub pubsub() {
         final HttpTransport transport = new NetHttpTransport();
@@ -155,6 +156,36 @@ public class PubSubUtil {
         }
 
         return response.getReceivedMessages();
+    }
+
+    public static SeekResponse seek(
+            final String subscription,
+            final String time,
+            final String snapshot) throws IOException {
+
+        return seek(pubsub(), subscription, time, snapshot);
+    }
+
+    public static SeekResponse seek(
+            final Pubsub pubsub,
+            final String subscription,
+            final String time,
+            final String snapshot) throws IOException {
+
+        final SeekRequest seekRequest;
+        if(time != null) {
+            seekRequest = new SeekRequest().setTime(time);
+        } else if(snapshot != null) {
+            seekRequest = new SeekRequest().setSnapshot(snapshot);
+        } else {
+            throw new IllegalArgumentException("seek operation requires time or snapshot. both are null");
+        }
+
+        return pubsub
+                .projects()
+                .subscriptions()
+                .seek(subscription, seekRequest)
+                .execute();
     }
 
     public static String getTextMessage(final String subscription) throws IOException {

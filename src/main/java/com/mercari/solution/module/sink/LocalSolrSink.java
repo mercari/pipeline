@@ -2,23 +2,20 @@ package com.mercari.solution.module.sink;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.config.SinkConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
-import com.mercari.solution.module.sink.fileio.SolrSink2;
-import com.mercari.solution.util.XmlUtil;
-import com.mercari.solution.util.converter.*;
+import com.mercari.solution.module.*;
+import com.mercari.solution.module.sink.fileio.SolrSink;
+import com.mercari.solution.util.domain.text.XmlUtil;
+import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.domain.search.ZipFileUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
-import com.mercari.solution.util.pipeline.union.Union;
-import com.mercari.solution.util.pipeline.union.UnionValue;
+import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.schema.*;
-import org.apache.avro.Schema;
+import com.mercari.solution.util.schema.converter.*;
 import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.io.WriteFilesResult;
+import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.Wait;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +24,8 @@ import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class LocalSolrSink implements SinkModule {
+@Sink.Module(name="localSolr")
+public class LocalSolrSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(LocalSolrSink.class);
 
@@ -39,41 +37,21 @@ public class LocalSolrSink implements SinkModule {
         private List<String> groupFields;
         private String tempDirectory;
 
-        public String getInput() {
-            return input;
-        }
-
-        public String getOutput() {
-            return output;
-        }
-
-        public List<CoreParameter> getCores() {
-            return cores;
-        }
-
-        public List<String> getGroupFields() {
-            return groupFields;
-        }
-
-        public String getTempDirectory() {
-            return tempDirectory;
-        }
-
-        public void validate(String name) {
+        public void validate() {
             final List<String> errorMessages = new ArrayList<>();
             if(this.output == null) {
-                errorMessages.add("localSolr sink module: " + name + " requires `output` parameter.");
+                errorMessages.add("parameters.output must not be null");
             }
-            if(this.cores == null || this.cores.size() == 0) {
-                errorMessages.add("localSolr sink module: " + name + " requires `cores` parameter.");
+            if(this.cores == null || this.cores.isEmpty()) {
+                errorMessages.add("parameters.cores must not be empty");
             } else {
                 for(int i=0; i<this.cores.size(); i++) {
-                    errorMessages.addAll(this.cores.get(i).validate(name, i));
+                    errorMessages.addAll(this.cores.get(i).validate(i));
                 }
             }
 
-            if(errorMessages.size() > 0) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+            if(!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
@@ -99,13 +77,13 @@ public class LocalSolrSink implements SinkModule {
         private JsonElement config;
         private List<CustomConfigFileParameter> customConfigFiles;
 
-        public List<String> validate(String moduleName, int i) {
+        public List<String> validate(int i) {
             final List<String> errorMessages = new ArrayList<>();
             if(name == null) {
-                errorMessages.add("localSolr sink module: " + moduleName + ".cores[" + i + "] requires `name` parameter.");
+                errorMessages.add("parameters.cores[" + i + "].name must not be null");
             }
             if(input == null) {
-                errorMessages.add("localSolr sink module: " + moduleName + ".cores[" + i + "] requires `input` parameter.");
+                errorMessages.add("parameters.cores[" + i + "].input must not be null");
             }
             if(customConfigFiles != null) {
                 for(int j=0; j<customConfigFiles.size(); j++) {
@@ -126,16 +104,15 @@ public class LocalSolrSink implements SinkModule {
             }
         }
 
-        public Core toCore(Map<String, String> avroSchemaStrings) {
+        public Core toCore(Map<String, Schema> inputSchemas) {
             final Core core = new Core();
             core.name = name;
             core.input = input;
 
             // solr schema
             if(schema == null || schema.isJsonNull()) {
-                final String avroSchemaString = avroSchemaStrings.get(input);
-                final Schema avroSchema = AvroSchemaUtil.convertSchema(avroSchemaString);
-                core.schema = RecordToSolrDocumentConverter.convertSchema(avroSchema);
+                final Schema inputSchema = inputSchemas.get(input);
+                core.schema = AvroToSolrDocumentConverter.convertSchema(inputSchema.getAvroSchema());
             } else if(schema.isJsonPrimitive()) {
                 if(schema.getAsString().replaceAll("\"", "").startsWith("gs://")) {
                     core.schema = StorageUtil.readString(schema.getAsString().replaceAll("\"", ""));
@@ -166,7 +143,7 @@ public class LocalSolrSink implements SinkModule {
 
             // custom config files
             final List<KV<String,String>> customConfigFilePaths = new ArrayList<>();
-            if(customConfigFiles.size() > 0) {
+            if(!customConfigFiles.isEmpty()) {
                 for(final CustomConfigFileParameter customConfigFile : customConfigFiles) {
                     customConfigFilePaths.add(KV.of(customConfigFile.getFilename(), customConfigFile.getInput()));
                 }
@@ -243,44 +220,36 @@ public class LocalSolrSink implements SinkModule {
 
 
     @Override
-    public String getName() { return "localSolr"; }
-
-
-    @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
+    public MCollectionTuple expand(MCollectionTuple inputs) {
         if(inputs == null || inputs.size() == 0) {
-            throw new IllegalArgumentException("localSolr sink module requires input parameter");
+            throw new IllegalModuleException("localSolr sink module requires input parameter");
         }
 
-        final LocalSolrSinkParameters parameters = new Gson().fromJson(config.getParameters(), LocalSolrSinkParameters.class);
-        if(parameters == null) {
-            throw new IllegalArgumentException("localSolr sink parameters must not be empty!");
-        }
-        parameters.validate(config.getName());
+        final LocalSolrSinkParameters parameters = getParameters(LocalSolrSinkParameters.class);
+        parameters.validate();
         parameters.setDefaults();
 
-        final List<TupleTag<?>> tags = new ArrayList<>();
+        final PCollection<MElement> input = inputs
+                .apply("Union", Union.flatten()
+                        .withWaits(getWaits())
+                        .withStrategy(getStrategy()));
+
         final List<String> inputNames = new ArrayList<>();
-        final List<DataType> inputTypes = new ArrayList<>();
-        final Map<String, String> avroSchemaStrings = new HashMap<>();
-
-        PCollectionTuple tuple = PCollectionTuple.empty(inputs.get(0).getCollection().getPipeline());
-        for(final FCollection<?> input : inputs){
-            final TupleTag tag = new TupleTag<>(){};
-            tags.add(tag);
-            inputNames.add(input.getName());
-            inputTypes.add(input.getDataType());
-            avroSchemaStrings.put(input.getName(), input.getAvroSchema().toString());
-
-            tuple = tuple.and(tag, input.getCollection());
+        final Map<String, Schema> inputSchemas = new HashMap<>();
+        for(final String inputName : inputs.getAllInputs()){
+            inputNames.add(inputName);
+            inputSchemas.put(inputName, inputs.getSchema(inputName));
         }
 
-        final SolrIndexWrite write = new SolrIndexWrite(config.getName(), parameters, tags, inputNames, inputTypes, avroSchemaStrings, waits);
-        final PCollection output = tuple.apply(config.getName(), write);
-        return Collections.singletonMap(config.getName(), FCollection.of(config.getName(), output, DataType.AVRO, inputs.get(0).getAvroSchema()));
+        final SolrIndexWrite write = new SolrIndexWrite(getName(), parameters, inputNames, inputSchemas);
+        final Schema outputSchema = SolrIndexWrite.createOutputSchema();
+        final PCollection<MElement> output = input.apply(getName(), write);
+
+        return MCollectionTuple
+                .of(output, outputSchema);
     }
 
-    public static class SolrIndexWrite extends PTransform<PCollectionTuple, PCollection<KV>> {
+    public static class SolrIndexWrite extends PTransform<PCollection<MElement>, PCollection<MElement>> {
 
         private String name;
         private String output;
@@ -288,63 +257,67 @@ public class LocalSolrSink implements SinkModule {
         private String tempDirectory;
         private List<Core> cores;
 
-        private final List<TupleTag<?>> tags;
         private final List<String> inputNames;
-        private final List<DataType> inputTypes;
-
-        private final List<FCollection<?>> waits;
+        private final List<Schema> inputSchemas;
 
         private SolrIndexWrite(
                 final String name,
                 final LocalSolrSinkParameters parameters,
-                final List<TupleTag<?>> tags,
                 final List<String> inputNames,
-                final List<DataType> inputTypes,
-                final Map<String, String> avroSchemaStrings,
-                final List<FCollection<?>> waits) {
+                final Map<String, Schema> inputSchemaMap) {
 
             this.name = name;
-            this.output = parameters.getOutput();
-            this.groupFields = parameters.getGroupFields();
-            this.tempDirectory = parameters.getTempDirectory();
+            this.output = parameters.output;
+            this.groupFields = parameters.groupFields;
+            this.tempDirectory = parameters.tempDirectory;
             this.cores = parameters.cores.stream()
-                    .map(c -> c.toCore(avroSchemaStrings))
+                    .map(c -> c.toCore(inputSchemaMap))
                     .collect(Collectors.toList());
-            this.tags = tags;
             this.inputNames = inputNames;
-            this.inputTypes = inputTypes;
-            this.waits = waits;
+            this.inputSchemas = new ArrayList<>();
+            for(final String inputName : inputNames) {
+                inputSchemas.add(inputSchemaMap.get(inputName));
+            }
         }
 
-        public PCollection<KV> expand(final PCollectionTuple inputs) {
+        public PCollection<MElement> expand(final PCollection<MElement> input) {
 
-            final PCollection<UnionValue> union = inputs
-                    .apply("Union", Union.flatten(tags, inputTypes, inputNames));
-
-            final PCollection<UnionValue> input;
-            if((waits == null || waits.size() == 0)) {
-                input = union;
-            } else {
-                final List<PCollection<?>> waitsList = waits.stream()
-                        .map(FCollection::getCollection)
-                        .collect(Collectors.toList());
-                input = union
-                        .apply("Wait", Wait.on(waitsList))
-                        .setCoder(union.getCoder());
-            }
-
-            final FileIO.Write<String, UnionValue> write = ZipFileUtil.createSingleFileWrite(
+            final FileIO.Write<String, MElement> write = ZipFileUtil.createSingleFileWrite(
                     output,
                     groupFields,
                     tempDirectory,
-                    SchemaUtil.createGroupKeysFunction(UnionValue::getAsString, groupFields));
-            final WriteFilesResult writeResult = input
-                    .apply("Write", write.via(SolrSink2.of(
+                    SchemaUtil.createGroupKeysFunction(MElement::getAsString, groupFields));
+            final WriteFilesResult<String> writeResult = input
+                    .apply("Write", write.via(SolrSink.of(
                             cores,
-                            inputNames)));
+                            inputNames,
+                            inputSchemas)));
 
-            return writeResult.getPerDestinationOutputFilenames();
+            return writeResult.getPerDestinationOutputFilenames()
+                    .apply("Format", ParDo.of(new FormatDoFn()))
+                    .setCoder(ElementCoder.of(createOutputSchema()));
         }
+
+        private static class FormatDoFn extends DoFn<KV<String,String>, MElement> {
+
+            @ProcessElement
+            public void processElement(ProcessContext c) {
+                final MElement element = MElement.builder()
+                        .withString("key", c.element().getKey())
+                        .withString("value", c.element().getValue())
+                        .build();
+                c.output(element);
+            }
+
+        }
+
+        public static Schema createOutputSchema() {
+            return Schema.builder()
+                    .withField("key", Schema.FieldType.STRING.withNullable(true))
+                    .withField("value", Schema.FieldType.STRING.withNullable(true))
+                    .build();
+        }
+
     }
 
 }

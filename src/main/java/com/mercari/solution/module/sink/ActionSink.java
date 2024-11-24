@@ -1,19 +1,13 @@
 package com.mercari.solution.module.sink;
 
-import com.google.gson.Gson;
-import com.mercari.solution.FlexPipeline;
-import com.mercari.solution.config.SinkConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
+import com.mercari.solution.MPipeline;
+import com.mercari.solution.module.*;
+import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.pipeline.action.Action;
 import com.mercari.solution.util.pipeline.action.BigQueryAction;
 import com.mercari.solution.util.pipeline.action.DataflowAction;
-import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.RowCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
@@ -23,7 +17,8 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.*;
 
-public class ActionSink implements SinkModule {
+@Sink.Module(name="action")
+public class ActionSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(ActionSink.class);
 
@@ -66,141 +61,68 @@ public class ActionSink implements SinkModule {
             }
 
             if(!errorMessages.isEmpty()) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
-        private void setDefaults(final DataflowPipelineOptions options, final String config) {
+        private void setDefaults(final MPipeline.MPipelineOptions options) {
             switch (this.service) {
-                case dataflow -> this.dataflow.setDefaults(options, config);
+                case dataflow -> this.dataflow.setDefaults(options);
             }
         }
 
     }
 
     @Override
-    public String getName() { return "action"; }
+    public MCollectionTuple expand(MCollectionTuple inputs) {
+        final Pipeline pipeline = inputs.getPipeline();
+        final ActionSinkParameters parameters = getParameters(ActionSinkParameters.class);
+        parameters.validate(getName());
+        parameters.setDefaults(pipeline.getOptions().as(MPipeline.MPipelineOptions.class));
 
-    @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
-        if(inputs == null || inputs.isEmpty()) {
-            throw new IllegalArgumentException("action sink module requires inputs parameter");
-        }
-        return Collections.singletonMap(config.getName(), action(inputs, config, waits));
+        final PCollection<String> seed = inputs.getPipeline().begin()
+                .apply("Seed", Create
+                        .of("")
+                        .withCoder(StringUtf8Coder.of()));
+
+        final Action action = switch (parameters.getService()) {
+            case dataflow -> DataflowAction.of(parameters.getDataflow(), parameters.getLabels());
+            case bigquery -> BigQueryAction.of(parameters.getBigquery());
+            default -> throw new IllegalArgumentException("Not supported service: " + parameters.getService());
+        };
+
+        final Schema outputSchema = action.getOutputSchema();
+
+        final PCollection<?> output = seed
+                .apply("Wait", Wait.on(getWaits()))
+                .setCoder(seed.getCoder())
+                .apply("Action", ParDo.of(new ActionDoFn<>(getName(), action)))
+                .setCoder(ElementCoder.of(outputSchema));
+        return null;
     }
 
-    private FCollection<?> action(final List<FCollection<?>> inputs, final SinkConfig config, final List<FCollection<?>> waits) {
-        final Pipeline pipeline = inputs.get(0).getCollection().getPipeline();
-
-        final ActionSinkParameters parameters = new Gson().fromJson(config.getParameters(), ActionSinkParameters.class);
-        parameters.validate(config.getName());
-        parameters.setDefaults(
-                pipeline.getOptions().as(DataflowPipelineOptions.class),
-                pipeline.getOptions().as(FlexPipeline.FlexPipelineOptions.class).getConfig());
-
-        final List<TupleTag<?>> inputTags = new ArrayList<>();
-        final List<String> inputNames = new ArrayList<>();
-        final List<DataType> inputTypes = new ArrayList<>();
-
-        PCollectionTuple tuple = PCollectionTuple.empty(pipeline);
-        for (final FCollection<?> input : inputs) {
-            final TupleTag inputTag = new TupleTag<>() {};
-            inputTags.add(inputTag);
-            inputNames.add(input.getName());
-            inputTypes.add(input.getDataType());
-            tuple = tuple.and(inputTag, input.getCollection());
-        }
-
-        final Transform write = new Transform(
-                config.getName(),
-                parameters,
-                inputTags,
-                inputNames,
-                inputTypes,
-                waits);
-
-        final PCollection output = tuple.apply(config.getName(), write);
-        final FCollection<?> fcollection = FCollection.update(inputs.get(0), output);
-        return fcollection;
-    }
-
-    private static class Transform extends PTransform<PCollectionTuple, PCollection<Row>> {
+    private static class ActionDoFn<T> extends DoFn<T, MElement> {
 
         private final String name;
-        private final ActionSinkParameters parameters;
-        private final List<TupleTag<?>> inputTags;
-        private final List<String> inputNames;
-        private final List<DataType> inputTypes;
-        private final List<FCollection<?>> waits;
+        private final Action action;
 
-        private transient Schema outputSchema;
-
-        private Transform(
+        ActionDoFn(
                 final String name,
-                final ActionSinkParameters parameters,
-                final List<TupleTag<?>> inputTags,
-                final List<String> inputNames,
-                final List<DataType> inputTypes,
-                final List<FCollection<?>> waits) {
+                final Action action) {
 
             this.name = name;
-            this.parameters = parameters;
-            this.inputTags = inputTags;
-            this.inputNames = inputNames;
-            this.inputTypes = inputTypes;
-            this.waits = waits;
+            this.action = action;
         }
 
-        @Override
-        public PCollection<Row> expand(PCollectionTuple inputs) {
-            final PCollection<String> seed = inputs.getPipeline().begin()
-                    .apply("Seed", Create.of("").withCoder(StringUtf8Coder.of()));
-
-            final List<PCollection<?>> list = new ArrayList<>();
-            for (final TupleTag<?> tag : inputTags) {
-                final PCollection<?> input = inputs.get(tag);
-                list.add(input);
-            }
-
-            final Action action = switch (parameters.getService()) {
-                case dataflow -> DataflowAction.of(parameters.getDataflow(), parameters.getLabels());
-                case bigquery -> BigQueryAction.of(parameters.getBigquery());
-                default -> throw new IllegalArgumentException("Not supported service: " + parameters.getService());
-            };
-
-            this.outputSchema = action.getOutputSchema();
-
-            return seed
-                    .apply("Wait", Wait.on(list))
-                    .setCoder(seed.getCoder())
-                    .apply("Action", ParDo.of(new ActionDoFn<>(name, action)))
-                    .setCoder(RowCoder.of(action.getOutputSchema()));
+        @Setup
+        public void setup() {
+            this.action.setup();
         }
 
-        private static class ActionDoFn<T> extends DoFn<T, Row> {
-
-            private final String name;
-            private final Action action;
-
-            ActionDoFn(
-                    final String name,
-                    final Action action) {
-
-                this.name = name;
-                this.action = action;
-            }
-
-            @Setup
-            public void setup() {
-                this.action.setup();
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) throws IOException {
-                this.action.action();
-                //c.output("");
-            }
-
+        @ProcessElement
+        public void processElement(final ProcessContext c) throws IOException {
+            this.action.action();
+            //c.output("");
         }
 
     }

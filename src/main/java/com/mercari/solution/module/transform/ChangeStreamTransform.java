@@ -5,9 +5,8 @@ import com.google.gson.Gson;
 import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.OptionUtil;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.pipeline.mutation.UnifiedMutation;
 import com.mercari.solution.util.pipeline.mutation.UnifiedMutationCoder;
 import com.mercari.solution.util.pipeline.union.Union;
@@ -27,7 +26,7 @@ import java.io.Serializable;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class ChangeStreamTransform implements TransformModule {
+public class ChangeStreamTransform {
 
     private static final Logger LOG = LoggerFactory.getLogger(ChangeStreamTransform.class);
 
@@ -140,12 +139,10 @@ public class ChangeStreamTransform implements TransformModule {
     }
 
 
-    @Override
     public String getName() {
         return "changeStream";
     }
 
-    @Override
     public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, TransformConfig config) {
         return transform(inputs, config);
     }

@@ -1,7 +1,7 @@
 package com.mercari.solution.util.hashicorp;
 
 import com.google.gson.*;
-import com.mercari.solution.util.JsonUtil;
+import com.mercari.solution.util.domain.text.JsonUtil;
 import com.mercari.solution.util.gcp.IAMUtil;
 import org.apache.beam.sdk.values.KV;
 import org.slf4j.Logger;

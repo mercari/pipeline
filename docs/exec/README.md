@@ -1,4 +1,4 @@
-# Execute Pipeline
+# Execute Mercari Pipeline
 
 ## gcloud command
 

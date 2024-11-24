@@ -10,19 +10,19 @@ import com.google.protobuf.ByteString;
 import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
 import com.mercari.solution.util.*;
-import com.mercari.solution.util.converter.JsonToMapConverter;
+import com.mercari.solution.util.domain.text.JsonUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.hashicorp.VaultClient;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.EntitySchemaUtil;
 import com.mercari.solution.util.schema.RowSchemaUtil;
 import com.mercari.solution.util.schema.StructSchemaUtil;
+import com.mercari.solution.util.schema.converter.JsonToMapConverter;
 import freemarker.template.Template;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.generic.GenericRecordBuilder;
-import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
@@ -34,7 +34,7 @@ import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.util.*;
 
-public class CryptoTransform implements TransformModule {
+public class CryptoTransform {
 
 
     private static final Logger LOG = LoggerFactory.getLogger(CryptoTransform.class);
@@ -450,7 +450,7 @@ public class CryptoTransform implements TransformModule {
             final DecryptDoFn dofn = new DecryptDoFn(
                     parameters.getFields(),
                     parameters.getAlgorithm(),
-                    input.getPipeline().getOptions().as(DataflowPipelineOptions.class).getServiceAccount(),
+                    OptionUtil.getServiceAccount(),
                     parameters.getFailFast(),
                     parameters.getKeyProvider(),
                     parameters.getKeyDecryptor(),

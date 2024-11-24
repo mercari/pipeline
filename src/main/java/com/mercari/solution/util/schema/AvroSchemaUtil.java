@@ -7,24 +7,28 @@ import com.google.datastore.v1.Value;
 import com.google.gson.*;
 import com.google.protobuf.ByteString;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.converter.JsonToRecordConverter;
-import com.mercari.solution.util.converter.RowToRecordConverter;
+import com.mercari.solution.util.schema.converter.JsonToAvroConverter;
+import com.mercari.solution.util.schema.converter.RowToRecordConverter;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
+import org.apache.avro.file.DataFileStream;
 import org.apache.avro.generic.*;
 import org.apache.avro.io.*;
+import org.apache.avro.specific.SpecificDatumWriter;
+import org.apache.avro.util.Utf8;
+import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.io.*;
 import org.joda.time.DateTimeZone;
 import org.joda.time.Instant;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
@@ -818,6 +822,26 @@ public class AvroSchemaUtil {
         }
     }
 
+    public static ByteBuffer getAsBytes(final GenericRecord record, final String fieldName) {
+        final Schema.Field field = record.getSchema().getField(fieldName);
+        if(field == null) {
+            return null;
+        }
+        if(!record.hasField(fieldName)) {
+            return null;
+        }
+        final Object value = record.get(fieldName);
+        if(value == null) {
+            return null;
+        }
+        final Schema schema = unnestUnion(field.schema());
+        return switch (schema.getType()) {
+            case BYTES -> (ByteBuffer)value;
+            case STRING -> ByteBuffer.wrap(Base64.getDecoder().decode(value.toString()));
+            default -> null;
+        };
+    }
+
     public static org.joda.time.Instant getTimestamp(final GenericRecord record, final String fieldName) {
         return getTimestamp(record, fieldName, Instant.ofEpochSecond(0L));
     }
@@ -930,7 +954,7 @@ public class AvroSchemaUtil {
         if(!record.hasField(fieldName)) {
             return null;
         }
-        final Object value = record.get(fieldName);
+        final Object value = getRecordValue(record, fieldName);
         if(value == null) {
             return null;
         }
@@ -1071,65 +1095,21 @@ public class AvroSchemaUtil {
 
     // for bigtable
     public static ByteString getAsByteString(final GenericRecord record, final String fieldName) {
+        Object value;
         if(record == null || fieldName == null) {
-            return null;
-        }
-        if(!record.hasField(fieldName)) {
-            return null;
-        }
-        final Object value = record.get(fieldName);
-        if(value == null) {
-            return null;
-        }
-        final Schema.Field field = record.getSchema().getField(fieldName);
-        if(field == null) {
-            return null;
-        }
-
-        final Schema fieldSchema = unnestUnion(field.schema());
-        final byte[] bytes;
-        switch (fieldSchema.getType()) {
-            case BOOLEAN -> bytes = Bytes.toBytes((boolean) value);
-            case FIXED, BYTES -> bytes = ((ByteBuffer) value).array();
-            case ENUM, STRING -> bytes = Bytes.toBytes(value.toString());
-            case INT -> bytes = Bytes.toBytes((Integer) value);
-            case LONG -> bytes = Bytes.toBytes((Long) value);
-            case FLOAT -> bytes = Bytes.toBytes((Float) value);
-            case DOUBLE -> bytes = Bytes.toBytes((Double) value);
-            case ARRAY -> {
-                final List values = (List) value;
-                final Schema elementSchema = unnestUnion(fieldSchema.getElementType());
-                final Writable[] array = new Writable[values.size()];
-                for (int i = 0; i < values.size(); i++) {
-                    switch (elementSchema.getType()) {
-                        case BOOLEAN -> array[i] = new BooleanWritable((Boolean) values.get(i));
-                        case ENUM, STRING -> array[i] = new Text(values.get(i).toString());
-                        case FIXED, BYTES -> array[i] = new BytesWritable(((ByteBuffer) values.get(i)).array());
-                        case INT -> array[i] = new IntWritable(((Integer) values.get(i)));
-                        case LONG -> array[i] = new LongWritable(((Long) values.get(i)));
-                        case FLOAT -> array[i] = new FloatWritable(((Float) values.get(i)));
-                        case DOUBLE -> array[i] = new DoubleWritable(((Double) values.get(i)));
-                        default -> {
-                        }
-                    }
-                }
-                final ArrayWritable arrayWritable = switch (elementSchema.getType()) {
-                    case BOOLEAN -> new ArrayWritable(BooleanWritable.class, array);
-                    case ENUM, STRING -> new ArrayWritable(Text.class, array);
-                    case FIXED, BYTES -> new ArrayWritable(BytesWritable.class, array);
-                    case INT -> new ArrayWritable(IntWritable.class, array);
-                    case LONG -> new ArrayWritable(LongWritable.class, array);
-                    case FLOAT -> new ArrayWritable(FloatWritable.class, array);
-                    case DOUBLE -> new ArrayWritable(DoubleWritable.class, array);
-                    default -> {
-                        throw new IllegalStateException();
-                    }
-                };
-                bytes = WritableUtils.toByteArray(arrayWritable);
+            value = null;
+        } else if(!record.hasField(fieldName)) {
+            value = null;
+        } else {
+            final Schema.Field field = record.getSchema().getField(fieldName);
+            if(field == null) {
+                value = null;
+            } else {
+                value = record.get(fieldName);
+                value = getAsPrimitive(field.schema(), value);
             }
-            default -> bytes = Bytes.toBytes("");
         }
-        return ByteString.copyFrom(bytes);
+        return BigtableSchemaUtil.toByteString(value);
     }
 
     public static BigDecimal getAsBigDecimal(final Schema fieldSchema, final ByteBuffer byteBuffer) {
@@ -1146,6 +1126,181 @@ public class AvroSchemaUtil {
             return BigDecimal.valueOf(new BigInteger(bytes).longValue(), scale);
         }
         return null;
+    }
+
+    public static Map<String,Object> asStandardMap(final GenericRecord record, final Collection<String> fieldNames) {
+        final Map<String, Object> standardValues = new HashMap<>();
+        if(record == null) {
+            return standardValues;
+        }
+        for(final Schema.Field field : record.getSchema().getFields()) {
+            if(fieldNames != null && !fieldNames.isEmpty() && fieldNames.contains(field.name())) {
+                continue;
+            }
+            final Object standardValue = getAsStandard(field.schema(), record.get(field.name()));
+            standardValues.put(field.name(), standardValue);
+        }
+        return standardValues;
+    }
+
+    public static Object getAsStandard(final Object record, final String fieldName) {
+        return getAsStandard((GenericRecord) record, fieldName);
+    }
+
+    public static Object getAsStandard(final GenericRecord record, final String fieldName) {
+        if(record == null || fieldName == null) {
+            return null;
+        }
+        if(!record.hasField(fieldName)) {
+            return null;
+        }
+        final Schema.Field field = record.getSchema().getField(fieldName);
+        final Object value = record.get(fieldName);
+        return getAsStandard(field.schema(), value);
+    }
+
+    public static Object getAsStandard(final Schema fieldSchema, final Object value) {
+        if(value == null) {
+            return null;
+        }
+        return switch (fieldSchema.getType()) {
+            case UNION -> getAsStandard(unnestUnion(fieldSchema), value);
+            case BOOLEAN -> switch (value) {
+                case Boolean b -> b;
+                case String s -> Boolean.parseBoolean(s);
+                case Number n -> n.doubleValue() > 0;
+                default -> throw new IllegalArgumentException();
+            };
+            case STRING -> switch (value) {
+                case Utf8 utf8 -> utf8.toString();
+                case String s -> s;
+                case Object o -> o.toString();
+            };
+            case BYTES -> {
+                final ByteBuffer byteBuffer = switch (value) {
+                    case ByteBuffer bf -> bf;
+                    case byte[] b -> ByteBuffer.wrap(b);
+                    case String s -> ByteBuffer.wrap(Base64.getDecoder().decode(s));
+                    default -> throw new IllegalArgumentException();
+                };
+                if(LogicalTypes.decimal(38, 9).equals(fieldSchema.getLogicalType())) {
+                    yield BigDecimal.valueOf(new BigInteger(byteBuffer.array()).longValue(), 9);
+                } else if(LogicalTypes.decimal(76, 38).equals(fieldSchema.getLogicalType())) {
+                    yield BigDecimal.valueOf(new BigInteger(byteBuffer.array()).longValue(), 38);
+                } else {
+                    yield byteBuffer;
+                }
+            }
+            case ENUM -> switch (value) {
+                case Utf8 utf8 -> utf8.toString();
+                case String s -> s;
+                default -> throw new IllegalArgumentException("Could not convert enum value: " + value);
+            };
+            case INT -> {
+                if(LogicalTypes.date().equals(fieldSchema.getLogicalType())) {
+                    yield switch (value) {
+                        case String s -> DateTimeUtil.toLocalDate(s);
+                        case Number i -> LocalDate.ofEpochDay(i.longValue());
+                        default -> throw new IllegalArgumentException();
+                    };
+                } else if(LogicalTypes.timeMillis().equals(fieldSchema.getLogicalType())) {
+                    yield switch (value) {
+                        case String s -> DateTimeUtil.toLocalTime(s);
+                        case Number i -> LocalTime.ofNanoOfDay(i.intValue() * 1000L * 1000L);
+                        default -> throw new IllegalArgumentException();
+                    };
+                } else {
+                    yield switch (value) {
+                        case String s -> Integer.parseInt(s);
+                        case Number i -> i.intValue();
+                        case Boolean b -> b ? 1 : 0;
+                        default -> throw new IllegalArgumentException();
+                    };
+                }
+            }
+            case LONG -> {
+                if(LogicalTypes.timestampMicros().equals(fieldSchema.getLogicalType())) {
+                    yield switch (value) {
+                        case String s -> DateTimeUtil.toInstant(s);
+                        case Number i -> DateTimeUtil.toInstant(i.longValue());
+                        default -> throw new IllegalArgumentException();
+                    };
+                } else if(LogicalTypes.timestampMillis().equals(fieldSchema.getLogicalType())) {
+                    yield switch (value) {
+                        case String s -> DateTimeUtil.toInstant(s);
+                        case Number i -> java.time.Instant.ofEpochMilli(i.longValue());
+                        default -> throw new IllegalArgumentException();
+                    };
+                } else if(LogicalTypes.timeMicros().equals(fieldSchema.getLogicalType())) {
+                    yield switch (value) {
+                        case String s -> DateTimeUtil.toLocalTime(s);
+                        case Number i -> LocalTime.ofNanoOfDay(i.longValue() * 1000L);
+                        default -> throw new IllegalArgumentException();
+                    };
+                } else {
+                    yield switch (value) {
+                        case String s -> Long.parseLong(s);
+                        case Number i -> i.longValue();
+                        case Boolean b -> b ? 1L : 0L;
+                        default -> throw new IllegalArgumentException();
+                    };
+                }
+            }
+            case FLOAT -> switch (value) {
+                case Number n -> n.floatValue();
+                case String s -> Float.parseFloat(s);
+                case Boolean b -> b ? 1F : 0F;
+                default -> throw new IllegalArgumentException();
+            };
+            case DOUBLE -> switch (value) {
+                case Number n -> n.doubleValue();
+                case String s -> Double.parseDouble(s);
+                case Boolean b -> b ? 1D : 0D;
+                default -> throw new IllegalArgumentException();
+            };
+            case RECORD -> switch (value) {
+                case GenericRecord record -> asStandardMap(record, null);
+                default -> throw new IllegalArgumentException();
+            };
+            case ARRAY -> switch (value) {
+                case List list -> {
+                    final List<Object> standardValues = new ArrayList<>();
+                    for(final Object v : list) {
+                        final Object standardValue = getAsStandard(fieldSchema.getElementType(), v);
+                        standardValues.add(standardValue);
+                    }
+                    yield  standardValues;
+                }
+                default -> throw new IllegalArgumentException();
+            };
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
+    public static Object getAsPrimitive(final GenericRecord record, final String fieldName) {
+        if(record == null) {
+            return null;
+        }
+        if(fieldName.contains(".")) {
+            final String[] fields = fieldName.split("\\.", 2);
+            final String parentField = fields[0];
+            if(!record.hasField(parentField)) {
+                return null;
+            }
+            final GenericRecord child = (GenericRecord) record.get(parentField);
+            return getAsPrimitive(child, fields[1]);
+        }
+        final Object value = record.get(fieldName);
+        if(value == null) {
+            return null;
+        }
+
+        final Schema.Field field = record.getSchema().getField(fieldName);
+        if(field == null) {
+            return null;
+        }
+
+        return getAsPrimitive(field.schema(), value);
     }
 
     public static Object getAsPrimitive(final Object record, final org.apache.beam.sdk.schemas.Schema.FieldType fieldType, final String field) {
@@ -1335,6 +1490,85 @@ public class AvroSchemaUtil {
             }
             default -> throw new IllegalStateException();
         }
+    }
+
+    public static Object getAsPrimitive(final Schema fieldSchema, final Object fieldValue) {
+        if(fieldValue == null) {
+            return null;
+        }
+        return switch (fieldSchema.getType()) {
+            case FLOAT, DOUBLE, BOOLEAN, BYTES -> fieldValue;
+            case STRING -> fieldValue.toString();
+            case INT -> {
+                if(LogicalTypes.date().equals(fieldSchema.getLogicalType())) {
+                    yield fieldValue;
+                } else if(LogicalTypes.timeMillis().equals(fieldSchema.getLogicalType())) {
+                    yield ((Integer) fieldValue).longValue() * 1000L;
+                } else {
+                    yield fieldValue;
+                }
+            }
+            case LONG -> {
+                if(LogicalTypes.timestampMicros().equals(fieldSchema.getLogicalType())) {
+                    yield fieldValue;
+                } else if(LogicalTypes.timestampMillis().equals(fieldSchema.getLogicalType())) {
+                    yield ((Long) fieldValue) * 1000L;
+                } else if(LogicalTypes.timeMillis().equals(fieldSchema.getLogicalType())) {
+                    yield ((Integer) fieldValue).longValue() * 1000L;
+                } else {
+                    yield fieldValue;
+                }
+            }
+            case RECORD -> getAsPrimitive(fieldSchema.getElementType(), fieldValue);
+            case ARRAY -> switch (fieldSchema.getElementType().getType()) {
+                case FLOAT, DOUBLE, BOOLEAN, BYTES -> fieldValue;
+                case STRING -> ((List<Object>) fieldValue).stream()
+                            .map(Object::toString)
+                            .collect(Collectors.toList());
+                case INT -> ((List<Integer>) fieldValue).stream()
+                        .map(i -> {
+                            if(LogicalTypes.date().equals(fieldSchema.getElementType().getLogicalType())) {
+                                return i;
+                            } else if(LogicalTypes.timeMillis().equals(fieldSchema.getLogicalType())) {
+                                return ((Integer) fieldValue).longValue() * 1000L;
+                            } else {
+                                return fieldValue;
+                            }
+                        })
+                        .collect(Collectors.toList());
+                case LONG -> ((List<Long>) fieldValue).stream()
+                        .map(l -> {
+                            if(LogicalTypes.timestampMicros().equals(fieldSchema.getElementType().getLogicalType())) {
+                                return fieldValue;
+                            } else if(LogicalTypes.timestampMillis().equals(fieldSchema.getElementType().getLogicalType())) {
+                                return ((Long) fieldValue) * 1000L;
+                            } else if(LogicalTypes.timeMillis().equals(fieldSchema.getElementType().getLogicalType())) {
+                                return ((Integer) fieldValue).longValue() * 1000L;
+                            } else {
+                                return fieldValue;
+                            }
+                        })
+                        .collect(Collectors.toList());
+                case MAP -> ((List<Object>) fieldValue).stream()
+                            .map(o -> {
+                                if(o instanceof GenericRecord) {
+                                    return asPrimitiveMap((GenericRecord) o);
+                                } else if(o instanceof Map<?,?>) {
+                                    return o;
+                                } else {
+                                    throw new IllegalStateException();
+                                }
+                            })
+                            .collect(Collectors.toList());
+                case RECORD -> ((List<GenericRecord>) fieldValue).stream()
+                        .map(o -> asPrimitiveMap((GenericRecord) o))
+                        .collect(Collectors.toList());
+                default -> throw new IllegalStateException("Not supported primitive type: " + fieldSchema.getElementType());
+            };
+            case NULL -> null;
+            case UNION -> getAsPrimitive(unnestUnion(fieldSchema), fieldValue);
+            default -> throw new IllegalStateException("Nut supported type: " + fieldSchema.getType());
+        };
     }
 
     public static List<Float> getAsFloatList(final GenericRecord record, final String fieldName) {
@@ -1556,11 +1790,166 @@ public class AvroSchemaUtil {
         }
     }
 
+    public static byte[] encode(Object primitiveValue) throws IOException {
+        try(ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            BinaryEncoder encoder = EncoderFactory.get().binaryEncoder(outputStream, null);
+            write(encoder, primitiveValue);
+            encoder.flush();
+            return outputStream.toByteArray();
+        }
+    }
+
+    public static <T> byte[] encode(Class<T> clazz, T object) throws IOException {
+        try(ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            AvroCoder.of(clazz).encode(object, outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+
     public static GenericRecord decode(final Schema schema, final byte[] bytes) throws IOException {
         final DatumReader<GenericRecord> datumReader = new GenericDatumReader<>(schema);
         final BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(bytes, null);
         GenericRecord record = new GenericData.Record(schema);
         return datumReader.read(record, decoder);
+    }
+
+    public static List<GenericRecord> decodeFile(final byte[] bytes) {
+        final DatumReader<GenericRecord> datumReader = new GenericDatumReader<>();
+        try(final InputStream is = new ByteArrayInputStream(bytes);
+            final DataFileStream<GenericRecord> dataFileReader = new DataFileStream<>(is, datumReader)) {
+            final List<GenericRecord> records = new ArrayList<>();
+            while(dataFileReader.hasNext()) {
+                records.add(dataFileReader.next());
+            }
+            return records;
+        } catch (final Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    public static Object decode(com.mercari.solution.module.Schema.FieldType fieldType, byte[] bytes) throws IOException {
+        return decode(null, fieldType, bytes);
+    }
+
+    public static Object decode(BinaryDecoder decoder, com.mercari.solution.module.Schema.FieldType fieldType, byte[] bytes) throws IOException {
+        try(ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes)) {
+            decoder = DecoderFactory.get().binaryDecoder(inputStream, decoder);
+            return read(decoder, fieldType);
+        }
+    }
+
+    public static <T> T decode(Class<T> clazz, byte[] bytes) throws IOException {
+        try(ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes)) {
+            return AvroCoder.of(clazz).decode(inputStream);
+        }
+    }
+
+    private static void write(BinaryEncoder encoder, Object primitiveValue) throws IOException {
+        if(primitiveValue == null) {
+            encoder.writeNull();
+            return;
+        }
+        switch (primitiveValue) {
+            case String s -> encoder.writeString(s);
+            case Boolean b -> encoder.writeBoolean(b);
+            case Integer i -> encoder.writeInt(i);
+            case Long l -> encoder.writeLong(l);
+            case Float f -> encoder.writeFloat(f);
+            case Double d -> encoder.writeDouble(d);
+            case ByteBuffer bb -> encoder.writeBytes(bb);
+            case byte[] b -> encoder.writeBytes(b);
+            case Map<?,?> m -> {
+                encoder.writeMapStart();
+                encoder.setItemCount(m.size());
+                for(Map.Entry<?,?> entry : m.entrySet()) {
+                    encoder.startItem();
+                    write(encoder, entry.getKey());
+                    write(encoder, entry.getValue());
+                }
+                encoder.writeMapEnd();
+            }
+            case Collection<?> c -> {
+                encoder.writeArrayStart();
+                encoder.setItemCount(c.size());
+                for(Object v : c) {
+                    encoder.startItem();
+                    write(encoder, v);
+                }
+                encoder.writeArrayEnd();
+            }
+            default -> {}
+
+        }
+    }
+
+    private static Object read(BinaryDecoder decoder, com.mercari.solution.module.Schema.FieldType fieldType) throws IOException {
+        return switch (fieldType.getType()) {
+            case string, json -> decoder.readString();
+            case bool -> decoder.readBoolean();
+            case bytes, decimal -> decoder.readBytes(null);
+            case int32, date, enumeration -> decoder.readInt();
+            case int64, time, timestamp -> decoder.readLong();
+            case float32 -> decoder.readFloat();
+            case float64 -> decoder.readDouble();
+            case map -> {
+                final Map<String, Object> map = new HashMap<>();
+                decoder.readMapStart();
+                yield map;
+            }
+            case array -> {
+                List<?> list = new ArrayList<>();
+                long count = decoder.readArrayStart();
+                for(long i=0; i<count; i++) {
+                    decoder.readArrayStart();
+                }
+                yield list;
+            }
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
+    private static Object read(BinaryDecoder decoder, Schema fieldType) throws IOException {
+        return switch (fieldType.getType()) {
+            case STRING -> decoder.readString();
+            case BOOLEAN -> decoder.readBoolean();
+            case BYTES -> decoder.readBytes(null);
+            case ENUM -> decoder.readEnum();
+            case INT -> decoder.readInt();
+            case LONG -> decoder.readLong();
+            case FLOAT -> decoder.readFloat();
+            case DOUBLE -> decoder.readDouble();
+            case MAP -> {
+                final Map<String, Object> map = new HashMap<>();
+                decoder.readMapStart();
+                yield map;
+            }
+            case ARRAY -> {
+                List<?> list = new ArrayList<>();
+                long count = decoder.readArrayStart();
+                for(long i=0; i<count; i++) {
+                    decoder.readArrayStart();
+                }
+                yield list;
+            }
+            case RECORD -> {
+                final DatumReader<GenericRecord> datumReader = new GenericDatumReader<>(fieldType);
+                GenericRecord record = new GenericData.Record(fieldType);
+                yield datumReader.read(record, decoder);
+            }
+            case UNION -> read(decoder, unnestUnion(fieldType));
+            case NULL -> null;
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
+    public static Schema getAvroSchema(final byte[] bytes) {
+        final DatumReader<GenericRecord> datumReader = new GenericDatumReader<>();
+        try(final InputStream is = new ByteArrayInputStream(bytes);
+            final DataFileStream<GenericRecord> dataFileReader = new DataFileStream<>(is, datumReader)) {
+            return dataFileReader.getSchema();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public static Schema toNullable(final Schema schema) {
@@ -1650,11 +2039,27 @@ public class AvroSchemaUtil {
             }
             case RECORD -> {
                 final JsonElement element = new Gson().fromJson(defaultValue, JsonElement.class);
-                yield JsonToRecordConverter.convert(fieldSchema, element);
+                yield JsonToAvroConverter.convert(fieldSchema, element);
             }
             case UNION -> convertDefaultValue(unnestUnion(fieldSchema), defaultValue);
             default -> throw new IllegalStateException("Not supported default value type: " + fieldSchema);
         };
+    }
+
+    private static Object getRecordValue(final GenericRecord record, final String fieldName) {
+        if(!record.hasField(fieldName)) {
+            return null;
+        }
+        final Object value = record.get(fieldName);
+        if(value == null) {
+            return null;
+        }
+        final Schema.Field field = record.getSchema().getField(fieldName);
+        if(field == null) {
+            return null;
+        }
+
+        return value;
     }
 
     private static Schema convertSchema(final TableFieldSchema fieldSchema, final String namespace) {
@@ -1785,7 +2190,7 @@ public class AvroSchemaUtil {
             case "int" -> nullable ? NULLABLE_LONG : REQUIRED_LONG;
             case "currency", "percent", "double" -> nullable ? NULLABLE_DOUBLE : REQUIRED_DOUBLE;
             case "date" -> nullable ? NULLABLE_LOGICAL_DATE_TYPE : REQUIRED_LOGICAL_DATE_TYPE;
-            case "time" -> nullable ? NULLABLE_LOGICAL_TIME_MILLI_TYPE : REQUIRED_LOGICAL_TIME_MILLI_TYPE;
+            case "time" -> nullable ? NULLABLE_LOGICAL_TIME_MICRO_TYPE : REQUIRED_LOGICAL_TIME_MICRO_TYPE;
             case "datetime" -> nullable ? NULLABLE_LOGICAL_TIMESTAMP_MICRO_TYPE : REQUIRED_LOGICAL_TIMESTAMP_MICRO_TYPE;
             case "junctionidlist", "multipicklist" -> nullable ? Schema.createUnion(
                     Schema.create(Schema.Type.NULL),

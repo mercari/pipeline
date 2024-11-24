@@ -89,7 +89,7 @@ public class BigtableUtil {
         if(jsonElement == null || jsonElement.isJsonNull()) {
             return RowFilter.newBuilder().setPassAllFilter(true).build();
         } else if(jsonElement.isJsonPrimitive()) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Illegal rowFilter: " + jsonElement);
         }
 
         if(jsonElement.isJsonArray()) {
@@ -106,60 +106,47 @@ public class BigtableUtil {
                 throw new IllegalArgumentException("rowFilter requires type parameter");
             }
             final FilterType filterType = FilterType.valueOf(jsonObject.get("type").getAsString());
-            switch (filterType) {
-                case sample: {
+            return switch (filterType) {
+                case sample -> {
                     if(!jsonObject.has("rate")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires rate parameter");
                     }
                     final double sample = jsonObject.get("sample").getAsDouble();
-                    return RowFilter.newBuilder().setRowSampleFilter(sample).build();
+                    yield RowFilter.newBuilder().setRowSampleFilter(sample).build();
                 }
-                case row_key_regex:
-                case family_name_regex:
-                case column_qualifier_regex:
-                case value_regex: {
+                case row_key_regex, family_name_regex, column_qualifier_regex, value_regex -> {
                     if(!jsonObject.has("regex")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires regex parameter");
                     }
                     final String regex = jsonObject.get("regex").getAsString();
                     final ByteString byteString = ByteString.copyFromUtf8(regex);
-                    switch (filterType) {
-                        case row_key_regex:
-                            return RowFilter.newBuilder().setRowKeyRegexFilter(byteString).build();
-                        case family_name_regex:
-                            return RowFilter.newBuilder().setFamilyNameRegexFilter(regex).build();
-                        case column_qualifier_regex:
-                            return RowFilter.newBuilder().setColumnQualifierRegexFilter(byteString).build();
-                        case value_regex:
-                            return RowFilter.newBuilder().setValueRegexFilter(byteString).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case row_key_regex -> RowFilter.newBuilder().setRowKeyRegexFilter(byteString).build();
+                        case family_name_regex -> RowFilter.newBuilder().setFamilyNameRegexFilter(regex).build();
+                        case column_qualifier_regex -> RowFilter.newBuilder().setColumnQualifierRegexFilter(byteString).build();
+                        case value_regex -> RowFilter.newBuilder().setValueRegexFilter(byteString).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case limit_cells_per_row:
-                case limit_cells_per_column: {
+                case limit_cells_per_row, limit_cells_per_column -> {
                     if(!jsonObject.has("limit")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires limit parameter");
                     }
                     final int limit = jsonObject.get("limit").getAsInt();
-                    switch (filterType) {
-                        case limit_cells_per_row:
-                            return RowFilter.newBuilder().setCellsPerRowLimitFilter(limit).build();
-                        case limit_cells_per_column:
-                            return RowFilter.newBuilder().setCellsPerColumnLimitFilter(limit).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case limit_cells_per_row -> RowFilter.newBuilder().setCellsPerRowLimitFilter(limit).build();
+                        case limit_cells_per_column -> RowFilter.newBuilder().setCellsPerColumnLimitFilter(limit).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case offset_cells_per_row: {
+                case offset_cells_per_row -> {
                     if(!jsonObject.has("offset")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires offset parameter");
                     }
                     final int offset = jsonObject.get("offset").getAsInt();
-                    return RowFilter.newBuilder().setCellsPerRowOffsetFilter(offset).build();
+                    yield RowFilter.newBuilder().setCellsPerRowOffsetFilter(offset).build();
                 }
-                case column_range:
-                case value_range: {
+                case column_range, value_range -> {
                     final boolean startIsOpen;
                     final boolean endIsOpen;
                     final JsonElement start;
@@ -188,8 +175,8 @@ public class BigtableUtil {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires startOpen or endOpen");
                     }
 
-                    switch (filterType) {
-                        case column_range: {
+                    yield switch (filterType) {
+                        case column_range -> {
                             ColumnRange.Builder builder = ColumnRange.newBuilder();
                             if(jsonObject.has("family")) {
                                 final String familyName = jsonObject.get("family").getAsString();
@@ -211,9 +198,9 @@ public class BigtableUtil {
                                     builder = builder.setEndQualifierClosed(endByteString);
                                 }
                             }
-                            return RowFilter.newBuilder().setColumnRangeFilter(builder.build()).build();
+                            yield RowFilter.newBuilder().setColumnRangeFilter(builder.build()).build();
                         }
-                        case value_range: {
+                        case value_range -> {
                             ValueRange.Builder builder = ValueRange.newBuilder();
                             if(start != null) {
                                 final ByteString startByteString = ByteString.copyFrom(start.getAsString(), StandardCharsets.UTF_8);
@@ -231,14 +218,13 @@ public class BigtableUtil {
                                     builder = builder.setEndValueClosed(endByteString);
                                 }
                             }
-                            return RowFilter.newBuilder().setValueRangeFilter(builder.build()).build();
+                            yield RowFilter.newBuilder().setValueRangeFilter(builder.build()).build();
                         }
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
 
-                case timestamp_range: {
+                case timestamp_range -> {
                     final String startTimestamp;
                     final String endTimestamp;
                     if(jsonObject.has("start")) {
@@ -261,40 +247,31 @@ public class BigtableUtil {
                         final long endMicros = DateTimeUtil.toEpochMicroSecond(endTimestamp);
                         builder = builder.setEndTimestampMicros(endMicros);
                     }
-                    return RowFilter.newBuilder().setTimestampRangeFilter(builder.build()).build();
+                    yield RowFilter.newBuilder().setTimestampRangeFilter(builder.build()).build();
                 }
-                case block:
-                case pass:
-                case sink:
-                case strip: {
+                case block, pass, sink, strip -> {
                     final boolean flag;
                     if(jsonObject.has("flag")) {
                         flag = jsonObject.get("flag").getAsBoolean();
                     } else {
                         flag = true;
                     }
-                    switch (filterType) {
-                        case block:
-                            return RowFilter.newBuilder().setBlockAllFilter(flag).build();
-                        case pass:
-                            return RowFilter.newBuilder().setPassAllFilter(flag).build();
-                        case sink:
-                            return RowFilter.newBuilder().setSink(flag).build();
-                        case strip:
-                            return RowFilter.newBuilder().setStripValueTransformer(flag).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case block -> RowFilter.newBuilder().setBlockAllFilter(flag).build();
+                        case pass -> RowFilter.newBuilder().setPassAllFilter(flag).build();
+                        case sink -> RowFilter.newBuilder().setSink(flag).build();
+                        case strip -> RowFilter.newBuilder().setStripValueTransformer(flag).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case label: {
+                case label -> {
                     if(!jsonObject.has("label")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires label parameter");
                     }
                     final String label = jsonObject.get("label").getAsString();
-                    return RowFilter.newBuilder().setApplyLabelTransformer(label).build();
+                    yield RowFilter.newBuilder().setApplyLabelTransformer(label).build();
                 }
-                case chain:
-                case interleave: {
+                case chain, interleave -> {
                     if(jsonObject.has("children")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires children parameter");
                     }
@@ -307,21 +284,15 @@ public class BigtableUtil {
                     for(JsonElement child : children) {
                         filters.add(createRowFilter(child));
                     }
-                    switch (filterType) {
-                        case chain:
-                            return RowFilter.newBuilder().setChain(RowFilter.Chain.newBuilder().addAllFilters(filters).build()).build();
-                        case interleave:
-                            return RowFilter.newBuilder().setInterleave(RowFilter.Interleave.newBuilder().addAllFilters(filters).build()).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case chain -> RowFilter.newBuilder().setChain(RowFilter.Chain.newBuilder().addAllFilters(filters).build()).build();
+                        case interleave -> RowFilter.newBuilder().setInterleave(RowFilter.Interleave.newBuilder().addAllFilters(filters).build()).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case condition: {
-                    throw new IllegalArgumentException("Not supported condition");
-                }
-                default:
-                    throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-            }
+                case condition -> throw new IllegalArgumentException("Not supported condition");
+                default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+            };
         } else {
             throw new IllegalArgumentException();
         }
@@ -373,10 +344,10 @@ public class BigtableUtil {
             filters.add(RowFilter.newBuilder().setRowKeyRegexFilter(ByteString.copyFromUtf8(strValue)).build());
         }
 
-        if(filters.size() == 0) {
+        if(filters.isEmpty()) {
             return RowFilter.newBuilder().setPassAllFilter(true).build();
         } else if(filters.size() == 1) {
-            return filters.get(0);
+            return filters.getFirst();
         } else {
             return RowFilter.newBuilder().setChain(RowFilter.Chain.newBuilder().addAllFilters(filters).build()).build();
         }

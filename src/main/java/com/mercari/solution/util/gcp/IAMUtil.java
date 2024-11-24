@@ -1,13 +1,24 @@
 package com.mercari.solution.util.gcp;
 
+import com.google.api.client.http.HttpRequestInitializer;
+import com.google.api.client.http.HttpTransport;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.JsonFactory;
+import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.gax.rpc.PermissionDeniedException;
+import com.google.api.services.iamcredentials.v1.IAMCredentials;
+import com.google.auth.Credentials;
+import com.google.auth.http.HttpCredentialsAdapter;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.GoogleCredentials;
+import com.google.cloud.hadoop.util.ChainingHttpRequestInitializer;
 import com.google.cloud.iam.credentials.v1.IamCredentialsClient;
 import com.google.cloud.iam.credentials.v1.IamCredentialsSettings;
 import com.google.cloud.iam.credentials.v1.SignJwtRequest;
 import com.google.cloud.iam.credentials.v1.SignJwtResponse;
+import com.google.common.collect.ImmutableList;
 import com.google.gson.JsonObject;
+import org.apache.beam.sdk.extensions.gcp.util.RetryHttpRequestInitializer;
 import org.joda.time.DateTime;
 
 import java.io.IOException;
@@ -62,21 +73,19 @@ public class IAMUtil {
         return credentials.refreshAccessToken();
     }
 
-    // TODO Pending as it was not available in the REST API. To be investigated at a later date.
-    /*
-    public static String signJwt(final String serviceAccount) throws IOException {
-        final long exp = DateTime.now().plusSeconds(60).getMillis() / 1000;
-        final JsonObject jsonObject = new JsonObject();
+    public static String signJwt(final String serviceAccount) {
+        final JsonObject payload = new JsonObject();
         if(serviceAccount.startsWith("projects")) {
             var strs = serviceAccount.split("/");
-            jsonObject.addProperty("sub", strs[strs.length - 1]);
+            payload.addProperty("sub", strs[strs.length - 1]);
         } else {
-            jsonObject.addProperty("sub", serviceAccount);
+            payload.addProperty("sub", serviceAccount);
         }
-        jsonObject.addProperty("exp", exp);
+        final long exp = DateTime.now().plusSeconds(60).getMillis() / 1000;
+        payload.addProperty("exp", exp);
 
         final HttpTransport transport = new NetHttpTransport();
-        final JsonFactory jsonFactory = new JacksonFactory();
+        final JsonFactory jsonFactory = GsonFactory.getDefaultInstance();
         try {
             final Credentials credential = GoogleCredentials.getApplicationDefault();
             final HttpRequestInitializer initializer = new ChainingHttpRequestInitializer(
@@ -86,13 +95,35 @@ public class IAMUtil {
 
             var iam = new IAMCredentials.Builder(transport, jsonFactory, initializer).build();
             var jwt = iam.projects().serviceAccounts()
-                    .signJwt(serviceAccount, new SignJwtRequest().setPayload(jsonObject.toString()))
+                    .signJwt(serviceAccount, new com.google.api.services.iamcredentials.v1.model.SignJwtRequest()
+                            .setPayload(payload.toString()))
                     .execute();
             return jwt.getSignedJwt();
-        } catch (Exception e) {
-            throw e;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to signJwt for service account: " + serviceAccount, e);
         }
     }
-    */
+
+    public static String signJwt(final String serviceAccount, final JsonObject payload) {
+        final HttpTransport transport = new NetHttpTransport();
+        final JsonFactory jsonFactory = GsonFactory.getDefaultInstance();
+        try {
+            final Credentials credential = GoogleCredentials.getApplicationDefault();
+            final HttpRequestInitializer initializer = new ChainingHttpRequestInitializer(
+                    new HttpCredentialsAdapter(credential),
+                    // Do not log 404. It clutters the output and is possibly even required by the caller.
+                    new RetryHttpRequestInitializer(ImmutableList.of(404)));
+
+            var iam = new IAMCredentials.Builder(transport, jsonFactory, initializer).build();
+            var jwt = iam.projects().serviceAccounts()
+                    .signJwt(serviceAccount, new com.google.api.services.iamcredentials.v1.model.SignJwtRequest()
+                            .setPayload(payload.toString()))
+                    .execute();
+            return jwt.getSignedJwt();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to signJwt for service account: " + serviceAccount, e);
+        }
+    }
+
 
 }

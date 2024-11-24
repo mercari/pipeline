@@ -1,12 +1,13 @@
 package com.mercari.solution.util.pipeline.select;
 
+
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.DateTimeUtil;
+import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.gcp.SecretManagerUtil;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import freemarker.template.Template;
-import org.apache.beam.sdk.schemas.Schema;
 import org.joda.time.Instant;
 
 import javax.crypto.Mac;
@@ -83,16 +84,16 @@ public class Hash implements SelectFunction {
 
         final List<Schema.Field> hashInputFields = new ArrayList<>();
         for(final String field : fields) {
-            hashInputFields.add(Schema.Field.of(field, SelectFunction.getInputFieldType(field, inputFields)));
+            hashInputFields.add(Schema.Field.of(field, ElementSchemaUtil.getInputFieldType(field, inputFields)));
         }
 
         final String text;
         final List<String> templateArgs;
         if(jsonObject.has("text")) {
             text = jsonObject.get("text").getAsString();
-            templateArgs = TemplateUtil.extractTemplateArgs(text, Schema.builder().addFields(inputFields).build());
+            templateArgs = TemplateUtil.extractTemplateArgs(text, inputFields);
             for(final String templateArg : templateArgs) {
-                hashInputFields.add(Schema.Field.of(templateArg, SelectFunction.getInputFieldType(templateArg, inputFields)));
+                hashInputFields.add(Schema.Field.of(templateArg, ElementSchemaUtil.getInputFieldType(templateArg, inputFields)));
             }
         } else {
             text = null;
@@ -113,7 +114,7 @@ public class Hash implements SelectFunction {
             switch (algorithm) {
                 case ALGORITHM_HMAC_SHA256 -> throw new IllegalArgumentException("SelectField hash: " + name + " requires parameter secret if algorithm is " + algorithm);
                 default ->
-                    secret = null;
+                        secret = null;
             }
         }
 
@@ -203,8 +204,8 @@ public class Hash implements SelectFunction {
                 } else if(field.equals("__timestamp")) {
                     list.add(Long.valueOf(timestamp.getMillis() * 1000).toString());
                 } else {
-                    final Object value = Optional.ofNullable(input.get(field)).orElse("");
-                    list.add(value.toString());
+                    final Object primitiveValue = Optional.ofNullable(input.get(field)).orElse("");
+                    list.add(primitiveValue.toString());
                 }
             }
 

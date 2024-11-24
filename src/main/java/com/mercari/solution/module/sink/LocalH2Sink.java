@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import com.mercari.solution.config.SinkConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
+import com.mercari.solution.module.IllegalModuleException;
 import com.mercari.solution.module.sink.fileio.H2Sink;
 import com.mercari.solution.util.domain.search.H2Util;
 import com.mercari.solution.util.domain.search.ZipFileUtil;
@@ -29,7 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-public class LocalH2Sink implements SinkModule {
+public class LocalH2Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(LocalH2Sink.class);
 
@@ -76,26 +76,26 @@ public class LocalH2Sink implements SinkModule {
         public void validate() {
             final List<String> errorMessages = new ArrayList<>();
             if(this.output == null) {
-                errorMessages.add("localH2 sink module requires `output` parameter.");
+                errorMessages.add("parameters.output must not be null");
             } else if(!this.output.startsWith("gs://")) {
-                errorMessages.add("localH2 sink module `input` parameter must be gcs path.");
+                errorMessages.add("parameters.input must be gcs path.");
             }
             if(this.input != null) {
                 if(!this.input.startsWith("gs://")) {
-                    errorMessages.add("localH2 sink module `input` parameter must be gcs path (must start with gs://).");
+                    errorMessages.add("parameters.input must be gcs path (must start with gs://).");
                 }
             }
 
             if(configs == null || configs.isEmpty()) {
-                errorMessages.add("localH2 sink module requires `configs` parameter.");
+                errorMessages.add("parameters.configs must not be empty");
             } else {
                 for(int i=0; i<configs.size(); i++) {
                     errorMessages.addAll(configs.get(i).validate(i));
                 }
             }
 
-            if(errorMessages.size() > 0) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+            if(!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
@@ -116,11 +116,9 @@ public class LocalH2Sink implements SinkModule {
 
     public String getName() { return "localH2"; }
 
-
-    @Override
     public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
 
-        if(inputs == null || inputs.size() == 0) {
+        if(inputs == null || inputs.isEmpty()) {
             throw new IllegalArgumentException("localH2 sink module requires inputs");
         }
 

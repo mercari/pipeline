@@ -3,6 +3,8 @@ package com.mercari.solution.util.converter;
 import ai.onnxruntime.*;
 import com.mercari.solution.util.domain.ml.ONNXRuntimeUtil;
 import com.mercari.solution.util.pipeline.union.UnionValue;
+import com.mercari.solution.util.schema.converter.AvroToOnnxConverter;
+import com.mercari.solution.util.schema.converter.RowToOnnxConverter;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.values.Row;
 
@@ -56,7 +58,7 @@ public class UnionValueToOnnxConverter {
             }
             case AVRO -> {
                 final GenericRecord record = (GenericRecord) unionValue.getValue();
-                return RecordToOnnxConverter.getValue(tensorInfo, field, record, null);
+                return AvroToOnnxConverter.getValue(tensorInfo, field, record, null);
             }
             default -> throw new IllegalArgumentException();
         }

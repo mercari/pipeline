@@ -9,6 +9,7 @@ import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.EntitySchemaUtil;
 import com.mercari.solution.util.schema.RowSchemaUtil;
 import com.mercari.solution.util.schema.StructSchemaUtil;
+import com.mercari.solution.util.schema.converter.*;
 import org.apache.beam.sdk.coders.RowCoder;
 import org.apache.beam.sdk.coders.SerializableCoder;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
@@ -129,13 +130,13 @@ public class DataTypeTransform {
                     final String inputAvroSchema = inputCollection.getAvroSchema().toString();
                     switch (outputType) {
                         case ROW: {
-                            final Schema schema = RecordToRowConverter.convertSchema(inputAvroSchema);
+                            final Schema schema = AvroToRowConverter.convertSchema(inputAvroSchema);
                             output = (PCollection<OutputT>) inputAvro
                                     .apply("RecordToRow", ParDo
                                             .of(new RowDoFn<>(inputAvroSchema,
                                                     inputCollection.getSchema(),
                                                     AvroSchemaUtil::convertSchema,
-                                                    RecordToRowConverter::convert)))
+                                                    AvroToRowConverter::convert)))
                                     .setCoder(RowCoder.of(schema))
                                     .setRowSchema(schema);
                             this.outputCollection = FCollection.of(name, output, outputType, schema);
@@ -147,7 +148,7 @@ public class DataTypeTransform {
                                             destination, spannerMutationOp, keyFields, null, excludeFields, maskFields,
                                             inputAvroSchema,
                                             AvroSchemaUtil::convertSchema,
-                                            RecordToMutationConverter::convert)))
+                                            AvroToMutationConverter::convert)))
                                     .setCoder(SerializableCoder.of(Mutation.class));
                             this.outputCollection = FCollection.of(name, output, outputType, inputCollection.getAvroSchema());
                             return output;
@@ -158,7 +159,7 @@ public class DataTypeTransform {
                                             destination, keyFields, "#",
                                             inputAvroSchema,
                                             AvroSchemaUtil::convertSchema,
-                                            RecordToEntityConverter::convert)))
+                                            AvroToEntityConverter::convert)))
                                     .setCoder(SerializableCoder.of(Entity.class));
                             this.outputCollection = FCollection.of(name, output, outputType, inputCollection.getAvroSchema());
                             return output;
@@ -205,8 +206,8 @@ public class DataTypeTransform {
                             output = (PCollection<OutputT>) inputStruct
                                     .apply("StructToRecord", ParDo
                                             .of(new TransformDoFn<>(inputCollection.getSpannerType(),
-                                                    StructToRecordConverter::convertSchema,
-                                                    StructToRecordConverter::convert)))
+                                                    StructToAvroConverter::convertSchema,
+                                                    StructToAvroConverter::convert)))
                                     .setCoder(AvroCoder.of(inputCollection.getAvroSchema()));
                             this.outputCollection = FCollection.of(name, output, outputType, inputCollection.getAvroSchema());
                             return output;
@@ -251,7 +252,7 @@ public class DataTypeTransform {
                                     .apply("EntityToRecord", ParDo
                                             .of(new TransformDoFn<>(withKeySchema.toString(),
                                                     AvroSchemaUtil::convertSchema,
-                                                    EntityToRecordConverter::convert)))
+                                                    EntityToAvroConverter::convert)))
                                     .setCoder(AvroCoder.of(withKeySchema));
                             this.outputCollection = FCollection.of(name, output, outputType, withKeySchema);
                             return output;
@@ -562,9 +563,9 @@ public class DataTypeTransform {
             case ROW:
                 return RowToRecordConverter.convert(schema, (Row) value);
             case STRUCT:
-                return StructToRecordConverter.convert(schema, (Struct) value);
+                return StructToAvroConverter.convert(schema, (Struct) value);
             case ENTITY:
-                return EntityToRecordConverter.convert(schema, (Entity) value);
+                return EntityToAvroConverter.convert(schema, (Entity) value);
             default:
                 throw new IllegalArgumentException("Not supported input type: " + inputType.name());
         }

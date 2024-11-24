@@ -1,11 +1,11 @@
 package com.mercari.solution.util.pipeline.aggregation;
 
+
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.SchemaUtil;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.Filter;
 
 import java.util.*;
 
@@ -20,18 +20,6 @@ public class Count implements Aggregator {
 
     private transient Filter.ConditionNode conditionNode;
 
-    public Count() {
-
-    }
-
-    public Aggregator.Op getOp() {
-        return Aggregator.Op.count;
-    }
-
-    @Override
-    public String getName() {
-        return name;
-    }
 
     @Override
     public Boolean getIgnore() {
@@ -39,8 +27,8 @@ public class Count implements Aggregator {
     }
 
     @Override
-    public Boolean filter(final UnionValue unionValue) {
-        return Aggregator.filter(conditionNode, unionValue);
+    public Boolean filter(final MElement element) {
+        return Aggregator.filter(conditionNode, element);
     }
 
 
@@ -79,30 +67,36 @@ public class Count implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accum, final UnionValue input, final SchemaUtil.PrimitiveValueGetter valueGetter) {
-        final Long countPrev = accum.getLong(name);
-        accum.putLong(name, Optional.ofNullable(countPrev).orElse(0L) + 1L);
+    public Accumulator addInput(final Accumulator accum, final MElement input) {
+        final Object countPrev = accum.get(name);
+        final long countNext;
+        if(countPrev == null) {
+            countNext = 1L;
+        } else {
+            countNext = (Long) countPrev + 1L;
+        }
+        accum.put(name, countNext);
         return accum;
     }
 
     @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator accum) {
 
-        final Long stateValue = base.getLong(name);
-        final Long accumValue = accum.getLong(name);
+        final Long stateValue = (Long) base.get(name);
+        final Long accumValue = (Long) accum.get(name);
 
         final Long count = Optional.ofNullable(stateValue).orElse(0L) + Optional.ofNullable(accumValue).orElse(0L);
-        base.putLong(name, count);
+        base.put(name, count);
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> values, final SchemaUtil.PrimitiveValueConverter converter) {
+    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
         final Long count = Optional
-                .ofNullable(accumulator.getLong(name))
+                .ofNullable((Long)accumulator.get(name))
                 .orElse(0L);
-        values.put(name, count);
-        return values;
+        outputs.put(name, count);
+        return outputs;
     }
 
 }

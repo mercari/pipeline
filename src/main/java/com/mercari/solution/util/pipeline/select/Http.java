@@ -2,9 +2,9 @@ package com.mercari.solution.util.pipeline.select;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.TemplateUtil;
 import freemarker.template.Template;
-import org.apache.beam.sdk.schemas.Schema;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +15,8 @@ import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class Http implements SelectFunction {
@@ -151,9 +153,9 @@ public class Http implements SelectFunction {
         final HttpRequest.BodyPublisher bodyPublisher = HttpRequest.BodyPublishers.ofString(body);
 
         final HttpRequest httpRequest = createHttpRequest(url, method, headers, bodyPublisher);
-        final HttpResponse.BodyHandler<?> bodyHandler = switch (outputFieldType.getTypeName()) {
-            case STRING -> HttpResponse.BodyHandlers.ofString();
-            case BYTES -> HttpResponse.BodyHandlers.ofByteArray();
+        final HttpResponse.BodyHandler<?> bodyHandler = switch (outputFieldType.getType()) {
+            case string -> HttpResponse.BodyHandlers.ofString();
+            case bytes -> HttpResponse.BodyHandlers.ofByteArray();
             default -> throw new IllegalArgumentException();
         };
         try {
@@ -166,7 +168,20 @@ public class Http implements SelectFunction {
             if(httpResponse.statusCode() > 400 && httpResponse.statusCode() < 500) {
                 throw new IllegalArgumentException("http error for endpoint: " + url + ", statusCode: " + httpResponse.statusCode() + ", body: " + httpResponse.body());
             }
-            return httpResponse.body();
+            final Object output = httpResponse.body();
+            return switch (outputFieldType.getType()) {
+                case string -> switch (output) {
+                    case String s -> s;
+                    case byte[] b -> new String(b, StandardCharsets.UTF_8);
+                    case Object o -> o.toString();
+                };
+                case bytes -> switch (output) {
+                    case String s -> ByteBuffer.wrap(Base64.getDecoder().decode(s));
+                    case byte[] b -> ByteBuffer.wrap(b);
+                    default -> throw new IllegalArgumentException();
+                };
+                default -> throw new IllegalArgumentException();
+            };
         } catch (IOException | InterruptedException e) {
             throw new IllegalArgumentException();
         }

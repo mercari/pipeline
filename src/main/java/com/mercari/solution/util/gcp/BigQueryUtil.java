@@ -18,28 +18,32 @@ import com.google.api.services.bigquery.model.*;
 import com.google.auth.Credentials;
 import com.google.auth.http.HttpCredentialsAdapter;
 import com.google.auth.oauth2.GoogleCredentials;
-import com.google.auth.oauth2.ServiceAccountCredentials;
-import com.google.auth.oauth2.UserCredentials;
 import com.google.cloud.bigquery.storage.v1.BigQueryReadClient;
 import com.google.cloud.bigquery.storage.v1.CreateReadSessionRequest;
 import com.google.cloud.bigquery.storage.v1.DataFormat;
 import com.google.cloud.bigquery.storage.v1.ReadSession;
 import com.google.cloud.hadoop.util.ChainingHttpRequestInitializer;
 import com.google.common.collect.ImmutableList;
+import com.mercari.solution.util.DateTimeUtil;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.converter.TableRecordToRowConverter;
+import com.mercari.solution.util.schema.converter.TableRecordToRowConverter;
 import org.apache.beam.sdk.extensions.gcp.util.RetryHttpRequestInitializer;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.schemas.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.regex.Pattern;
 
 
 public class BigQueryUtil {
 
     private static final Logger LOG = LoggerFactory.getLogger(BigQueryUtil.class);
+
+    private static final Pattern PATTERN_TIME_PARTITIONING_TABLE = Pattern.compile("\\$\\d+$");
 
     private static final String EXTRACT_ALL_TABLE_SCHEMA_QUERY =
             "  SELECT " +
@@ -58,6 +62,13 @@ public class BigQueryUtil {
             "    `%s`.%s.INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS c " +
             "  GROUP BY " +
             "    table_name";
+
+    public enum WriteFormat {
+        json,
+        row,
+        avro,
+        avrofile
+    }
 
     public static TableReference getTableReference(final String tableName, final String defaultProjectId) {
         final String[] path = tableName.replaceAll(":", ".").split("\\.");
@@ -149,7 +160,7 @@ public class BigQueryUtil {
             if(projectId != null) {
                 queryRunProjectId = projectId;
             } else {
-                queryRunProjectId = getUserDefaultProject(credential);
+                queryRunProjectId = OptionUtil.getDefaultProject(credential);
             }
 
             return getQueryDryRunJob(bigquery, queryRunProjectId, query);
@@ -188,7 +199,7 @@ public class BigQueryUtil {
             if(defaultProjectId != null) {
                 queryRunProjectId = defaultProjectId;
             } else {
-                queryRunProjectId = getUserDefaultProject(credential);
+                queryRunProjectId = OptionUtil.getDefaultProject(credential);
             }
             final TableReference tableReference = getTableReference(tableName, queryRunProjectId);
 
@@ -201,11 +212,23 @@ public class BigQueryUtil {
         }
     }
 
+    public static TableSchema getTableSchemaFromTable(final TableReference tableReference) {
+        final Bigquery bigquery = getBigquery();
+        try {
+            final Table table = bigquery.tables()
+                    .get(tableReference.getProjectId(), tableReference.getDatasetId(), tableReference.getTableId())
+                    .execute();
+            return table.getSchema();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to get schema from BigQuery table: " + tableReference, e);
+        }
+    }
+
     public static Map<String, TableSchema> getTableSchemasFromDataset(final String datasetName) {
         final Bigquery bigquery = getBigquery();
         try {
             final Credentials credential = GoogleCredentials.getApplicationDefault();
-            String queryRunProjectId = getUserDefaultProject(credential);
+            final String queryRunProjectId = OptionUtil.getDefaultProject(credential);
 
             final String[] strs = datasetName.split("\\.");
 
@@ -232,8 +255,7 @@ public class BigQueryUtil {
             if(defaultProjectId != null) {
                 queryRunProjectId = defaultProjectId;
             } else {
-                queryRunProjectId = getUserDefaultProject(credential);
-                System.out.println(queryRunProjectId);
+                queryRunProjectId = OptionUtil.getDefaultProject(credential);
             }
 
             final String[] strs = datasetName.split("\\.");
@@ -389,7 +411,7 @@ public class BigQueryUtil {
             if(projectId != null) {
                 queryRunProjectId = projectId;
             } else {
-                queryRunProjectId = getUserDefaultProject(credential);
+                queryRunProjectId = OptionUtil.getDefaultProject(credential);
             }
             final Bigquery bigquery = new Bigquery.Builder(transport, jsonFactory, initializer)
                     .setApplicationName("BigQueryClient")
@@ -410,6 +432,103 @@ public class BigQueryUtil {
         } catch (IOException e) {
             throw new RuntimeException("Failed to dry run query: " + query + ", for projectId: " + projectId, e);
         }
+    }
+
+    public static List<TableRow> queryBatch(final Bigquery bigquery, final QueryRequest request) {
+        return queryBatch(bigquery, null, request);
+    }
+
+    public static List<TableRow> queryBatch(final Bigquery bigquery, final String projectId, final QueryRequest request) {
+        final String queryRunProjectId;
+        if(projectId == null) {
+            try {
+                final Credentials credential = GoogleCredentials.getApplicationDefault();
+                queryRunProjectId = OptionUtil.getDefaultProject(credential);
+                if(queryRunProjectId == null) {
+                    throw new IllegalArgumentException("Failed to get default project from credentials: " + credential.getClass().getSimpleName());
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("failed to get default project", e);
+            }
+        } else {
+            queryRunProjectId = projectId;
+        }
+
+
+        try {
+            final QueryResponse queryResponse = bigquery
+                    .jobs()
+                    .query(queryRunProjectId, request)
+                    .execute();
+            final List<TableRow> tableRows = new ArrayList<>(queryResponse.getRows());
+
+            String pageToken = queryResponse.getPageToken();
+            while(pageToken != null) {
+                final GetQueryResultsResponse response = bigquery
+                        .jobs()
+                        .getQueryResults(queryRunProjectId, queryResponse.getJobReference().getJobId())
+                        .setPageToken(queryResponse.getPageToken())
+                        .execute();
+                pageToken = response.getPageToken();
+                tableRows.addAll(response.getRows());
+            }
+            return tableRows;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to dry run query: " + request + ", for projectId: " + queryRunProjectId, e);
+        }
+    }
+
+    public static Map<String, Object> parseAsPrimitiveValues(final TableSchema tableSchema, final TableRow tableRow) {
+        return parseAsPrimitiveValues(tableSchema.getFields(), tableRow);
+    }
+
+    private static Map<String, Object> parseAsPrimitiveValues(final List<TableFieldSchema> fields, final Map<String,Object> tableRow) {
+        final Map<String, Object> values = new HashMap<>();
+        if(tableRow == null || !tableRow.containsKey("f")) {
+            return values;
+        }
+        final List<Map<String,Object>> list = (List<Map<String,Object>>) tableRow.get("f");
+        for(int index=0; index<fields.size(); index++) {
+            final TableFieldSchema fieldSchema = fields.get(index);
+            final Map<String,Object> listValue = list.get(index);
+            final Object primitiveValue = switch (fieldSchema.getMode()) {
+                case "NULLABLE", "REQUIRED" -> parseAsPrimitiveValue(fieldSchema, listValue);
+                case "REPEATED" -> {
+                    final List<Object> primitiveValueList = new ArrayList<>();
+                    final List<Map<String,Object>> repeatedValues = (List<Map<String,Object>>)listValue.get("v");
+                    for(final Map<String,Object> repeatedValue : repeatedValues) {
+                        final Object repeatedPrimitiveValue = parseAsPrimitiveValue(fieldSchema, repeatedValue);
+                        primitiveValueList.add(repeatedPrimitiveValue);
+                    }
+                    yield primitiveValueList;
+                }
+                default -> throw new IllegalArgumentException();
+            };
+            values.put(fieldSchema.getName(), primitiveValue);
+        }
+        return values;
+    }
+
+    private static Object parseAsPrimitiveValue(TableFieldSchema fieldSchema, Map<String, Object> listValue) {
+        if(listValue == null || !listValue.containsKey("v")) {
+            return null;
+        }
+        final Object value = listValue.get("v");
+        return switch (fieldSchema.getType().toUpperCase()) {
+            case "BOOLEAN" -> Boolean.valueOf((String)value);
+            case "STRING", "JSON" -> value.toString();
+            case "BYTES" -> Base64.getDecoder().decode(value.toString());
+            case "INTEGER" -> Long.valueOf((String)value);
+            case "FLOAT" -> Double.valueOf((String)value);
+            case "DATE" -> DateTimeUtil.toEpochDay(value.toString());
+            case "TIME" -> DateTimeUtil.toMicroOfDay(value.toString());
+            case "TIMESTAMP" -> {
+                final Double doubleValue = Double.parseDouble(value.toString());
+                yield doubleValue.longValue() * 1000L * 1000L;
+            }
+            case "RECORD" -> parseAsPrimitiveValues(fieldSchema.getFields(), (Map<String,Object>)value);
+            default -> throw new IllegalArgumentException();
+        };
     }
 
     public static void deleteTable(final String projectId, final String datasetId, final String tableId) {
@@ -496,13 +615,56 @@ public class BigQueryUtil {
         }
     }
 
-    private static String getUserDefaultProject(final Credentials credential) {
-        if(credential instanceof UserCredentials c) {
-            return c.getQuotaProjectId();
-        } else if(credential instanceof ServiceAccountCredentials c) {
-            return c.getProjectId();
+    public static boolean isPartitioningTable(final String table) {
+        return PATTERN_TIME_PARTITIONING_TABLE.matcher(table).find();
+    }
+
+    public static WriteFormat getPreferWriteFormat(
+            final BigQueryIO.Write.Method method,
+            final boolean isStreaming) {
+
+        if(isStreaming) {
+            if(BigQueryIO.Write.Method.STREAMING_INSERTS.equals(method)
+                    || BigQueryIO.Write.Method.DEFAULT.equals(method)) {
+
+                return WriteFormat.json;
+            } else {
+                return WriteFormat.row;
+            }
+        } else {
+            if(BigQueryIO.Write.Method.FILE_LOADS.equals(method)
+                    || BigQueryIO.Write.Method.DEFAULT.equals(method)) {
+
+                return WriteFormat.avrofile;
+                /*
+                if(!isNestedSchema(inputSchema)) {
+                    return WriteFormat.avrofile;
+                } else {
+                    return WriteFormat.json;
+                }
+
+                 */
+            } else {
+                return WriteFormat.row;
+            }
         }
-        return null;
+
+    }
+
+    public static BigQueryIO.TypedRead.Method getPreferReadMethod(final TableSchema inputSchema) {
+        if(isNestedSchema(inputSchema)) {
+            return BigQueryIO.TypedRead.Method.EXPORT;
+        } else {
+            return BigQueryIO.TypedRead.Method.DIRECT_READ;
+        }
+    }
+
+    private static boolean isNestedSchema(final TableSchema schema) {
+        if(schema == null) {
+            return false;
+        }
+        return schema.getFields().stream()
+                .anyMatch(s -> "record".equalsIgnoreCase(s.getType()));
     }
 
     public static Job pollJob(final Bigquery bigquery,

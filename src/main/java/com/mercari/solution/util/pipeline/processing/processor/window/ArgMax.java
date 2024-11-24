@@ -1,7 +1,7 @@
 package com.mercari.solution.util.pipeline.processing.processor.window;
 
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
+import com.mercari.solution.util.ExpressionUtil;
 import com.mercari.solution.util.pipeline.processing.ProcessingBuffer;
 import com.mercari.solution.util.pipeline.processing.ProcessingState;
 import net.objecthunter.exp4j.Expression;
@@ -31,7 +31,7 @@ public class ArgMax extends WindowProcessor {
 
         this.opposite = opposite;
 
-        if(ranges.size() == 0) {
+        if(ranges.isEmpty()) {
             throw new IllegalArgumentException("ArgMax step: " + name + " requires ranges over size zero");
         }
 

@@ -8,10 +8,9 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.mercari.solution.config.SinkConfig;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.aws.S3Util;
-import com.mercari.solution.util.converter.*;
+import com.mercari.solution.util.schema.converter.*;
 import com.mercari.solution.util.gcp.StorageUtil;
 import freemarker.template.Template;
 import org.apache.avro.generic.GenericRecord;
@@ -41,8 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-
-public class TextSink implements SinkModule {
+public class TextSink {
 
     private static final Logger LOG = LoggerFactory.getLogger(TextSink.class);
 
@@ -170,7 +168,6 @@ public class TextSink implements SinkModule {
 
     public String getName() { return "text"; }
 
-    @Override
     public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
         if(inputs == null || inputs.size() != 1) {
             throw new IllegalArgumentException("text sink module requires input parameter");
@@ -188,11 +185,14 @@ public class TextSink implements SinkModule {
         final TextWrite write = new TextWrite(collection, parameters, waits);
         final PCollection output = collection.getCollection().apply(config.getName(), write);
         final FCollection<?> fcollection = FCollection.update(collection, output);
+        /*
         try {
             config.outputAvroSchema(collection.getAvroSchema());
         } catch (Exception e) {
             LOG.error("Failed to output avro schema for " + config.getName() + " to path: " + config.getOutputAvroSchema(), e);
         }
+
+         */
         return fcollection;
     }
 
@@ -245,7 +245,7 @@ public class TextSink implements SinkModule {
 
             switch (collection.getDataType()) {
                 case AVRO -> {
-                    final RecordFormatter<GenericRecord> formatter = RecordToMapConverter::convert;
+                    final RecordFormatter<GenericRecord> formatter = AvroToMapConverter::convert;
                     return input
                             .apply("WriteText", ParDo.of(new TemplateDoFn<>(
                                     parameters.getOutput(), template,

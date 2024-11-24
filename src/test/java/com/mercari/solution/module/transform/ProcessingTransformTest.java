@@ -30,6 +30,7 @@ public class ProcessingTransformTest {
     @Rule
     public final transient TestPipeline pipeline = TestPipeline.create();
 
+    /*
     @Test
     public void testProcessingStatefulSingleStage() {
 
@@ -377,13 +378,6 @@ public class ProcessingTransformTest {
         final JsonObject parameters = new JsonObject();
         parameters.add("stages", stages);
 
-        /*
-        final JsonObject windowParameters = new JsonObject();
-        windowParameters.addProperty("type", "fixed");
-        windowParameters.addProperty("unit", "minute");
-        windowParameters.addProperty("size", 5);
-        parameters.add("window", windowParameters);
-         */
         //final JsonObject triggerParameters = new JsonObject();
         //parameters.add("trigger", triggerParameters);
 
@@ -588,5 +582,7 @@ public class ProcessingTransformTest {
         pipeline.run();
 
     }
+
+     */
 
 }

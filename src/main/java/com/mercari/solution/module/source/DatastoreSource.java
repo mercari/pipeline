@@ -1,33 +1,29 @@
 package com.mercari.solution.module.source;
 
 import com.google.datastore.v1.Entity;
-import com.google.gson.Gson;
-import com.mercari.solution.config.SourceConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SourceModule;
-import com.mercari.solution.util.converter.DataTypeTransform;
-import com.mercari.solution.util.converter.EntityToRowConverter;
-import com.mercari.solution.util.gcp.DatastoreUtil;
-import com.mercari.solution.util.schema.RowSchemaUtil;
-import org.apache.beam.sdk.extensions.gcp.options.GcpOptions;
+import com.mercari.solution.module.*;
+import com.mercari.solution.util.pipeline.OptionUtil;
+import com.mercari.solution.util.schema.converter.EntityToElementConverter;
 import org.apache.beam.sdk.io.gcp.datastore.DatastoreIO;
 import org.apache.beam.sdk.io.gcp.datastore.DatastoreV1;
-import org.apache.beam.sdk.schemas.Schema;
-import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
+import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.Serializable;
 import java.util.*;
 
 
-public class DatastoreSource implements SourceModule {
+@Source.Module(name="datastore")
+public class DatastoreSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(DatastoreSource.class);
 
-    private static class DatastoreSourceParameters {
+    private static class DatastoreSourceParameters implements Serializable {
 
         private String projectId;
         private String gql;
@@ -37,45 +33,16 @@ public class DatastoreSource implements SourceModule {
         private Boolean withKey;
         private Boolean emulator;
 
-        public String getProjectId() {
-            return projectId;
-        }
-
-        public String getGql() {
-            return gql;
-        }
-
-        public String getKind() {
-            return kind;
-        }
-
-        public String getNamespace() {
-            return namespace;
-        }
-
-        public Integer getNumQuerySplits() {
-            return numQuerySplits;
-        }
-
-        public Boolean getWithKey() {
-            return withKey;
-        }
-
-        public Boolean getEmulator() {
-            return emulator;
-        }
-
-
         private void validate() {
 
             // check required parameters filled
             final List<String> errorMessages = new ArrayList<>();
             if(gql == null) {
-                errorMessages.add("Parameter must contain gql");
+                errorMessages.add("parameters.gql must not be null");
             }
 
-            if(errorMessages.size() > 0) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+            if(!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
@@ -86,92 +53,59 @@ public class DatastoreSource implements SourceModule {
         }
     }
 
-    public String getName() { return "datastore"; }
-
-    public Map<String, FCollection<?>> expand(PBegin begin, SourceConfig config, PCollection<Long> beats, List<FCollection<?>> waits) {
-        if (config.getMicrobatch() != null && config.getMicrobatch()) {
-            return Collections.emptyMap();
-        } else {
-            return Collections.singletonMap(config.getName(), DatastoreSource.batch(begin, config));
-        }
-    }
-
-    public static FCollection<Entity> batch(final PBegin begin, final SourceConfig config) {
-
-        final DatastoreSourceParameters parameters = new Gson().fromJson(config.getParameters(), DatastoreSourceParameters.class);
-        if(parameters == null) {
-            throw new IllegalArgumentException("datastore source module parameters must not empty!");
-        }
+    @Override
+    public MCollectionTuple expand(PBegin begin) {
+        final DatastoreSourceParameters parameters = getParameters(DatastoreSourceParameters.class);
         parameters.validate();
         parameters.setDefaults();
 
-        final DatastoreBatchSource source = new DatastoreBatchSource(config, parameters);
-        final PCollection<Entity> output = begin.apply(config.getName(), source);
-        final Schema schema;
-        if(config.getSchema() != null) {
-            final Schema configSchema = SourceConfig.convertSchema(config.getSchema());
-            if(parameters.getWithKey()) {
-                schema = EntityToRowConverter.addKeyToSchema(configSchema);
-            } else {
-                schema = configSchema;
-            }
-        } else {
-            if(parameters.getKind() == null) {
-                throw new IllegalArgumentException("Datastore auto schema detection requires kind parameter!");
-            }
-            final Schema kindSchema = DatastoreUtil.getSchema(
-                    begin.getPipeline().getOptions(),
-                    parameters.getProjectId(),
-                    parameters.getKind());
-            if (parameters.getWithKey()) {
-                schema = kindSchema;
-            } else {
-                if(kindSchema.getField("__key__") != null) {
-                    schema = RowSchemaUtil.removeFields(kindSchema, Arrays.asList("__key__"));
-                } else {
-                    schema = kindSchema;
-                }
-            }
+        DatastoreV1.Read read = DatastoreIO.v1().read()
+                .withProjectId(Optional
+                        .ofNullable(parameters.projectId)
+                        .orElseGet(OptionUtil::getDefaultProject))
+                .withLiteralGqlQuery(parameters.gql);
+
+        if(parameters.namespace != null) {
+            read = read.withNamespace(parameters.namespace);
         }
-        return FCollection.of(config.getName(), output, DataType.ENTITY, schema);
+
+        if(parameters.numQuerySplits != null) {
+            read = read.withNumQuerySplits(parameters.numQuerySplits);
+        }
+
+        final Schema entitySchema = parameters.withKey ? EntityToElementConverter.addKeyToSchema(getSchema()) : getSchema();
+
+        final PCollection<MElement> entities = begin
+                .apply("ReadDatastore", read)
+                .apply("Format", ParDo.of(new FormatDoFn(entitySchema, getTimestampAttribute())));
+
+        return MCollectionTuple
+                .of(entities, entitySchema.withType(DataType.ENTITY));
     }
 
-    public static class DatastoreBatchSource extends PTransform<PBegin, PCollection<Entity>> {
+    private static class FormatDoFn extends DoFn<Entity, MElement> {
 
-        private final DatastoreSourceParameters parameters;
+        private final Schema schema;
         private final String timestampAttribute;
-        private final String timestampDefault;
 
-        private DatastoreBatchSource(final SourceConfig config, final DatastoreSourceParameters parameters) {
-            this.timestampAttribute = config.getTimestampAttribute();
-            this.timestampDefault = config.getTimestampDefault();
-            this.parameters = parameters;
+        FormatDoFn(Schema schema, String timestampAttribute) {
+            this.schema = schema;
+            this.timestampAttribute = timestampAttribute;
         }
 
-        @Override
-        public PCollection<Entity> expand(final PBegin begin) {
+        @Setup
+        public void setup() {
+            this.schema.setup();
+        }
 
-            final String execEnvProject = begin.getPipeline().getOptions().as(GcpOptions.class).getProject();
-
-            DatastoreV1.Read read = DatastoreIO.v1().read()
-                    .withProjectId(parameters.getProjectId() == null ? execEnvProject : parameters.getProjectId())
-                    .withLiteralGqlQuery(parameters.getGql());
-
-            if(parameters.getNamespace() != null) {
-                read = read.withNamespace(parameters.getNamespace());
-            }
-
-            if(parameters.getNumQuerySplits() != null) {
-                read = read.withNumQuerySplits(parameters.getNumQuerySplits());
-            }
-
-            final PCollection<Entity> entities = begin.apply("QueryToDatastore", read);
-
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final MElement element = MElement.of(c.element(), c.timestamp());
             if(timestampAttribute == null) {
-                return entities;
+                c.output(element);
             } else {
-                return entities.apply("WithTimestamp", DataTypeTransform
-                        .withTimestamp(DataType.ENTITY, timestampAttribute, timestampDefault));
+                final Instant timestamp = element.getAsJodaInstant(timestampAttribute);
+                c.outputWithTimestamp(element, timestamp);
             }
         }
 

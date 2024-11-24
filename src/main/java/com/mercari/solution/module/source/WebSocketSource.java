@@ -5,13 +5,11 @@ import com.google.gson.JsonElement;
 import com.mercari.solution.config.SourceConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SourceModule;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.JsonUtil;
-import com.mercari.solution.util.OptionUtil;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.converter.JsonToRecordConverter;
-import com.mercari.solution.util.converter.JsonToRowConverter;
+import com.mercari.solution.util.schema.converter.JsonToAvroConverter;
+import com.mercari.solution.util.schema.converter.JsonToRowConverter;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.RowSchemaUtil;
 import com.mercari.solution.util.schema.SchemaUtil;
@@ -20,7 +18,6 @@ import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.*;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
 import org.apache.beam.sdk.io.GenerateSequence;
-import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.state.StateSpec;
 import org.apache.beam.sdk.state.StateSpecs;
 import org.apache.beam.sdk.state.ValueState;
@@ -46,7 +43,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
 
-public class WebSocketSource implements SourceModule {
+public class WebSocketSource {
 
     private static final Logger LOG = LoggerFactory.getLogger(WebSocketSource.class);
 
@@ -221,8 +218,6 @@ public class WebSocketSource implements SourceModule {
         parameters.validate(begin);
         parameters.setDefaults();
 
-        final List<SourceConfig.AdditionalOutput> additions = Optional
-                .ofNullable(config.getAdditionalOutputs()).orElse(new ArrayList<>());
         final TupleTag<KV<Instant, String>> failuresTag = new TupleTag<>() {};
 
         switch (parameters.getFormat()) {
@@ -231,7 +226,7 @@ public class WebSocketSource implements SourceModule {
                     case avro -> {
                         final TupleTag<GenericRecord> outputTag = new TupleTag<>() {
                         };
-                        org.apache.avro.Schema outputSchema = SourceConfig.convertAvroSchema(config.getSchema());
+                        org.apache.avro.Schema outputSchema = config.getSchema().getAvroSchema();
                         if (parameters.getReceivedTimestampField() != null || parameters.getEventtimeField() != null) {
                             SchemaBuilder.FieldAssembler<org.apache.avro.Schema> builder = AvroSchemaUtil
                                     .toBuilder(outputSchema, outputSchema.getNamespace(), null);
@@ -250,121 +245,49 @@ public class WebSocketSource implements SourceModule {
                             outputSchema = builder.endRecord();
                         }
 
-                        final List<KV<TupleTag<GenericRecord>, SourceConfig.Output>> additionalOutputs = additions
-                                .stream()
-                                .map(a -> KV.of(new TupleTag<GenericRecord>(), a.toOutput()))
-                                .collect(Collectors.toList());
-                        final Map<String, String> additionalOutputSchemas = additions
-                                .stream()
-                                .collect(Collectors.toMap(
-                                        SourceConfig.AdditionalOutput::getName,
-                                        o -> {
-                                            final org.apache.avro.Schema s = SourceConfig.convertAvroSchema(o.getSchema());
-                                            if (parameters.getReceivedTimestampField() == null && parameters.getEventtimeField() == null) {
-                                                return s.toString();
-                                            }
-                                            SchemaBuilder.FieldAssembler<org.apache.avro.Schema> builder = AvroSchemaUtil
-                                                    .toBuilder(s, s.getNamespace(), null);
-                                            if (parameters.getReceivedTimestampField() != null) {
-                                                builder = builder
-                                                        .name(parameters.getReceivedTimestampField())
-                                                        .type(AvroSchemaUtil.NULLABLE_LOGICAL_TIMESTAMP_MICRO_TYPE)
-                                                        .noDefault();
-                                            }
-                                            if (parameters.getEventtimeField() != null) {
-                                                builder = builder
-                                                        .name(parameters.getEventtimeField())
-                                                        .type(AvroSchemaUtil.NULLABLE_LOGICAL_TIMESTAMP_MICRO_TYPE)
-                                                        .noDefault();
-                                            }
-                                            return builder.endRecord().toString();
-                                        }));
-
                         final WebSocketStream<String, org.apache.avro.Schema, GenericRecord> stream = new WebSocketStream<>(
                                 config.getName(), parameters,
                                 outputTag, failuresTag,
-                                outputSchema.toString(), additionalOutputSchemas,
-                                AvroSchemaUtil::convertSchema, JsonToRecordConverter::convert,
-                                AvroSchemaUtil::merge, (Instant timestamp) -> timestamp.getMillis() * 1000L,
-                                additionalOutputs);
+                                outputSchema.toString(),
+                                AvroSchemaUtil::convertSchema, JsonToAvroConverter::convert,
+                                AvroSchemaUtil::merge, (Instant timestamp) -> timestamp.getMillis() * 1000L);
                         final PCollectionTuple outputs = begin.apply(config.getName(), stream);
 
                         final Map<String, FCollection<?>> collections = new HashMap<>();
                         final Coder<GenericRecord> outputCoder = AvroCoder.of(outputSchema);
                         collections.put(config.getName(), FCollection.of(config.getName(), outputs.get(outputTag).setCoder(outputCoder), DataType.AVRO, outputSchema));
-                        for (final KV<TupleTag<GenericRecord>, SourceConfig.Output> kv : additionalOutputs) {
-                            final String name = config.getName() + "." + kv.getValue().getName();
-                            final org.apache.avro.Schema additionalOutputSchema = AvroSchemaUtil
-                                    .convertSchema(additionalOutputSchemas.get(kv.getValue().getName()));
-                            final Coder<GenericRecord> additionalOutputCoder = AvroCoder.of(additionalOutputSchema);
-                            collections.put(name, FCollection.of(name, outputs.get(kv.getKey()).setCoder(additionalOutputCoder), DataType.AVRO, additionalOutputSchema));
-                        }
                         return collections;
                     }
                     case row -> {
                         final TupleTag<Row> outputTag = new TupleTag<>() {
                         };
-                        Schema outputSchema = SourceConfig.convertSchema(config.getSchema());
+                        org.apache.beam.sdk.schemas.Schema outputSchema = config.getSchema().getRowSchema();
                         if (parameters.getReceivedTimestampField() != null || parameters.getEventtimeField() != null) {
-                            Schema.Builder builder = RowSchemaUtil.toBuilder(outputSchema);
+                            org.apache.beam.sdk.schemas.Schema.Builder builder = RowSchemaUtil.toBuilder(outputSchema);
                             if (parameters.getReceivedTimestampField() != null) {
                                 builder = builder.addField(
                                         parameters.getReceivedTimestampField(),
-                                        Schema.FieldType.DATETIME.withNullable(true));
+                                        org.apache.beam.sdk.schemas.Schema.FieldType.DATETIME.withNullable(true));
                             }
                             if (parameters.getEventtimeField() != null) {
                                 builder = builder.addField(
                                         parameters.getEventtimeField(),
-                                        Schema.FieldType.DATETIME.withNullable(true));
+                                        org.apache.beam.sdk.schemas.Schema.FieldType.DATETIME.withNullable(true));
                             }
                             outputSchema = builder.build();
                         }
 
-                        final List<KV<TupleTag<Row>, SourceConfig.Output>> additionalOutputs = additions
-                                .stream()
-                                .map(a -> KV.of(new TupleTag<Row>(), a.toOutput()))
-                                .collect(Collectors.toList());
-                        final Map<String, Schema> additionalOutputSchemas = additions
-                                .stream()
-                                .collect(Collectors.toMap(
-                                        SourceConfig.AdditionalOutput::getName,
-                                        o -> {
-                                            final Schema s = SourceConfig.convertSchema(o.getSchema());
-                                            if (parameters.getReceivedTimestampField() == null && parameters.getEventtimeField() == null) {
-                                                return s;
-                                            }
-                                            Schema.Builder builder = RowSchemaUtil.toBuilder(s);
-                                            if (parameters.getReceivedTimestampField() != null) {
-                                                builder = builder.addField(
-                                                        parameters.getReceivedTimestampField(),
-                                                        Schema.FieldType.DATETIME.withNullable(true));
-                                            }
-                                            if (parameters.getEventtimeField() != null) {
-                                                builder = builder.addField(
-                                                        parameters.getEventtimeField(),
-                                                        Schema.FieldType.DATETIME.withNullable(true));
-                                            }
-                                            return builder.build();
-                                        }));
-
-                        final WebSocketStream<Schema, Schema, Row> stream = new WebSocketStream<>(
+                        final WebSocketStream<org.apache.beam.sdk.schemas.Schema, org.apache.beam.sdk.schemas.Schema, Row> stream = new WebSocketStream<>(
                                 config.getName(), parameters,
                                 outputTag, failuresTag,
-                                outputSchema, additionalOutputSchemas,
+                                outputSchema,
                                 s -> s, JsonToRowConverter::convert,
-                                RowSchemaUtil::merge, (Instant timestamp) -> timestamp,
-                                additionalOutputs);
+                                RowSchemaUtil::merge, (Instant timestamp) -> timestamp);
                         final PCollectionTuple outputs = begin.apply(config.getName(), stream);
 
                         final Map<String, FCollection<?>> collections = new HashMap<>();
                         final Coder<Row> outputCoder = RowCoder.of(outputSchema);
                         collections.put(config.getName(), FCollection.of(config.getName(), outputs.get(outputTag).setCoder(outputCoder), DataType.ROW, outputSchema));
-                        for (final KV<TupleTag<Row>, SourceConfig.Output> kv : additionalOutputs) {
-                            final String name = config.getName() + "." + kv.getValue().getName();
-                            final Schema additionalOutputSchema = additionalOutputSchemas.get(kv.getValue().getName());
-                            final Coder<Row> additionalOutputCoder = RowCoder.of(additionalOutputSchema);
-                            collections.put(name, FCollection.of(name, outputs.get(kv.getKey()).setCoder(additionalOutputCoder), DataType.ROW, additionalOutputSchema));
-                        }
                         return collections;
                     }
                     default ->
@@ -393,12 +316,10 @@ public class WebSocketSource implements SourceModule {
         private final Boolean isArrayContent;
         private final Long requestIntervalMillis;
         private final Boolean pruning;
-        private final List<KV<TupleTag<T>, SourceConfig.Output>> additionalOutputs;
 
         private final TupleTag<T> outputTag;
         private final TupleTag<KV<Instant, String>> failuresTag;
         private final InputSchemaT inputSchema;
-        private final Map<String, InputSchemaT> additionalOutputInputSchemas;
         private final SchemaUtil.SchemaConverter<InputSchemaT, RuntimeSchemaT> schemaConverter;
         private final SchemaUtil.JsonElementConverter<RuntimeSchemaT, T> jsonConverter;
         private final SchemaUtil.ValuesSetter<RuntimeSchemaT, T> valuesSetter;
@@ -406,13 +327,13 @@ public class WebSocketSource implements SourceModule {
 
         private WebSocketStream(final String name,
                                 final WebSocketSourceParameters parameters,
-                                final TupleTag<T> outputTag, final TupleTag<KV<Instant, String>> failuresTag,
-                                final InputSchemaT inputSchema, Map<String, InputSchemaT> additionalOutputInputSchemas,
+                                final TupleTag<T> outputTag,
+                                final TupleTag<KV<Instant, String>> failuresTag,
+                                final InputSchemaT inputSchema,
                                 final SchemaUtil.SchemaConverter<InputSchemaT, RuntimeSchemaT> schemaConverter,
                                 final SchemaUtil.JsonElementConverter<RuntimeSchemaT, T> jsonConverter,
                                 final SchemaUtil.ValuesSetter<RuntimeSchemaT, T> valuesSetter,
-                                final TimestampConverter timestampConverter,
-                                final List<KV<TupleTag<T>, SourceConfig.Output>> additionalOutputs) {
+                                final TimestampConverter timestampConverter) {
 
             this.name = name;
             this.endpoint = parameters.getEndpoint();
@@ -430,12 +351,10 @@ public class WebSocketSource implements SourceModule {
             this.outputTag = outputTag;
             this.failuresTag = failuresTag;
             this.inputSchema = inputSchema;
-            this.additionalOutputInputSchemas = additionalOutputInputSchemas;
             this.schemaConverter = schemaConverter;
             this.jsonConverter = jsonConverter;
             this.valuesSetter = valuesSetter;
             this.timestampConverter = timestampConverter;
-            this.additionalOutputs = additionalOutputs;
 
             if(parameters.getRequests() != null && !parameters.getRequests().isJsonNull()) {
                 final List<String> rs = new ArrayList<>();
@@ -490,9 +409,6 @@ public class WebSocketSource implements SourceModule {
 
             if (Objects.requireNonNull(format) == Format.json) {
                 TupleTagList tagList = TupleTagList.of(failuresTag);
-                for (final KV<TupleTag<T>, SourceConfig.Output> kv : additionalOutputs) {
-                    tagList = tagList.and(kv.getKey());
-                }
                 return beats
                         .apply("ReceiveMessage", ParDo.of(new WebSocketDoFn(
                                 name, endpoint, requests,
@@ -502,10 +418,10 @@ public class WebSocketSource implements SourceModule {
                                 .of(new JsonConvertDoFn<>(
                                         name,
                                         failuresTag,
-                                        inputSchema, additionalOutputInputSchemas,
+                                        inputSchema,
                                         schemaConverter, jsonConverter,
                                         valuesSetter, timestampConverter,
-                                        receivedTimestampField, eventtimeField, ignoreError, isArrayContent, additionalOutputs))
+                                        receivedTimestampField, eventtimeField, ignoreError, isArrayContent))
                                 .withOutputTags(outputTag, tagList));
             }
             throw new IllegalArgumentException();
@@ -765,11 +681,9 @@ public class WebSocketSource implements SourceModule {
             private final String name;
             private final TupleTag<KV<Instant, String>> failuresTag;
             private final InputSchemaT inputSchema;
-            private final Map<String, InputSchemaT> additionalOutputInputSchemas;
             private final String receivedTimestampField;
             private final String eventtimeField;
             private final Boolean ignoreError;
-            private final List<KV<TupleTag<T>, SourceConfig.Output>> additionalOutputs;
             private final SchemaUtil.SchemaConverter<InputSchemaT, RuntimeSchemaT> schemaConverter;
             private final SchemaUtil.JsonElementConverter<RuntimeSchemaT, T> jsonConverter;
             private final SchemaUtil.ValuesSetter<RuntimeSchemaT, T> valuesSetter;
@@ -785,7 +699,6 @@ public class WebSocketSource implements SourceModule {
             JsonConvertDoFn(final String name,
                             final TupleTag<KV<Instant, String>> failuresTag,
                             final InputSchemaT inputSchema,
-                            final Map<String, InputSchemaT> additionalOutputInputSchemas,
                             final SchemaUtil.SchemaConverter<InputSchemaT, RuntimeSchemaT> schemaConverter,
                             final SchemaUtil.JsonElementConverter<RuntimeSchemaT, T> jsonConverter,
                             final SchemaUtil.ValuesSetter<RuntimeSchemaT, T> valuesSetter,
@@ -793,13 +706,11 @@ public class WebSocketSource implements SourceModule {
                             final String receivedTimestampField,
                             final String eventtimeField,
                             final Boolean ignoreError,
-                            final Boolean isArrayContent,
-                            final List<KV<TupleTag<T>, SourceConfig.Output>> additionalOutputs) {
+                            final Boolean isArrayContent) {
 
                 this.name = name;
                 this.failuresTag = failuresTag;
                 this.inputSchema = inputSchema;
-                this.additionalOutputInputSchemas = additionalOutputInputSchemas;
                 this.schemaConverter = schemaConverter;
                 this.jsonConverter = jsonConverter;
                 this.valuesSetter = valuesSetter;
@@ -808,24 +719,12 @@ public class WebSocketSource implements SourceModule {
                 this.eventtimeField = eventtimeField;
                 this.ignoreError = ignoreError;
                 this.isArrayContent = isArrayContent;
-                this.additionalOutputs = additionalOutputs;
             }
 
             @Setup
             public void setup() {
                 this.gson = new Gson();
                 this.runtimeSchema = schemaConverter.convert(inputSchema);
-                this.additionalOutputSchemas = this.additionalOutputInputSchemas
-                        .entrySet()
-                        .stream()
-                        .collect(Collectors.toMap(
-                                Map.Entry::getKey,
-                                e -> schemaConverter.convert(e.getValue())));
-                this.additionalOutputConditions = this.additionalOutputs
-                        .stream()
-                        .collect(Collectors.toMap(
-                                o -> o.getValue().getName(),
-                                o -> Filter.parse(this.gson.fromJson(o.getValue().getConditions(), JsonElement.class))));
             }
 
             @ProcessElement
@@ -841,27 +740,6 @@ public class WebSocketSource implements SourceModule {
                         c.output(record);
                     }
                 } catch (final Exception e) {
-                    for(final KV<TupleTag<T>, SourceConfig.Output> kv : additionalOutputs) {
-                        final Filter.ConditionNode condition = additionalOutputConditions.get(kv.getValue().getName());
-                        if(!Filter.filter(json, JsonUtil::getJsonPathValue, condition)) {
-                            LOG.debug("Websocket input: " + name + " not matched condition: " + condition);
-                            continue;
-                        }
-                        final RuntimeSchemaT additionalOutputSchema = this.additionalOutputSchemas.get(kv.getValue().getName());
-                        if(additionalOutputSchema == null) {
-                            throw new IllegalStateException("Websocket input: " + name + " not found additionalOutputSchema for: " + kv.getValue().getName() + " in: " + this.additionalOutputSchemas);
-                        }
-                        try {
-                            final List<T> results = convert(additionalOutputSchema, json, receivedAt, c.timestamp());
-                            for(final T record : results) {
-                                c.output(kv.getKey(), record);
-                            }
-                            return;
-                        } catch (final RuntimeException ee) {
-                            LOG.error("Websocket input: " + name + " not match condition: " + kv.getValue().toString() + " with json: " + json + ", cause: " + ee.getMessage());
-                        }
-                    }
-
                     c.output(failuresTag, c.element());
                     final String message = "Websocket input: " + name + " failed to parse json: " + json + " cause: " + e.getMessage() + ", with schema: " + runtimeSchema;
                     LOG.error(message);

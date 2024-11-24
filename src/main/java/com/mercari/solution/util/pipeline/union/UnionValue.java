@@ -8,9 +8,9 @@ import com.google.firestore.v1.Document;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.DynamicMessage;
 import com.mercari.solution.module.DataType;
-import com.mercari.solution.util.converter.*;
 import com.mercari.solution.util.pipeline.mutation.UnifiedMutation;
 import com.mercari.solution.util.schema.*;
+import com.mercari.solution.util.schema.converter.*;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.RowCoder;
@@ -196,7 +196,7 @@ public class UnionValue {
             }
             case AVRO -> {
                 final GenericRecord record = (GenericRecord) unionValue.value;
-                return RecordToMapConverter.convertWithFields(record, fields);
+                return AvroToMapConverter.convertWithFields(record, fields);
             }
             case STRUCT -> {
                 final Struct struct = (Struct) unionValue.value;
@@ -291,7 +291,7 @@ public class UnionValue {
         }
         return switch (unionValue.getType()) {
             case ROW -> RowToCsvConverter.convert((Row) unionValue.getValue(), fields);
-            case AVRO -> RecordToCsvConverter.convert((GenericRecord) unionValue.getValue(), fields);
+            case AVRO -> AvroToCsvConverter.convert((GenericRecord) unionValue.getValue(), fields);
             case STRUCT -> StructToCsvConverter.convert((Struct) unionValue.getValue(), fields);
             case DOCUMENT -> DocumentToCsvConverter.convert((Document) unionValue.getValue(), fields);
             case ENTITY -> EntityToCsvConverter.convert((Entity) unionValue.getValue(), fields);
@@ -305,7 +305,7 @@ public class UnionValue {
         }
         return switch (unionValue.getType()) {
             case ROW -> RowToJsonConverter.convert((Row) unionValue.getValue());
-            case AVRO -> RecordToJsonConverter.convert((GenericRecord) unionValue.getValue());
+            case AVRO -> AvroToJsonConverter.convert((GenericRecord) unionValue.getValue());
             case STRUCT -> StructToJsonConverter.convert((Struct) unionValue.getValue());
             case DOCUMENT -> DocumentToJsonConverter.convert((Document) unionValue.getValue());
             case ENTITY -> EntityToJsonConverter.convert((Entity) unionValue.getValue());
@@ -322,7 +322,7 @@ public class UnionValue {
         }
         return switch (unionValue.getType()) {
             case ROW -> (Row) unionValue.getValue();
-            case AVRO -> RecordToRowConverter.convert(schema, (GenericRecord) unionValue.getValue());
+            case AVRO -> AvroToRowConverter.convert(schema, (GenericRecord) unionValue.getValue());
             case STRUCT -> StructToRowConverter.convert(schema, (Struct) unionValue.getValue());
             case DOCUMENT -> DocumentToRowConverter.convert(schema, (Document) unionValue.getValue());
             case ENTITY -> EntityToRowConverter.convert(schema, (Entity) unionValue.getValue());
@@ -339,10 +339,10 @@ public class UnionValue {
         return switch (unionValue.getType()) {
             case ROW -> RowToRecordConverter.convert(schema, (Row) unionValue.getValue());
             case AVRO -> (GenericRecord) unionValue.getValue();
-            case STRUCT -> StructToRecordConverter.convert(schema, (Struct) unionValue.getValue());
-            case DOCUMENT -> DocumentToRecordConverter.convert(schema, (Document) unionValue.getValue());
-            case ENTITY -> EntityToRecordConverter.convert(schema, (Entity) unionValue.getValue());
-            case MUTATION -> MutationToRecordConverter.convert(schema, (Mutation) unionValue.getValue());
+            case STRUCT -> StructToAvroConverter.convert(schema, (Struct) unionValue.getValue());
+            case DOCUMENT -> DocumentToAvroConverter.convert(schema, (Document) unionValue.getValue());
+            case ENTITY -> EntityToAvroConverter.convert(schema, (Entity) unionValue.getValue());
+            case MUTATION -> MutationToAvroConverter.convert(schema, (Mutation) unionValue.getValue());
             case UNIFIEDMUTATION -> UnifiedMutation.toGenericRecord(schema, (UnifiedMutation) unionValue.getValue());
             default -> throw new IllegalArgumentException();
         };
@@ -354,7 +354,7 @@ public class UnionValue {
         }
         return switch (unionValue.getType()) {
             case ROW -> RowToProtoConverter.convert(messageDescriptor, (Row) unionValue.getValue());
-            case AVRO -> RecordToProtoConverter.convert(messageDescriptor, (GenericRecord) unionValue.getValue());
+            case AVRO -> AvroToProtoConverter.convert(messageDescriptor, (GenericRecord) unionValue.getValue());
             case STRUCT -> StructToProtoConverter.convert(messageDescriptor, (Struct) unionValue.getValue());
             case ENTITY -> EntityToProtoConverter.convert(messageDescriptor, (Entity) unionValue.getValue());
             default -> throw new IllegalArgumentException();
@@ -431,7 +431,7 @@ public class UnionValue {
                 switch (dataType) {
                     case ROW -> {
                         final Schema rowSchema = (Schema) schema;
-                        final Row row = RecordToRowConverter.convert(rowSchema, record);
+                        final Row row = AvroToRowConverter.convert(rowSchema, record);
                         return RowSchemaUtil.merge(rowSchema, row, updates);
                     }
                     case AVRO -> {
@@ -451,7 +451,7 @@ public class UnionValue {
                     }
                     case AVRO -> {
                         final org.apache.avro.Schema avroSchema = (org.apache.avro.Schema) schema;
-                        final GenericRecord record = StructToRecordConverter.convert(avroSchema, struct);
+                        final GenericRecord record = StructToAvroConverter.convert(avroSchema, struct);
                         return AvroSchemaUtil.merge(avroSchema, record, updates);
                     }
                     default ->
@@ -468,7 +468,7 @@ public class UnionValue {
                     }
                     case AVRO -> {
                         final org.apache.avro.Schema avroSchema = (org.apache.avro.Schema) schema;
-                        final GenericRecord record = DocumentToRecordConverter.convert(avroSchema, document);
+                        final GenericRecord record = DocumentToAvroConverter.convert(avroSchema, document);
                         return AvroSchemaUtil.merge(avroSchema, record, updates);
                     }
                     default ->
@@ -485,7 +485,7 @@ public class UnionValue {
                     }
                     case AVRO -> {
                         final org.apache.avro.Schema avroSchema = (org.apache.avro.Schema) schema;
-                        final GenericRecord record = EntityToRecordConverter.convert(avroSchema, entity);
+                        final GenericRecord record = EntityToAvroConverter.convert(avroSchema, entity);
                         return AvroSchemaUtil.merge(avroSchema, record, updates);
                     }
                     default ->

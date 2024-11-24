@@ -1,22 +1,25 @@
 steps:
-  - name: maven:3-openjdk-17
+  - name: maven:3-openjdk-21
     entrypoint: mvn
-    args: ["clean", "package", "-Dimage=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_ARTIFACT_CLOUD}:${_VERSION}"]
+    args: ["clean", "package", "-Dimage=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/dataflow:${_VERSION}"]
   - name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli:slim'
     args: ["gcloud", "dataflow", "flex-template", "build",
            "gs://${_BUCKET}/${_VERSION}",
-           "--image", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_ARTIFACT_CLOUD}:${_VERSION}",
+           "--image", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/dataflow:${_VERSION}",
            "--sdk-language", "JAVA"]
-  - name: docker
-    args: ["build", "-t", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_ARTIFACT_LOCAL}:${_VERSION}", "."]
-  - name: docker
-    args: ["push", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_ARTIFACT_LOCAL}:${_VERSION}"]
+  - name: maven:3-openjdk-21
+    entrypoint: mvn
+    args: ["clean", "package", "-DskipTests", "-Pdirect", "-Dimage=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/direct:${_VERSION}"]
+  - name: maven:3-openjdk-21
+    entrypoint: mvn
+    args: ["clean", "package", "-DskipTests", "-Pserver", "-Dimage=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/server:${_VERSION}"]
+  - name: maven:3-openjdk-21
+    entrypoint: mvn
+    args: ["clean", "package", "-DskipTests", "-Pportable", "-Dimage=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/portable:${_VERSION}"]
 substitutions:
   _BUCKET: "{SET YOUR BUCKET}"
   _REGION: "{SET YOUR GAR REPOSITORY REGION}"
   _REPOSITORY: "{SET YOUR GAR REPOSITORY NAME}"
-  _ARTIFACT_CLOUD: "{SET YOUR GAR REPOSITORY ARTIFACT NAME}"
-  _ARTIFACT_LOCAL: "{SET YOUR GAR REPOSITORY ARTIFACT NAME FOR LOCAL TYPE}"
   _VERSION: ${BRANCH_NAME}
 options:
   dynamic_substitutions: true

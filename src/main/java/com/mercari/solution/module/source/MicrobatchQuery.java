@@ -10,7 +10,6 @@ import org.apache.beam.sdk.state.*;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.transforms.windowing.*;
 import org.apache.beam.sdk.values.*;
-import org.apache.commons.collections.ListUtils;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.joda.time.format.ISODateTimeFormat;
@@ -427,7 +426,12 @@ public class MicrobatchQuery {
                 if(!isHead(head, input.getKey()) && INITIAL_COUNT == input.getValue().getKey()) {
                     head.put(input.getKey(), input.getValue());
                 }
-                values.merge(input.getKey(), Arrays.asList(input.getValue()), ListUtils::union);
+                values.merge(input.getKey(), Arrays.asList(input.getValue()), (list1, list2) -> {
+                    List<KV<Long,Instant>> list = new ArrayList<>();
+                    list.addAll(list1);
+                    list.addAll(list2);
+                    return list;
+                });
                 updateHead(input.getKey(), head, values);
             }
 

@@ -2,7 +2,8 @@ package com.mercari.solution.util.pipeline.select;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import org.joda.time.Instant;
 
 import java.util.ArrayList;
@@ -25,7 +26,7 @@ public class Concat implements SelectFunction {
         this.ignore = ignore;
     }
 
-    public static Concat of(String name, List<Schema.Field> inputFields, JsonObject jsonObject, boolean ignore) {
+    public static Concat of(String name, JsonObject jsonObject, List<Schema.Field> inputFields, boolean ignore) {
 
         if(!jsonObject.has("fields")) {
             throw new IllegalArgumentException();
@@ -38,7 +39,7 @@ public class Concat implements SelectFunction {
         for(JsonElement element : fieldsElement.getAsJsonArray()) {
             if(element.isJsonPrimitive()) {
                 final String inputFieldName = element.getAsString();
-                final Schema.FieldType inputFieldType = SelectFunction.getInputFieldType(inputFieldName, inputFields);
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(inputFieldName, inputFields);
                 if(inputFieldType == null) {
                     throw new IllegalArgumentException("SelectField concat: " + name + " missing inputField: " + inputFieldName);
                 }

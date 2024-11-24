@@ -6,22 +6,36 @@
       "parameters": {
         "table": "myproject.mydataset.activities",
         "fields": ["userId", "createdAt", "event", "description"]
-      }
+      },
+      "timestampAttribute": "createdAt"
     }
   ],
   "sinks": [
     {
       "name": "bigtableOutput",
       "module": "bigtable",
-      "input": "bigqueryInput",
-      "outputAvroSchema": "gs://example-bucket/schema/activity.json",
+      "inputs": ["bigqueryInput"],
       "parameters": {
         "projectId": "myproject",
         "instanceId": "myinstance",
         "tableId": "mytable",
-        "format": "avro",
-        "columnFamily": "a",
-        "rowKeyTemplate": "${userId}#${_DateTimeUtil.formatTimestamp(createdAt, 'yyyyMMddHHmmSS', 'Asia/Tokyo')}"
+        "rowKey": "${userId}#${_DateTimeUtil.formatTimestamp(createdAt, 'yyyyMMddHHmmSS', 'Asia/Tokyo')}",
+        "columns": [
+          {
+            "family": "u",
+            "qualifiers": [
+              { "name": "id", "field": "userId" },
+              { "name": "e", "field": "event" }
+            ]
+          },
+          {
+            "family": "e",
+            "qualifiers": [
+              { "name": "d", "field": "description" }
+            ]
+          }
+        ],
+        "timestampType": "event_timestamp"
       }
     }
   ]

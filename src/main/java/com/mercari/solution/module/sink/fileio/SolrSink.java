@@ -1,12 +1,20 @@
 package com.mercari.solution.module.sink.fileio;
 
 import com.google.api.services.storage.Storage;
+import com.google.cloud.spanner.Struct;
+import com.google.datastore.v1.Entity;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.module.sink.LocalSolrSink;
 import com.mercari.solution.util.domain.search.SolrUtil;
 import com.mercari.solution.util.domain.search.ZipFileUtil;
-import com.mercari.solution.util.schema.SolrSchemaUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
+import com.mercari.solution.util.schema.SolrSchemaUtil;
+import com.mercari.solution.util.schema.converter.*;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.Row;
 import org.apache.lucene.document.Document;
 import org.apache.solr.common.SolrInputDocument;
 import org.apache.solr.core.CoreContainer;
@@ -16,7 +24,9 @@ import org.apache.solr.update.SolrIndexWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
@@ -24,49 +34,41 @@ import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
-public class SolrSink<ElementT> implements FileIO.Sink<ElementT> {
+public class SolrSink implements FileIO.Sink<MElement> {
 
     private static final String SOLR_HOME = "/solr/";
     private static final String SOLR_XML_DEFAULT = "<solr></solr>";
 
     private static final Logger LOG = LoggerFactory.getLogger(SolrSink.class);
 
-    private final String coreName;
-    private final String solrSchema;
-    private final String solrConfigXml;
-    private final RecordFormatter<ElementT> formatter;
-    private final List<KV<String,String>> customConfFiles;
-
-    private transient List<String> fieldNames;
+    private final List<LocalSolrSink.Core> cores;
+    private final List<String> inputNames;
+    private final List<Schema> inputSchemas;
 
     private int count = 0;
-    private transient SolrIndexWriter writer;
+    private transient Map<String, SolrCore> solrCores;
+    private transient Map<String, SolrIndexWriter> writers;
+    private transient Map<String, List<String>> fields;
     private transient OutputStream outputStream;
-    private transient SolrCore core;
 
-    private SolrSink(final String coreName,
-                     final String solrSchema,
-                     final String solrConfigXml,
-                     final List<KV<String, String>> customConfFiles,
-                     final RecordFormatter<ElementT> formatter) {
+    private SolrSink(
+            final List<LocalSolrSink.Core> cores,
+            final List<String> inputNames,
+            final List<Schema> inputSchemas) {
 
-        this.coreName = coreName;
-        this.solrSchema = solrSchema;
-        this.solrConfigXml = solrConfigXml;
-        this.customConfFiles = customConfFiles;
-
-        this.formatter = formatter;
+        this.cores = cores;
+        this.inputNames = inputNames;
+        this.inputSchemas = inputSchemas;
     }
 
-    public static <ElementT> SolrSink<ElementT> of(
-            final String coreName,
-            final String solrSchema,
-            final String solrConfigXml,
-            final List<KV<String, String>> customConfFiles,
-            final RecordFormatter<ElementT> formatter) {
+    public static SolrSink of(
+            final List<LocalSolrSink.Core> cores,
+            final List<String> inputNames,
+            final List<Schema> inputSchemas) {
 
-        return new SolrSink<>(coreName, solrSchema, solrConfigXml, customConfFiles, formatter);
+        return new SolrSink(cores, inputNames, inputSchemas);
     }
 
     @Override
@@ -80,86 +82,110 @@ public class SolrSink<ElementT> implements FileIO.Sink<ElementT> {
             filewriter.write(SOLR_XML_DEFAULT);
         }
 
+        if(solrCores == null) {
+            solrCores = new HashMap<>();
+        }
+        if(writers == null) {
+            writers = new HashMap<>();
+        }
+        if(fields == null) {
+            fields = new HashMap<>();
+        }
+
         final CoreContainer container = CoreContainer.createAndLoad(solrPath);
-        final Path corePath = Paths.get(SOLR_HOME + coreName);
-        final Path confPath = Paths.get(SOLR_HOME + coreName + "/conf");
-        corePath.toFile().mkdir();
-        confPath.toFile().mkdir();
+        for(LocalSolrSink.Core core : cores) {
+            final Path corePath = Paths.get(SOLR_HOME + core.getName());
+            final Path confPath = Paths.get(SOLR_HOME + core.getName() + "/conf");
+            final Path langPath = Paths.get(SOLR_HOME + core.getName() + "/conf/lang");
+            corePath.toFile().mkdir();
+            confPath.toFile().mkdir();
+            langPath.toFile().mkdir();
 
-        // Write solrconfig.xml
-        try (final FileWriter filewriter = new FileWriter(SOLR_HOME + this.coreName + "/conf/solrconfig.xml")) {
-            filewriter.write(solrConfigXml);
-        }
+            // Write schema.xml
+            try (final FileWriter filewriter = new FileWriter(SOLR_HOME + core.getName() + "/conf/schema.xml")) {
+                LOG.info("core: {}, schema.xml: {}", core.getName(), core.getSchema());
+                filewriter.write(core.getSchema());
+            }
 
-        // Write schema.xml
-        final String schemaString;
-        if(this.solrSchema.startsWith("gs://")) {
-            schemaString = StorageUtil.readString(this.solrSchema);
-        } else {
-            schemaString = this.solrSchema;
-        }
-        try (final FileWriter filewriter = new FileWriter(SOLR_HOME + this.coreName + "/conf/schema.xml")) {
-            filewriter.write(schemaString);
-        }
+            // Write solrconfig.xml
+            try (final FileWriter filewriter = new FileWriter(SOLR_HOME + core.getName() + "/conf/solrconfig.xml")) {
+                LOG.info("core: {}, solrconfig.xml: {}", core.getName(), core.getConfig());
+                filewriter.write(core.getConfig());
+            }
 
-        // Copy files in conf/
-        if(customConfFiles.size() > 0) {
-            final Storage storage = StorageUtil.storage();
-            for(final KV<String,String> confFilePath : customConfFiles) {
-                final String fileName = confFilePath.getKey();
-                final String fileContent = StorageUtil.readString(storage, confFilePath.getValue());
-                try (final FileWriter filewriter = new FileWriter(SOLR_HOME + this.coreName + "/conf/" + fileName)) {
-                    filewriter.write(fileContent);
+            // Copy custom config files
+            if(!core.getCustomConfigFiles().isEmpty()) {
+                final Storage storage = StorageUtil.storage();
+                for(final KV<String,String> confFilePath : core.getCustomConfigFiles()) {
+                    final String fileName = confFilePath.getKey();
+                    final String fileContent = StorageUtil.readString(storage, confFilePath.getValue());
+                    try (final FileWriter filewriter = new FileWriter(SOLR_HOME + core.getName() + "/conf/" + fileName)) {
+                        LOG.info("core: {}, custom config file: {}", core.getName(), fileContent);
+                        filewriter.write(fileContent);
+                    }
                 }
             }
+
+            final SolrCore solrCore;
+            final boolean create;
+            if (container.getAllCoreNames().contains(core.getName())) {
+                solrCore = container.getCore(core.getName());
+                create = false;
+            } else {
+                // For retrying
+                solrCore = container.create(core.getName(), new HashMap<>());
+                create = true;
+            }
+            this.solrCores.put(core.getName(), solrCore);
+            final SolrIndexWriter writer = SolrUtil.createWriter(solrCore, core.getName(), create);
+            this.writers.put(core.getName(), writer);
+
+            this.fields.put(core.getName(), SolrSchemaUtil.getFieldNames(core.getSchema()));
         }
 
-        this.fieldNames = SolrSchemaUtil.getFieldNames(schemaString);
-
-        final boolean create;
-        if (container.getAllCoreNames().contains(coreName)) {
-            this.core = container.getCore(coreName);
-            create = false;
-        } else {
-            // For retrying
-            this.core = container.create(this.coreName, new HashMap<>());
-            create = true;
-        }
-
-        this.writer = SolrUtil.createWriter(core, coreName, create);
         this.outputStream = Channels.newOutputStream(channel);
     }
 
     @Override
-    public void write(ElementT element) throws IOException {
-        final SolrInputDocument solrDoc = formatter.formatRecord(element, fieldNames);
-        final Document doc = DocumentBuilder.toDocument(solrDoc, this.core.getLatestSchema());
-        this.writer.addDocument(doc);
+    public void write(MElement element) throws IOException {
+        final String input = inputNames.get(element.getIndex());
+        final Schema inputSchema = inputSchemas.get(element.getIndex());
+        final String coreName = cores.stream().filter(s -> s.getInput().equals(input)).map(LocalSolrSink.Core::getName).findAny().orElseThrow();
+        final List<String> fieldNames = fields.get(coreName);
+        final SolrInputDocument solrDoc = switch (element.getType()) {
+            case ELEMENT -> ElementToSolrDocumentConverter.convert(inputSchema, (Map<String, Object>) element.getValue(), fieldNames);
+            case AVRO -> AvroToSolrDocumentConverter.convert((GenericRecord) element.getValue(), fieldNames);
+            case ROW -> RowToSolrDocumentConverter.convert((Row) element.getValue(), fieldNames);
+            case STRUCT -> StructToSolrDocumentConverter.convert((Struct) element.getValue(), fieldNames);
+            case DOCUMENT -> DocumentToSolrDocumentConverter.convert((com.google.firestore.v1.Document) element.getValue(), fieldNames);
+            case ENTITY -> EntityToSolrDocumentConverter.convert((Entity) element.getValue(), fieldNames);
+            default -> throw new RuntimeException("Not supported type: " + element.getType());
+        };
+        final Document doc = DocumentBuilder.toDocument(solrDoc, this.solrCores.get(coreName).getLatestSchema());
+        this.writers.get(coreName).addDocument(doc);
         this.count += 1;
         if (this.count % 10000 == 0) {
-            LOG.info(String.format("Core: %s processed documents: %d", this.coreName, this.count));
+            LOG.info("processed documents: {}", this.count);
         }
     }
 
     @Override
     public void flush() throws IOException {
-        LOG.info(String.format("Core: %s processed documents: %d", this.coreName, this.count));
-        final long start = Instant.now().toEpochMilli();
-        this.writer.commit();
-        this.writer.forceMerge(1, true);
-        this.writer.close();
-        final long millisec = Instant.now().toEpochMilli() - start;
+        LOG.info("LocalSolr processed documents: {}", this.count);
+        for(final LocalSolrSink.Core core : cores) {
+            final long start = Instant.now().toEpochMilli();
+            this.writers.get(core.getName()).commit();
+            this.writers.get(core.getName()).forceMerge(1, true);
+            this.writers.get(core.getName()).close();
+            final long millisec = Instant.now().toEpochMilli() - start;
 
-        final String indexDir = SOLR_HOME + this.coreName;
-        final Path indexDirPath = Paths.get(indexDir);
-        LOG.info(String.format("Core: %s Finished to create index at [%s], took %d ms.", this.coreName, indexDirPath.toFile().getAbsolutePath(), millisec));
+            final String indexDir = SOLR_HOME + core.getName();
+            final Path indexDirPath = Paths.get(indexDir);
+            LOG.info("Core: {} Finished to create index at [{}], took {} ms.", core.getName(), indexDirPath.toFile().getAbsolutePath(), millisec);
+        }
 
-        ZipFileUtil.writeZipFile(outputStream, SOLR_HOME, indexDir);
+        ZipFileUtil.writeZipFile(outputStream, SOLR_HOME);
         LOG.info("Finished to upload documents!");
-    }
-
-    public interface RecordFormatter<ElementT> extends Serializable {
-        SolrInputDocument formatRecord(ElementT element, List<String> fieldNames);
     }
 
 }

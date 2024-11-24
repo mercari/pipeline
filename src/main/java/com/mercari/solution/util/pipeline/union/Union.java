@@ -5,9 +5,13 @@ import com.google.cloud.spanner.Struct;
 import com.google.datastore.v1.Entity;
 import com.google.firestore.v1.Document;
 import com.mercari.solution.module.DataType;
-import com.mercari.solution.util.converter.*;
+import com.mercari.solution.util.schema.converter.*;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.SchemaUtil;
+import com.mercari.solution.util.schema.converter.DocumentToAvroConverter;
+import com.mercari.solution.util.schema.converter.DocumentToRowConverter;
+import com.mercari.solution.util.schema.converter.EntityToAvroConverter;
+import com.mercari.solution.util.schema.converter.EntityToRowConverter;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.*;
@@ -189,19 +193,19 @@ public class Union {
                 case AVRO -> (GenericRecord) element.getValue();
                 case STRUCT -> {
                     final Struct struct = (Struct) element.getValue();
-                    yield StructToRecordConverter.convert(schema, struct);
+                    yield StructToAvroConverter.convert(schema, struct);
                 }
                 case DOCUMENT -> {
                     final Document document = (Document) element.getValue();
-                    yield DocumentToRecordConverter.convert(schema, document);
+                    yield DocumentToAvroConverter.convert(schema, document);
                 }
                 case ENTITY -> {
                     final Entity entity = (Entity) element.getValue();
-                    yield EntityToRecordConverter.convert(schema, entity);
+                    yield EntityToAvroConverter.convert(schema, entity);
                 }
                 case MUTATION -> {
                     final Mutation mutation = (Mutation) element.getValue();
-                    yield MutationToRecordConverter.convert(schema, mutation);
+                    yield MutationToAvroConverter.convert(schema, mutation);
                 }
                 default -> throw new IllegalArgumentException();
             };
@@ -225,7 +229,7 @@ public class Union {
                 case ROW -> (Row) element.getValue();
                 case AVRO -> {
                     final GenericRecord record = (GenericRecord) element.getValue();
-                    yield RecordToRowConverter.convert(schema, record);
+                    yield AvroToRowConverter.convert(schema, record);
                 }
                 case STRUCT -> {
                     final Struct struct = (Struct) element.getValue();

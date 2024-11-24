@@ -1,48 +1,108 @@
 package com.mercari.solution.module.sink.fileio;
 
-
+import com.mercari.solution.module.DataType;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.sink.StorageSink;
+import com.mercari.solution.util.schema.AvroSchemaUtil;
+import com.mercari.solution.util.schema.converter.ElementToAvroConverter;
 import org.apache.avro.Schema;
-import static org.apache.parquet.hadoop.ParquetFileWriter.Mode.OVERWRITE;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.io.FileIO;
-import org.apache.parquet.avro.AvroParquetWriter;
-import org.apache.parquet.hadoop.ParquetWriter;
+import org.apache.beam.sdk.values.KV;
+import org.apache.parquet.avro.*;
+import org.apache.parquet.hadoop.*;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.io.OutputFile;
 import org.apache.parquet.io.PositionOutputStream;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.Serializable;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
+import java.util.Map;
 
-public class ParquetSink<ElementT> implements FileIO.Sink<ElementT> {
+import static org.apache.parquet.hadoop.ParquetFileWriter.Mode.OVERWRITE;
 
-    private final String jsonSchema;
-    private final GenericRecordFormatter<ElementT> formatter;
-    private transient Schema schema;
+public class ParquetSink implements FileIO.Sink<KV<String, MElement>> {
+
+    private final com.mercari.solution.module.Schema schema;
+    private final StorageSink.CodecName codecName;
+    private final Properties properties;
+    private final boolean fitSchema;
+
     private transient ParquetWriter<GenericRecord> writer;
 
-    private ParquetSink(final String jsonSchema, final GenericRecordFormatter formatter) {
-        this.jsonSchema = jsonSchema;
-        this.formatter = formatter;
+
+    public static class Properties implements Serializable {
+
+        private StorageSink.CodecName codecName;
+        private Integer pageSize;
+        private Integer dictionaryPageSize;
+        private Integer maxPaddingSize;
+        private Boolean dictionaryEncoding;
+        private Long rowGroupSize;
+        private Map<String, String> extraMetaData;
+
+    }
+
+    public static ParquetSink of(
+            final com.mercari.solution.module.Schema schema,
+            final StorageSink.CodecName codecName,
+            final boolean fitSchema) {
+
+        return new ParquetSink(schema, codecName, fitSchema);
+    }
+
+    private ParquetSink(
+            final com.mercari.solution.module.Schema schema,
+            final StorageSink.CodecName codecName,
+            final boolean fitSchema) {
+
+        this.schema = schema;
+        this.codecName = codecName;
+        this.properties = new Properties();
+        this.fitSchema = fitSchema;
     }
 
     @Override
     public void open(WritableByteChannel channel) throws IOException {
-        this.schema = new Schema.Parser().parse(this.jsonSchema);
+        this.schema.setup();
         final BeamParquetOutputFile beamParquetOutputFile =
                 new BeamParquetOutputFile(Channels.newOutputStream(channel));
+        final CompressionCodecName compressionCodecName = switch (this.codecName) {
+            case LZO -> CompressionCodecName.LZO;
+            case LZ4 -> CompressionCodecName.LZ4;
+            case LZ4_RAW -> CompressionCodecName.LZ4_RAW;
+            case ZSTD -> CompressionCodecName.ZSTD;
+            case SNAPPY -> CompressionCodecName.SNAPPY;
+            case GZIP -> CompressionCodecName.GZIP;
+            case BROTLI -> CompressionCodecName.BROTLI;
+            default -> CompressionCodecName.UNCOMPRESSED;
+        };
+
+        final Schema avroSchema = schema.getAvroSchema();
         this.writer = AvroParquetWriter.<GenericRecord>builder(beamParquetOutputFile)
-                .withSchema(schema)
-                .withCompressionCodec(CompressionCodecName.SNAPPY)
-                .withWriteMode(OVERWRITE).enableValidation()
+                .withSchema(avroSchema)
+                .withCompressionCodec(compressionCodecName)
+                .withWriteMode(OVERWRITE)
                 .build();
     }
 
     @Override
-    public void write(ElementT element) throws IOException {
-        this.writer.write(this.formatter.formatRecord(schema, element));
+    public void write(KV<String, MElement> element) throws IOException {
+        final MElement input = element.getValue();
+        final GenericRecord record = ElementToAvroConverter.convert(schema.getAvroSchema(), input);
+        try {
+            if (fitSchema && DataType.AVRO.equals(input.getType())) {
+                final GenericRecord fitted = AvroSchemaUtil.toBuilder(schema.getAvroSchema(), record).build();
+                writer.write(fitted);
+            } else {
+                writer.write(record);
+            }
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -50,18 +110,11 @@ public class ParquetSink<ElementT> implements FileIO.Sink<ElementT> {
         this.writer.close();
     }
 
-    public static <ElementT> ParquetSink<ElementT> of(
-            final Schema schema,
-            final GenericRecordFormatter<ElementT> formatter) {
-
-        return new ParquetSink(schema.toString(), formatter);
-    }
-
     private static class BeamParquetOutputFile implements OutputFile {
 
         private final OutputStream outputStream;
 
-        BeamParquetOutputFile(final OutputStream outputStream) {
+        BeamParquetOutputFile(OutputStream outputStream) {
             this.outputStream = outputStream;
         }
 
@@ -90,7 +143,7 @@ public class ParquetSink<ElementT> implements FileIO.Sink<ElementT> {
         private long position = 0;
         private final OutputStream outputStream;
 
-        private BeamOutputStream(final OutputStream outputStream) {
+        private BeamOutputStream(OutputStream outputStream) {
             this.outputStream = outputStream;
         }
 

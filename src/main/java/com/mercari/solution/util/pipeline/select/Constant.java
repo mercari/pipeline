@@ -3,7 +3,8 @@ package com.mercari.solution.util.pipeline.select;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.schema.converter.JsonToMapConverter;
 import org.joda.time.Instant;
 
 import java.util.ArrayList;
@@ -27,7 +28,7 @@ public class Constant implements SelectFunction {
         this.type = type;
         this.valueString = valueString;
         this.inputFields = new ArrayList<>();
-        this.outputFieldType = Types.createOutputFieldType(type);
+        this.outputFieldType = Schema.FieldType.type(type);
         this.ignore = ignore;
     }
 
@@ -75,7 +76,8 @@ public class Constant implements SelectFunction {
         if(value == null || value.isJsonNull()) {
             return null;
         }
-        return Types.getValue(type, value);
+        //return Schema.Type.getValue(type, value);
+        return JsonToMapConverter.getAsPrimitiveValue(Schema.FieldType.type(type), value);
     }
 
 }

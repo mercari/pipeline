@@ -5,7 +5,7 @@ import com.google.cloud.spanner.Mutation;
 import com.google.cloud.spanner.Struct;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.DataType;
-import com.mercari.solution.util.converter.*;
+import com.mercari.solution.util.schema.converter.*;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.RowSchemaUtil;
 import org.apache.avro.LogicalTypes;
@@ -118,7 +118,7 @@ public class UnifiedMutation implements Serializable {
     public TableRow toTableRow(final List<String> primaryKeyFields) {
         return switch (this.type) {
             case ROW -> RowToTableRowConverter.convert((Row) this.value);
-            case AVRO -> RecordToTableRowConverter.convert((GenericRecord) this.value);
+            case AVRO -> AvroToTableRowConverter.convert((GenericRecord) this.value);
             case STRUCT -> StructToTableRowConverter.convert((Struct) this.value);
             case MUTATION -> MutationToTableRowConverter.convert((Mutation) this.value, primaryKeyFields);
             default -> throw new IllegalArgumentException();
@@ -194,7 +194,7 @@ public class UnifiedMutation implements Serializable {
     }
 
     private static org.apache.beam.sdk.schemas.Schema createSchema() {
-        return RecordToRowConverter.convertSchema(createAvroSchema());
+        return AvroToRowConverter.convertSchema(createAvroSchema());
     }
 
 }

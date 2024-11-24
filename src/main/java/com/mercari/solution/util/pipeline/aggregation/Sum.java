@@ -2,19 +2,17 @@ package com.mercari.solution.util.pipeline.aggregation;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.SchemaUtil;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
-import org.apache.beam.sdk.schemas.Schema;
 
 import java.util.*;
 
 public class Sum implements Aggregator {
 
     private List<Schema.Field> outputFields;
-    private Schema.Field sumField;
 
     private String name;
     private String field;
@@ -26,6 +24,17 @@ public class Sum implements Aggregator {
     private transient Expression exp;
     private transient Set<String> variables;
     private transient Filter.ConditionNode conditionNode;
+
+
+    @Override
+    public Boolean getIgnore() {
+        return this.ignore;
+    }
+
+    @Override
+    public Boolean filter(final MElement element) {
+        return Aggregator.filter(conditionNode, element);
+    }
 
 
     public static Sum of(final String name,
@@ -43,41 +52,22 @@ public class Sum implements Aggregator {
         sum.ignore = ignore;
 
         sum.outputFields = new ArrayList<>();
-        if(field != null) {
+        if (field != null) {
             final Schema.Field inputField = inputSchema.getField(field);
-            sum.sumField = Schema.Field.of(name, inputField.getType().withNullable(true));
-            sum.outputFields.add(sum.sumField);
+            sum.outputFields.add(Schema.Field.of(name, inputField.getFieldType()));
         } else {
-            sum.sumField = Schema.Field.of(name, Schema.FieldType.DOUBLE.withNullable(true));
-            sum.outputFields.add(sum.sumField);
+            sum.outputFields.add(Schema.Field.of(name, Schema.FieldType.FLOAT64));
         }
 
         return sum;
     }
 
     @Override
-    public Op getOp() {
-        return Op.sum;
-    }
-
-    @Override
-    public String getName() {
-        return name;
-    }
-
-    @Override
-    public Boolean getIgnore() {
-        return ignore;
-    }
-
-    @Override
-    public Boolean filter(final UnionValue unionValue) {
-        return Aggregator.filter(conditionNode, unionValue);
-    }
-
-    @Override
     public List<String> validate(int parent, int index) {
         final List<String> errorMessages = new ArrayList<>();
+        if (name == null) {
+            errorMessages.add("aggregations[" + parent + "].fields[" + index + "].name must not be null");
+        }
         return errorMessages;
     }
 
@@ -88,53 +78,63 @@ public class Sum implements Aggregator {
             this.variables = variables;
             this.exp = ExpressionUtil.createDefaultExpression(this.expression, variables);
         }
-        if(this.condition != null) {
+        if (this.condition != null) {
             this.conditionNode = Filter.parse(new Gson().fromJson(this.condition, JsonElement.class));
         }
     }
 
     @Override
     public List<Schema.Field> getOutputFields() {
-        return outputFields;
+        return this.outputFields;
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final UnionValue input, final SchemaUtil.PrimitiveValueGetter valueGetter) {
-        final Object prevValue = accumulator.get(sumField.getType(), name);
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
         final Object inputValue;
         if(field != null) {
-            inputValue = valueGetter.getValue(input.getValue(), sumField.getType(), field);
+            inputValue = input.getPrimitiveValue(field);
         } else {
             inputValue = Aggregator.eval(this.exp, variables, input);
         }
+        final Object prevValue = accumulator.get(name);
 
         final Object sumNext = Aggregator.sum(prevValue, inputValue);
-        accumulator.put(sumField.getType(), name, sumNext);
+        accumulator.put(name, sumNext);
         return accumulator;
     }
 
     @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
-        final Object stateValue = base.get(sumField.getType(), name);
-        final Object accumValue = input.get(sumField.getType(), name);
+        final Object stateValue = base.get(name);
+        final Object accumValue = input.get(name);
         final Object sum = Aggregator.sum(stateValue, accumValue);
-        base.put(sumField.getType(), name, sum);
+        base.put(name, sum);
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
-                                            final Map<String, Object> values,
-                                            final SchemaUtil.PrimitiveValueConverter converter) {
-
-        final Object maxValue = accumulator.get(sumField.getType(), name);
-        final Object fieldValue = converter.convertPrimitive(sumField.getType(), maxValue);
-        if(fieldValue == null) {
-            values.put(name, Accumulator.convertNumberValue(sumField.getType(), 0D));
+    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+        final Object sum = accumulator.get(name);
+        if(sum == null) {
+            outputs.put(name, convertNumberValue(outputFields.get(0).getFieldType(), 0D));
         } else {
-            values.put(name, fieldValue);
+            outputs.put(name, sum);
         }
-        return values;
+        return outputs;
+    }
+
+    public static Object convertNumberValue(Schema.FieldType fieldType, Double value) {
+        if(value == null) {
+            return null;
+        }
+        return switch (fieldType.getType()) {
+            case float32 -> value.floatValue();
+            case float64 -> value;
+            case int16 -> value.shortValue();
+            case int32 -> value.intValue();
+            case int64 -> value.longValue();
+            default -> null;
+        };
     }
 
 }

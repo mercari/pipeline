@@ -1,24 +1,18 @@
 package com.mercari.solution.module.source;
 
+import com.google.bigtable.v2.Row;
 import com.google.bigtable.v2.RowFilter;
-import com.google.gson.Gson;
+import com.google.cloud.bigtable.data.v2.models.*;
 import com.google.gson.JsonElement;
-import com.mercari.solution.config.SourceConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SourceModule;
-import com.mercari.solution.util.OptionUtil;
-import com.mercari.solution.util.converter.BigtableRowToRecordConverter;
+import com.google.protobuf.ByteString;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.gcp.BigtableUtil;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.schema.SchemaUtil;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
+import com.mercari.solution.util.schema.converter.BigtableRowToElementConverter;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableIO;
 import org.apache.beam.sdk.io.range.ByteKeyRange;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.slf4j.Logger;
@@ -26,12 +20,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
-public class BigtableSource implements SourceModule {
+@Source.Module(name="bigtable")
+public class BigtableSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(BigtableSource.class);
 
@@ -45,32 +38,10 @@ public class BigtableSource implements SourceModule {
         private JsonElement rowFilter;
         private JsonElement keyRanges;
 
+        //
+        private String appProfileId;
+        private Integer maxBufferElementCount;
 
-        private OutputType outputType;
-
-        public String getProjectId() {
-            return projectId;
-        }
-
-        public String getInstanceId() {
-            return instanceId;
-        }
-
-        public String getTableId() {
-            return tableId;
-        }
-
-        public JsonElement getRowFilter() {
-            return rowFilter;
-        }
-
-        public JsonElement getKeyRanges() {
-            return keyRanges;
-        }
-
-        public OutputType getOutputType() {
-            return outputType;
-        }
 
         private void validate(final PBegin begin) {
 
@@ -78,24 +49,21 @@ public class BigtableSource implements SourceModule {
             final List<String> errorMessages = new ArrayList<>();
 
             if(this.projectId == null) {
-                errorMessages.add("bigtable source module parameter projectId must not be null");
+                errorMessages.add("parameters.projectId must not be null");
             }
             if(this.instanceId == null) {
-                errorMessages.add("bigtable source module parameter instanceId must not be null");
+                errorMessages.add("parameters.instanceId must not be null");
             }
             if(this.tableId == null) {
-                errorMessages.add("bigtable source module parameter tableId must not be null");
+                errorMessages.add("parameters.tableId must not be null");
             }
 
-            if (errorMessages.size() > 0) {
-                throw new IllegalArgumentException(errorMessages.stream().collect(Collectors.joining(", ")));
+            if (!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
         private void setDefaults() {
-            if(this.outputType == null) {
-                this.outputType = OutputType.avro;
-            }
         }
 
     }
@@ -107,131 +75,131 @@ public class BigtableSource implements SourceModule {
         cells
     }
 
-    public String getName() { return "bigtable"; }
-
-    public Map<String, FCollection<?>> expand(PBegin begin, SourceConfig config, PCollection<Long> beats, List<FCollection<?>> waits) {
-        if(OptionUtil.isStreaming(begin.getPipeline().getOptions())) {
-            // TODO
-            return Collections.emptyMap();
-        } else {
-            return Collections.singletonMap(config.getName(), batch(begin, config));
-        }
-    }
-
-    public static FCollection<?> batch(PBegin begin, SourceConfig config) {
-        final BigtableSourceParameters parameters = new Gson().fromJson(config.getParameters(), BigtableSourceParameters.class);
-        if(parameters == null) {
-            throw new IllegalArgumentException("bigtable source module parameters must not be empty!");
-        }
+    @Override
+    public MCollectionTuple expand(PBegin begin) {
+        final BigtableSourceParameters parameters = getParameters(BigtableSourceParameters.class);
         parameters.validate(begin);
         parameters.setDefaults();
 
-        switch (parameters.getOutputType()) {
-            case avro: {
-                final org.apache.avro.Schema outputAvroSchema = SourceConfig.convertAvroSchema(config.getSchema());
-                final BatchSource<String, org.apache.avro.Schema, GenericRecord> source = new BatchSource<>(
-                        parameters,
-                        outputAvroSchema.toString(),
-                        AvroSchemaUtil::convertSchema,
-                        BigtableRowToRecordConverter::convert);
-                final PCollection<GenericRecord> records = begin
-                        .apply(config.getName(), source)
-                        .setCoder(AvroCoder.of(outputAvroSchema));
-                return FCollection.of(config.getName(), records, DataType.AVRO, outputAvroSchema);
+        switch (getMode()) {
+            case batch -> {
+                final BigtableIO.Read read = createRead(parameters);
+                final PCollection<com.google.bigtable.v2.Row> rows = begin
+                        .apply("Read", read);
+                final PCollection<MElement> output = rows
+                        .apply("Convert", ParDo.of(new RowToElementDoFn(getSchema())));
+
+                return MCollectionTuple.of(output, getSchema());
             }
-            default:
-                throw new IllegalArgumentException("bigtable source module not support format: " + parameters.getOutputType());
+            case changeDataCapture -> {
+                final BigtableIO.ReadChangeStream read = createReadChangeStreams(parameters);
+                final PCollection<KV<ByteString, ChangeStreamMutation>> mutations = begin
+                        .apply("ReadChangeStream", read);
+                final PCollection<MElement> output = mutations
+                        .apply("Convert", ParDo.of(new ChangeStreamToElementDoFn(getSchema())));
+                return MCollectionTuple.of(output, getSchema());
+            }
+            default -> throw new IllegalArgumentException("Not supported mode: " + getMode());
         }
     }
 
-    private static class BatchSource<InputSchemaT,RuntimeSchemaT,T> extends PTransform<PBegin, PCollection<T>> {
 
-        private final String projectId;
-        private final String instanceId;
-        private final String tableId;
+    private static BigtableIO.ReadChangeStream createReadChangeStreams(
+            final BigtableSourceParameters parameters) {
+        BigtableIO.ReadChangeStream read = BigtableIO.readChangeStream()
+                .withProjectId(parameters.projectId)
+                .withInstanceId(parameters.instanceId)
+                .withTableId(parameters.tableId);
 
-        private final List<ByteKeyRange> keyRanges;
-        private final RowFilter rowFilter;
-
-        private final InputSchemaT inputSchema;
-        private final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter;
-        private final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter;
-
-        BatchSource(final BigtableSourceParameters parameters,
-                    final InputSchemaT inputSchema,
-                    final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter,
-                    final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter) {
-
-            this.projectId = parameters.getProjectId();
-            this.instanceId = parameters.getInstanceId();
-            this.tableId = parameters.getTableId();
-
-            if(parameters.getKeyRanges() == null || parameters.getKeyRanges().isJsonNull()) {
-                keyRanges = null;
-            } else {
-                keyRanges = BigtableUtil.createKeyRanges(parameters.getKeyRanges());
-            }
-
-            if(parameters.getRowFilter() == null || parameters.getRowFilter().isJsonNull()) {
-                rowFilter = null;
-            } else {
-                rowFilter = BigtableUtil.createRowFilter(parameters.getRowFilter());
-            }
-
-            this.inputSchema = inputSchema;
-            this.schemaConverter = schemaConverter;
-            this.converter = converter;
+        if(parameters.appProfileId != null) {
+            read = read.withAppProfileId(parameters.appProfileId);
         }
 
-        @Override
-        public PCollection<T> expand(PBegin begin) {
-            BigtableIO.Read read = BigtableIO.read()
-                    .withProjectId(projectId)
-                    .withInstanceId(instanceId)
-                    .withTableId(tableId);
+        return read;
+    }
 
-            if(keyRanges != null && keyRanges.size() > 0) {
-                read = read.withKeyRanges(keyRanges);
-            } else if(rowFilter != null) {
-                read = read.withRowFilter(rowFilter);
-            }
+    private static BigtableIO.Read createRead(
+            BigtableSourceParameters parameters) {
+        BigtableIO.Read read = BigtableIO.read()
+                .withProjectId(parameters.projectId)
+                .withInstanceId(parameters.instanceId)
+                .withTableId(parameters.tableId);
 
-            final PCollection<com.google.bigtable.v2.Row> rows = begin
-                    .apply("ReadBigtable", read);
-
-            return rows.apply("Convert", ParDo.of(new ConvertDoFn(inputSchema, schemaConverter, converter)));
+        if(parameters.appProfileId != null) {
+            read = read.withAppProfileId(parameters.appProfileId);
+        }
+        if(parameters.maxBufferElementCount != null) {
+            read = read.withMaxBufferElementCount(parameters.maxBufferElementCount);
         }
 
-        private class ConvertDoFn extends DoFn<com.google.bigtable.v2.Row, T> {
+        if(parameters.keyRanges != null && !parameters.keyRanges.isJsonNull()) {
+            final List<ByteKeyRange> keyRanges = BigtableUtil.createKeyRanges(parameters.keyRanges);
+            read = read.withKeyRanges(keyRanges);
+        }
+        if(parameters.rowFilter != null && !parameters.rowFilter.isJsonNull()) {
+            final RowFilter rowFilter = BigtableUtil.createRowFilter(parameters.rowFilter);
+            read = read.withRowFilter(rowFilter);
+        }
 
-            private final InputSchemaT inputSchema;
-            private final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter;
-            private final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter;
+        return read;
+    }
 
+    private static class RowToElementDoFn extends DoFn<Row, MElement> {
 
-            private transient RuntimeSchemaT runtimeSchema;
+        private final Schema schema;
 
-            ConvertDoFn(final InputSchemaT inputSchema,
-                                     final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter,
-                                     final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter) {
+        RowToElementDoFn(final Schema schema) {
+            this.schema = schema;
+        }
 
-                this.inputSchema = inputSchema;
-                this.schemaConverter = schemaConverter;
-                this.converter = converter;
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final Row row = c.element();
+            final Map<String, Object> values = BigtableRowToElementConverter.convert(schema, row);
+            final MElement output = MElement.of(values, c.timestamp());
+            c.output(output);
+        }
+    }
+
+    private static class ChangeStreamToElementDoFn extends DoFn<KV<ByteString, ChangeStreamMutation>, MElement> {
+
+        private final Schema schema;
+
+        ChangeStreamToElementDoFn(final Schema schema) {
+            this.schema = schema;
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final KV<ByteString, ChangeStreamMutation> kv = c.element();
+            if(kv == null) {
+                return;
             }
-
-            @Setup
-            public void setup() {
-                this.runtimeSchema = schemaConverter.convert(inputSchema);
+            final ByteString rowKey = kv.getKey();
+            final ChangeStreamMutation mutation = kv.getValue();
+            if(rowKey == null || mutation == null) {
+                return;
             }
+            for(final Entry entry : mutation.getEntries()) {
+                switch (entry) {
+                    case SetCell set -> {
 
-            @ProcessElement
-            public void processElement(ProcessContext c) {
-                final com.google.bigtable.v2.Row row = c.element();
-                final T output = converter.convert(runtimeSchema, row);
-                c.output(output);
+                    }
+                    case AddToCell add -> {
+
+                    }
+                    case MergeToCell merge -> {
+
+                    }
+                    case DeleteCells deleteCells -> {
+
+                    }
+                    case DeleteFamily deleteFamily -> {
+
+                    }
+                    default -> throw new RuntimeException();
+                };
             }
-
         }
     }
 

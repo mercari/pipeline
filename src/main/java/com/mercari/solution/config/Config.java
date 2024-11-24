@@ -2,7 +2,6 @@ package com.mercari.solution.config;
 
 import com.google.api.services.storage.Storage;
 import com.google.gson.*;
-import com.mercari.solution.module.transform.BeamSQLTransform;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import freemarker.template.Template;
@@ -37,11 +36,16 @@ public class Config implements Serializable {
 
     private String name;
     private String description;
-    private List<Import> imports;
-    private Settings settings;
+
+    private Map<String, String> args;
+    private Options options;
     private List<SourceConfig> sources;
     private List<TransformConfig> transforms;
     private List<SinkConfig> sinks;
+
+    // deprecated
+    private List<Import> imports;
+    private Options settings;
 
     private Boolean empty;
 
@@ -69,11 +73,19 @@ public class Config implements Serializable {
         this.description = description;
     }
 
-    public Settings getSettings() {
+    public Map<String, String> getArgs() {
+        return args;
+    }
+
+    public Options getOptions() {
+        return options;
+    }
+
+    public Options getSettings() {
         return settings;
     }
 
-    public void setSettings(Settings settings) {
+    public void setSettings(Options settings) {
         this.settings = settings;
     }
 
@@ -118,6 +130,9 @@ public class Config implements Serializable {
         }
     }
     public void setDefaults() {
+        if(args == null) {
+            args = new HashMap<>();
+        }
         if(this.imports == null) {
             this.imports = new ArrayList<>();
         } else {
@@ -196,10 +211,10 @@ public class Config implements Serializable {
         }
 
         public boolean filter(final String name) {
-            if(this.includes.size() > 0) {
+            if(!this.includes.isEmpty()) {
                 return this.includes.contains(name);
             }
-            if(this.excludes.size() > 0) {
+            if(!this.excludes.isEmpty()) {
                 return !this.excludes.contains(name);
             }
             return true;
@@ -228,34 +243,15 @@ public class Config implements Serializable {
         }
     }
 
-    public boolean isCalcitePlanner() {
-        if(this.transforms == null) {
-            return false;
-        }
-        final String beamSQLTransformName = new BeamSQLTransform().getName();
-        final Optional<TransformConfig> tc = this.transforms.stream()
-                .filter(c -> beamSQLTransformName.equals(c.getModule()))
-                .findFirst();
-        if(tc.isEmpty()) {
-            return false;
-        }
-        if(tc.get().getParameters() == null) {
-            return false;
-        }
-        if(!tc.get().getParameters().has("planner")) {
-            return false;
-        }
-        if(!tc.get().getParameters().get("planner").isJsonPrimitive()) {
-            return false;
-        }
-
-        return "calcite".equals(tc.get().getParameters().get("planner").getAsString().trim().toLowerCase());
-    }
-
-    public static Config parse(final String configJson, final String[] args) throws Exception {
+    public static Config parse(final String configJson, final String[] args, final Boolean useConfigTemplate) throws Exception {
         final Map<String, Map<String, String>> argsParameters = filterConfigArgs(args);
-        final String templatedConfigJson = executeTemplate(
-                configJson, argsParameters.getOrDefault("template", new HashMap<>()));
+        final String templatedConfigJson;
+        if(useConfigTemplate) {
+            templatedConfigJson = executeTemplate(
+                    configJson, argsParameters.getOrDefault("template", new HashMap<>()));
+        } else {
+            templatedConfigJson = configJson;
+        }
 
         final JsonObject jsonObject;
         try {
@@ -293,7 +289,7 @@ public class Config implements Serializable {
             replaceParameters(jsonSinks.getAsJsonArray(), argsParameters);
         }
 
-        LOG.info("Pipeline config: \n" + new GsonBuilder().setPrettyPrinting().create().toJson(jsonObject));
+        LOG.info("Pipeline config: \n{}", new GsonBuilder().setPrettyPrinting().create().toJson(jsonObject));
         final String jsonText = replaceParameters(jsonObject.toString());
         try {
             final Config config = new Gson().fromJson(jsonText, Config.class);
@@ -319,7 +315,7 @@ public class Config implements Serializable {
                     .peek(c -> c.setArgs(templateArgs))
                     .collect(Collectors.toList());
 
-            if(config.getImports() != null && config.getImports().size() > 0) {
+            if(config.getImports() != null && !config.getImports().isEmpty()) {
                 final Storage storage = StorageUtil.storage();
                 for(final Import i : config.getImports()) {
                     final Map<String, List<String>> inputs = Optional.ofNullable(i.getInputs()).orElseGet(HashMap::new);
@@ -327,7 +323,7 @@ public class Config implements Serializable {
                     for(final String path : i.getFiles()) {
                         final String gcsPath = (i.getBase() == null ? "" : i.getBase()) + path;
                         final String json = StorageUtil.readString(storage, gcsPath);
-                        final Config importConfig = Config.parse(json, args);
+                        final Config importConfig = Config.parse(json, args, useConfigTemplate);
                         if(importConfig.getSources() != null) {
                             sources.addAll(importConfig.getSources()
                                     .stream()
@@ -366,8 +362,8 @@ public class Config implements Serializable {
                                         }
                                         if(inputs.containsKey(c.getName())) {
                                             final List<String> input = inputs.get(c.getName());
-                                            if(input.size() > 0) {
-                                                c.setInput(input.get(0));
+                                            if(!input.isEmpty()) {
+                                                c.setInputs(input);
                                             }
                                         }
                                     })
@@ -377,7 +373,7 @@ public class Config implements Serializable {
                 }
             }
 
-            if(sources.size() == 0 && transforms.size() == 0 && sinks.size() == 0) {
+            if(sources.isEmpty() && transforms.isEmpty() && sinks.isEmpty()) {
                 throw new IllegalArgumentException("no module definition!");
             }
 

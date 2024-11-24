@@ -1,0 +1,69 @@
+@charset "utf-8";
+/* CSS Document */
+
+/* Layout */
+body {
+	min-height: 700px;
+	height: 100%;
+}
+
+header {
+  min-width: 980px;
+  z-index: 1030;
+}
+
+header a.navbar-brand {
+	color: #ffffff;
+}
+
+main {
+	margin-top: 0px;
+	min-width: 980px;
+	min-height: 600px;
+	height: 100%;
+	padding-left:0px;
+	padding-right:0px;
+}
+main .page {
+	margin-left:0;
+	margin-right:0;
+}
+
+#main {
+	float: right;
+	width: 100%;
+	margin-left:-270px;
+}
+
+.sidebar {
+	float: left;
+	width: 260px;
+	margin-right: -260px;
+	position:relative;
+	z-index:1;
+}
+
+
+#main .main-content {
+	margin-left: 275px;
+}
+
+footer {
+    background: none repeat scroll 0 0 rgba(0, 0, 0, 0.8);
+    bottom: 0;
+    left: 0;
+    margin: 0;
+    padding: 5px 15px 13px;
+    position: fixed;
+    width: 100%;
+    height: 12px;
+    min-width: 960px;
+    max-width: 100%;
+    z-index: 1030;
+    border-top: 1px solid #E6E6E6;
+}
+
+footers li {
+	display: inline;
+	padding-right: 10px;
+}

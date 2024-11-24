@@ -3,57 +3,47 @@ package com.mercari.solution.module.source;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
-import com.mercari.solution.config.SourceConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SourceModule;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.OptionUtil;
+import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.converter.RowToRecordConverter;
+import com.mercari.solution.util.coder.ElementCoder;
+import com.mercari.solution.util.pipeline.Select;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
-import com.mercari.solution.util.pipeline.union.UnionCoder;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
+import com.mercari.solution.util.schema.converter.ElementToAvroConverter;
+import com.mercari.solution.util.schema.converter.ElementToRowConverter;
+import com.mercari.solution.util.schema.converter.JsonToElementConverter;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.VarLongCoder;
-import org.apache.beam.sdk.extensions.avro.coders.AvroGenericCoder;
-import org.apache.beam.sdk.extensions.sql.impl.utils.CalciteUtils;
 import org.apache.beam.sdk.io.GenerateSequence;
 import org.apache.beam.sdk.io.range.OffsetRange;
-import org.apache.beam.sdk.schemas.Schema;
-import org.apache.beam.sdk.schemas.logicaltypes.SqlTypes;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.DoFn.BoundedPerElement;
-import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker;
-import org.apache.beam.sdk.values.PBegin;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PInput;
-import org.apache.beam.sdk.values.Row;
+import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
-
-public class CreateSource implements SourceModule {
+@Source.Module(name="create")
+public class CreateSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(CreateSource.class);
 
     private static class CreateSourceParameters implements Serializable {
 
         private String type;
-        private List<String> elements;
+        private JsonArray elements;
         private String from;
         private String to;
         private Integer interval;
@@ -68,78 +58,26 @@ public class CreateSource implements SourceModule {
 
         private Integer splitSize;
 
-        private Schema.FieldType elementType;
-        private OutputType outputType;
+        private Schema.Type elementType;
 
-        public List<String> getElements() {
-            return elements;
-        }
 
-        public String getFrom() {
-            return from;
-        }
-
-        public String getTo() {
-            return to;
-        }
-
-        public String getType() {
-            return type;
-        }
-
-        public Integer getInterval() {
-            return interval;
-        }
-
-        public DateTimeUtil.TimeUnit getIntervalUnit() {
-            return intervalUnit;
-        }
-
-        public Long getRate() {
-            return rate;
-        }
-
-        public DateTimeUtil.TimeUnit getRateUnit() {
-            return rateUnit;
-        }
-
-        public JsonElement getFilter() {
-            return filter;
-        }
-
-        public JsonArray getSelect() {
-            return select;
-        }
-
-        public String getFlattenField() {
-            return flattenField;
-        }
-
-        public Integer getSplitSize() {
-            return splitSize;
-        }
-
-        public Schema.FieldType getElementType() {
-            return elementType;
-        }
-
-        public OutputType getOutputType() {
-            return outputType;
-        }
-
-        private void validate(final String name) {
+        private void validate(final String name, final Schema schema) {
 
             final List<String> errorMessages = new ArrayList<>();
-            if(elements == null && from == null) {
+            if((elements == null || !elements.isJsonArray()) && from == null) {
                 errorMessages.add("create source module[" + name + "] requires either elements or from parameter");
             } else {
                 if(type == null) {
-                    errorMessages.add("create source module[" + name + "] requires type parameter in ['int','long','date','time','timestamp','string']");
+                    errorMessages.add("create source module[" + name + "] requires type parameter in ['int','long','date','time','timestamp','string','element']");
                 } else {
-                    final Schema.FieldType elementType = getElementFieldType(type);
-                    if(elementType == null) {
-                        errorMessages.add("create source module[" + name + "] requires type parameter in ['int','long','date','time','timestamp','string']");
+                    switch (Schema.Type.valueOf(type)) {
+                        case element -> {
+                            if(schema == null) {
+                                errorMessages.add("create source module[" + name + "].schema must not be null if type is element");
+                            }
+                        }
                     }
+                    //Schema.Type.valueOf(type);
                 }
             }
 
@@ -152,23 +90,23 @@ public class CreateSource implements SourceModule {
             }
 
             if(!errorMessages.isEmpty()) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
         private void setDefaults(final PInput input) {
-            this.elementType = getElementFieldType(type);
+            this.elementType = Schema.Type.of(type);
             if(this.elements == null) {
-                this.elements = new ArrayList<>();
+                this.elements = new JsonArray();
             }
             if(this.elements.isEmpty()) {
                 if(this.interval == null) {
                     this.interval = 1;
                 }
                 if(this.intervalUnit == null && this.type != null) {
-                    this.intervalUnit = switch (this.type) {
-                        case "date" -> DateTimeUtil.TimeUnit.day;
-                        case "time", "timestamp" -> DateTimeUtil.TimeUnit.minute;
+                    this.intervalUnit = switch (this.elementType) {
+                        case date -> DateTimeUtil.TimeUnit.day;
+                        case time, timestamp -> DateTimeUtil.TimeUnit.minute;
                         default -> null;
                     };
                 }
@@ -197,658 +135,553 @@ public class CreateSource implements SourceModule {
                 this.splitSize = 10;
             }
 
-            if(this.outputType == null) {
-                if(OptionUtil.isStreaming(input)) {
-                    this.outputType = OutputType.row;
-                } else {
-                    this.outputType = OutputType.avro;
-                }
-            }
-
-        }
-
-        public static CreateSourceParameters of(
-                final JsonElement jsonElement,
-                final String name,
-                final PInput input) {
-
-            final CreateSourceParameters parameters = new Gson().fromJson(jsonElement, CreateSourceParameters.class);
-            if (parameters == null) {
-                throw new IllegalArgumentException("create source module[" + name + "].parameters must not be empty!");
-            }
-
-            parameters.validate(name);
-            parameters.setDefaults(input);
-
-            return parameters;
         }
 
     }
 
+    @Override
+    public MCollectionTuple expand(PBegin begin) {
 
+        final CreateSourceParameters parameters = getParameters(CreateSourceParameters.class);
+        parameters.validate(getName(), getSchema());
+        parameters.setDefaults(begin);
 
-    public String getName() { return "create"; }
+        final DataType outputType = Optional
+                .ofNullable(getOutputType())
+                .orElse(DataType.ELEMENT);
 
-
-    private enum OutputType {
-        row,
-        avro
-    }
-
-
-    public Map<String, FCollection<?>> expand(PBegin begin, SourceConfig config, PCollection<Long> beats, List<FCollection<?>> waits) {
-        return Collections.singletonMap(config.getName(), source(begin, config));
-    }
-
-    public static FCollection<?> source(final PBegin begin, final SourceConfig config) {
-
-        final CreateSourceParameters parameters = CreateSourceParameters.of(config.getParameters(), config.getName(), begin);
-
-        final Schema elementSchema = createElementRowSchema(parameters.getType());
-        Schema outputSchema;
-        if(parameters.getSelect() == null || !parameters.getSelect().isJsonArray()) {
-            outputSchema = elementSchema;
-        } else {
-            outputSchema = SelectFunction.createSchema(parameters.getSelect(), elementSchema.getFields());
-        }
-
-        if(parameters.getFlattenField() != null) {
-            outputSchema = SelectFunction.createFlattenSchema(outputSchema, parameters.getFlattenField());
-        }
-
-        final FCollection<?> fCollection = switch (parameters.getOutputType()) {
-            case row -> {
-                final Source<Row> source = new Source<>(parameters, DataType.ROW, outputSchema);
-                final PCollection<Row> output = begin.apply(config.getName(), source);
-                yield FCollection.of(config.getName(), output, DataType.ROW, outputSchema);
-            }
-            case avro -> {
-                final Source<GenericRecord> source = new Source<>(parameters, DataType.AVRO, outputSchema);
-                final PCollection<GenericRecord> output = begin.apply(config.getName(), source);
-                yield FCollection.of(config.getName(), output, DataType.AVRO, outputSchema);
-            }
+        final Schema.FieldType elementFieldType = switch (parameters.elementType) {
+            case element -> Schema.FieldType.element(getSchema());
+            default -> Schema.FieldType.type(parameters.elementType);
         };
+        final Schema elementSchema = createElementSchema(elementFieldType);
+        final long elementSize = calculateElementSize(parameters);
+        final PCollection<MElement> seeds;
+        if(parameters.rate > 0) {
+            final DoFn<Long, MElement> elementDoFn = new SequenceElementDoFn(elementFieldType, parameters, getTimestampAttribute());
+            GenerateSequence generateSequence = GenerateSequence
+                    .from(0)
+                    .withRate(parameters.rate, DateTimeUtil.getDuration(parameters.rateUnit, 1L));
+            if(elementSize > 0) {
+                generateSequence = generateSequence.to(elementSize);
+            }
+            seeds = begin
+                    .apply("GenerateSequence", generateSequence)
+                    .apply("Element", ParDo.of(elementDoFn))
+                    .setCoder(ElementCoder.of(elementSchema));
+        } else {
+            final DoFn<Long, MElement> elementDoFn;
+            if(elementSize > 0) {
+                elementDoFn = new BatchElementDoFn(elementFieldType, parameters, getTimestampAttribute(), elementSize);
+            } else {
+                elementDoFn = new BatchElementDoFn(elementFieldType, parameters, getTimestampAttribute(), elementSize);
+            }
+            final String nameSuffix = getTimestampAttribute() != null ? "WithTimestamp" : "";
+            seeds = begin
+                    .apply("Seed", Create.of(0L).withCoder(VarLongCoder.of()))
+                    .apply("Element" + nameSuffix, ParDo.of(elementDoFn))
+                    .setCoder(ElementCoder.of(elementSchema));
+        }
 
-        return fCollection;
+        PCollectionList<MElement> failures = PCollectionList.empty(begin.getPipeline());
+
+        final PCollection<MElement> filtered;
+        if(parameters.filter == null || parameters.filter.isJsonNull()) {
+            filtered = seeds;
+        } else {
+            filtered = seeds
+                    .apply("Filter", ParDo.of(new FilterDoFn(parameters.filter.toString())))
+                    .setCoder(seeds.getCoder());
+        }
+
+        final Schema outputSchema;
+        final PCollection<MElement> selected;
+        if(parameters.select == null || parameters.select.isEmpty()) {
+            outputSchema = elementSchema;
+            selected = filtered;
+        } else {
+            final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, elementSchema.getFields());
+            outputSchema = SelectFunction.createSchema(selectFunctions, parameters.flattenField);
+            final Select.Transform selectTransform = Select.of(
+                    getJobName(), getName(), selectFunctions, parameters.flattenField, getFailFast(), getOutputFailure());
+            final PCollectionTuple tuple = filtered
+                    .apply("Select", selectTransform);
+            selected = tuple
+                    .get(selectTransform.outputTag)
+                    .setCoder(ElementCoder.of(outputSchema));
+            failures = failures.and(tuple.get(selectTransform.failuresTag));
+        }
+
+        outputSchema.withType(outputType);
+        final PCollection<MElement> output = selected.apply(ParDo.of(new OutputDoFn(outputSchema, outputType)));
+        return MCollectionTuple
+                .of(output, outputSchema)
+                .failure(failures);
     }
 
-    private static class Source<ElementT> extends PTransform<PBegin, PCollection<ElementT>> {
+    @DoFn.BoundedPerElement
+    public static class BatchElementDoFn extends DoFn<Long, MElement> {
 
-        private final String elementType;
         private final List<String> elements;
         private final String from;
-        private final String to;
         private final Integer interval;
         private final DateTimeUtil.TimeUnit intervalUnit;
+        private final String timestampAttribute;
+        private final Schema.FieldType elementFieldType;
 
-        private final Long rate;
-        private final DateTimeUtil.TimeUnit rateUnit;
+        private final long size;
+        private final boolean enableSplit;
+        private final Integer splitSize;
 
-        private final String filterString;
+        BatchElementDoFn(
+                final Schema.FieldType elementFieldType,
+                final CreateSourceParameters parameters,
+                final String timestampAttribute,
+                final long elementSize) {
+
+            this.elementFieldType = elementFieldType;
+            this.elements = new ArrayList<>();
+            if(parameters.elements.isJsonArray()) {
+                for(final JsonElement element : parameters.elements) {
+                    this.elements.add(element.toString());
+                }
+            }
+            this.from = parameters.from;
+            this.interval = parameters.interval;
+            this.intervalUnit = parameters.intervalUnit;
+            this.timestampAttribute = timestampAttribute;
+
+            this.size = elementSize;
+            this.splitSize = parameters.splitSize;
+            this.enableSplit = true;
+        }
+
+        @Setup
+        public void setup() {
+        }
+
+        @Teardown
+        public void teardown() {
+
+        }
+
+        @ProcessElement
+        public void processElement(
+                final ProcessContext c,
+                final RestrictionTracker<OffsetRange, Long> tracker) {
+
+            final OffsetRange offsetRange = tracker.currentRestriction();
+            long position = offsetRange.getFrom();
+            while(tracker.tryClaim(position)) {
+                final Object elementValue;
+                if(!elements.isEmpty()) {
+                    elementValue = createElements(elementFieldType, elements, position);
+                } else {
+                    elementValue = createElement(elementFieldType, from, interval, intervalUnit, position);
+                }
+                final Map<String,Object> map = createElement(elementFieldType, elementValue, position);
+                if(timestampAttribute != null) {
+                    final Object timestampValue = map.get(timestampAttribute);
+                    final org.joda.time.Instant eventTime = DateTimeUtil.toJodaInstant(timestampValue);
+                    final MElement outputWithTimestamp = MElement.builder(map).withEventTime(eventTime).build();
+                    c.outputWithTimestamp(outputWithTimestamp, eventTime);
+                } else {
+                    final MElement output = MElement.of(map, c.timestamp());
+                    c.output(output);
+                }
+                position++;
+            }
+
+        }
+
+        @GetInitialRestriction
+        public OffsetRange getInitialRestriction()  {
+            final OffsetRange initialOffsetRange = new OffsetRange(0L, size);
+            LOG.info("Initial restriction: {}", initialOffsetRange);
+            return initialOffsetRange;
+        }
+
+        @GetRestrictionCoder
+        public Coder<OffsetRange> getRestrictionCoder() {
+            return OffsetRange.Coder.of();
+        }
+
+        @SplitRestriction
+        public void splitRestriction(
+                @Restriction OffsetRange restriction,
+                OutputReceiver<OffsetRange> splitReceiver) {
+
+            if(enableSplit) {
+                long size = (restriction.getTo() - restriction.getFrom()) / this.splitSize;
+                if(size == 0) {
+                    LOG.info("Not split restriction because size is zero");
+                    splitReceiver.output(new OffsetRange(restriction.getFrom(), restriction.getTo()));
+                    return;
+                }
+                long start = restriction.getFrom();
+                for(int i=1; i<this.splitSize; i++) {
+                    long end = i * size;
+                    final OffsetRange childRestriction = new OffsetRange(start, end);
+                    splitReceiver.output(childRestriction);
+                    start = end;
+                    LOG.info("create split restriction[{}]: {} for batch mode", i - 1, childRestriction);
+                }
+                final OffsetRange lastChildRestriction = new OffsetRange(start, restriction.getTo());
+                splitReceiver.output(lastChildRestriction);
+                LOG.info("create split restriction[{}]: {} for batch mode", this.splitSize - 1, lastChildRestriction);
+            } else {
+                LOG.info("Not split restriction: {} for batch mode", restriction);
+                splitReceiver.output(restriction);
+            }
+        }
+
+        @GetSize
+        public double getSize(@Restriction OffsetRange restriction) throws Exception {
+            final double size = restriction.getTo() - restriction.getFrom();
+            LOG.info("SDF get size: {}", size);
+            return size;
+        }
+
+    }
+
+    private static class SequenceElementDoFn extends DoFn<Long, MElement> {
+
+        private final Schema.FieldType elementFieldType;
+        private final List<String> elements;
+        private final String from;
+        private final Integer interval;
+        private final DateTimeUtil.TimeUnit intervalUnit;
+        private final String timestampAttribute;
+
+        SequenceElementDoFn(
+                final Schema.FieldType elementFieldType,
+                final CreateSourceParameters parameters,
+                final String timestampAttribute) {
+
+            this.elementFieldType = elementFieldType;
+            this.elements = new ArrayList<>();
+            for(final JsonElement element : parameters.elements) {
+                this.elements.add(element.toString());
+            }
+            this.from = parameters.from;
+            this.interval = parameters.interval;
+            this.intervalUnit = parameters.intervalUnit;
+            this.timestampAttribute = timestampAttribute;
+        }
+
+        @Setup
+        public void setup() {
+
+        }
+
+        @ProcessElement
+        public void processElement(final ProcessContext c) {
+            final long sequence = c.element();
+            final Object value;
+            if(!elements.isEmpty()) {
+                value = createElements(elementFieldType, elements, sequence);
+            } else {
+                value = createElement(elementFieldType, from, interval, intervalUnit, sequence);
+            }
+            final Map<String,Object> map = createElement(elementFieldType, value, sequence);
+            if(timestampAttribute != null) {
+                final Object eventTimestampValue = map.get(timestampAttribute);
+                final org.joda.time.Instant eventTimestamp = DateTimeUtil.toJodaInstant(eventTimestampValue);
+                final MElement output = MElement.builder(map).withEventTime(eventTimestamp).build();
+                c.outputWithTimestamp(output, eventTimestamp);
+            } else {
+                final MElement output = MElement.of(map, c.timestamp());
+                c.output(output);
+            }
+        }
+
+    }
+
+    private static class FilterDoFn extends DoFn<MElement, MElement> {
+
+        private final String conditionJsons;
+
+        private transient Filter.ConditionNode conditions;
+
+        FilterDoFn(final String conditionJsons) {
+            this.conditionJsons = conditionJsons;
+        }
+
+        @Setup
+        public void setup() {
+            this.conditions = Filter.parse(new Gson().fromJson(conditionJsons, JsonElement.class));
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final MElement element = c.element();
+            if(Filter.filter(conditions, element.asPrimitiveMap())) {
+                c.output(element);
+            }
+        }
+    }
+
+    private static class SelectDoFn extends DoFn<MElement, MElement> {
+
+        private final Schema schema;
         private final List<SelectFunction> selectFunctions;
         private final String flattenField;
 
-        private final Integer splitSize;
+        SelectDoFn(
+                final Schema schema,
+                final List<SelectFunction> selectFunctions,
+                final String flattenField) {
 
-        private final DataType outputType;
-        private final Schema outputSchema;
-
-
-        Source(final CreateSourceParameters parameters,
-               final DataType outputType,
-               final Schema outputSchema) {
-
-            this.elementType = parameters.getType();
-            this.elements = parameters.getElements();
-            this.from = parameters.getFrom();
-            this.to = parameters.getTo();
-            this.interval = parameters.getInterval();
-            this.intervalUnit = parameters.getIntervalUnit();
-            this.rate = parameters.getRate();
-            this.rateUnit = parameters.getRateUnit();
-
-            if(parameters.getFilter() != null && (parameters.getFilter().isJsonObject() || parameters.getFilter().isJsonArray())) {
-                this.filterString = parameters.getFilter().toString();
-            } else {
-                this.filterString = null;
-            }
-            if(parameters.getSelect() != null && parameters.getSelect().isJsonArray()) {
-                final Schema elementRowSchema = createElementRowSchema(elementType);
-                this.selectFunctions = SelectFunction.of(parameters.getSelect(), elementRowSchema.getFields(), outputType);
-            } else {
-                this.selectFunctions = new ArrayList<>();
-            }
-            this.flattenField = parameters.getFlattenField();
-
-            this.splitSize = parameters.getSplitSize();
-
-            this.outputType = outputType;
-            this.outputSchema = outputSchema;
+            this.schema = schema;
+            this.selectFunctions = selectFunctions;
+            this.flattenField = flattenField;
         }
 
-        @Override
-        public PCollection<ElementT> expand(PBegin begin) {
-            final org.apache.avro.Schema elementSchema = createElementAvroSchema(elementType);
-            final long elementSize = calculateElementSize(elementType, elements, from, to, interval, intervalUnit);
-            final AvroGenericCoder elementCoder = AvroGenericCoder.of(elementSchema);
-            final PCollection<UnionValue> seeds;
-            if(this.rate > 0) {
-                final DoFn<Long, UnionValue> elementDoFn = new SequenceElementDoFn(
-                        elementType, elements, from, interval, intervalUnit);
-                GenerateSequence generateSequence = GenerateSequence
-                        .from(0)
-                        .withRate(rate, DateTimeUtil.getDuration(rateUnit, 1L));
-                if(elementSize > 0) {
-                    generateSequence = generateSequence.to(elementSize);
-                }
-                seeds = begin
-                        .apply("GenerateSequence", generateSequence)
-                        .apply("Element", ParDo.of(elementDoFn))
-                        .setCoder(UnionCoder.of(List.of(elementCoder)));
-            } else {
-                final DoFn<Long, UnionValue> elementDoFn;
-                if(elementSize > 0) {
-                    elementDoFn = new BatchElementDoFn(
-                            elementType, elements, from, interval, intervalUnit, elementSize, splitSize);
-                } else {
-                    elementDoFn = new BatchElementDoFn(
-                            elementType, elements, from, interval, intervalUnit, elementSize, splitSize);
-                }
-                seeds = begin
-                        .apply("Seed", Create.of(0L).withCoder(VarLongCoder.of()))
-                        .apply("Element", ParDo.of(elementDoFn))
-                        .setCoder(UnionCoder.of(List.of(elementCoder)));
-            }
-
-            final PCollection<UnionValue> filtered;
-            if(filterString == null) {
-                filtered = seeds;
-            } else {
-                filtered = seeds
-                        .apply("Filter", ParDo.of(new FilterDoFn(filterString)))
-                        .setCoder(seeds.getCoder());
-            }
-
-            final Coder<ElementT> outputCoder = UnionValue.createCoderWithRowSchema(outputSchema, outputType);
-            if(selectFunctions.isEmpty()) {
-                return filtered
-                        .apply("Values", ParDo.of(new ValueDoFn<ElementT>(outputType, outputSchema)))
-                        .setCoder(outputCoder);
-            } else {
-                return filtered
-                        .apply("Select", ParDo.of(new SelectDoFn<ElementT>(
-                                outputType, outputSchema, selectFunctions, flattenField)))
-                        .setCoder(outputCoder);
-            }
-        }
-
-        private static long calculateElementSize(
-                final String elementType,
-                final List<String> elements,
-                final String from,
-                final String to,
-                final Integer interval,
-                final DateTimeUtil.TimeUnit intervalUnit) {
-
-            if(!elements.isEmpty()) {
-                return elements.size();
-            }
-
-            if(to == null) {
-                return -1L;
-            }
-            switch (elementType) {
-                case "float", "float32", "double", "float64" -> {
-                    final double fromN = Double.parseDouble(from);
-                    final double toN   = Double.parseDouble(to);
-                    final Double size = (toN - fromN) / interval;
-                    return size.longValue();
-                }
-                case "date" -> {
-                    final LocalDate fromDate = DateTimeUtil.toLocalDate(from);
-                    final LocalDate toDate   = DateTimeUtil.toLocalDate(to);
-                    LocalDate currentDate = LocalDate.from(fromDate);
-                    long count = 0;
-                    while(currentDate.isBefore(toDate)) {
-                        count++;
-                        currentDate = switch (intervalUnit) {
-                            case day -> currentDate.plusDays(interval);
-                            case week -> currentDate.plusWeeks(interval);
-                            case month -> currentDate.plusMonths(interval);
-                            case year -> currentDate.plusYears(interval);
-                            default -> throw new IllegalArgumentException();
-                        };
-                    }
-                    return count;
-                }
-                case "time" -> {
-                    final LocalTime fromTime = DateTimeUtil.toLocalTime(from);
-                    final LocalTime toTime   = DateTimeUtil.toLocalTime(to);
-                    LocalTime currentTime = LocalTime.from(fromTime);
-                    long count = 0;
-                    while(currentTime.isBefore(toTime)) {
-                        count++;
-                        switch (intervalUnit) {
-                            case second -> currentTime = currentTime.plusSeconds(interval);
-                            case minute -> currentTime = currentTime.plusMinutes(interval);
-                            case hour -> currentTime = currentTime.plusHours(interval);
-                            default -> throw new IllegalArgumentException();
-                        }
-                    }
-                    return count;
-                }
-                case "timestamp" -> {
-                    final Instant fromInstant = DateTimeUtil.toInstant(from);
-                    final Instant toInstant   = DateTimeUtil.toInstant(to);
-                    Instant currentInstant = Instant.from(fromInstant);
-                    long count = 0;
-                    while(currentInstant.isBefore(toInstant)) {
-                        count++;
-                        switch (intervalUnit) {
-                            case second -> currentInstant = currentInstant.plusSeconds(interval);
-                            case minute -> currentInstant = currentInstant.plus(interval, ChronoUnit.MINUTES);
-                            case hour -> currentInstant = currentInstant.plus(interval, ChronoUnit.HOURS);
-                            case day -> currentInstant = currentInstant.plus(interval, ChronoUnit.DAYS);
-                            case week -> currentInstant = currentInstant.plus(interval, ChronoUnit.WEEKS);
-                            case month -> currentInstant = currentInstant.plus(interval, ChronoUnit.MONTHS);
-                            case year -> currentInstant = currentInstant.plus(interval, ChronoUnit.YEARS);
-                            default -> throw new IllegalArgumentException();
-                        }
-                    }
-                    return count;
-                }
-                default -> {
-                    final long fromN = Long.parseLong(from);
-                    final long toN   = Long.parseLong(to);
-                    return (toN - fromN) / interval;
+        @Setup
+        public void setup() {
+            this.schema.setup();
+            if(!selectFunctions.isEmpty()) {
+                for(final SelectFunction selectFunction : selectFunctions) {
+                    selectFunction.setup();
                 }
             }
         }
 
-        private static Object createElement(
-                final String elementType,
-                final List<String> elements,
-                final String from,
-                final Integer interval,
-                final DateTimeUtil.TimeUnit intervalUnit,
-                final Long sequence) {
-
-            final String elementValue;
-            if(!elements.isEmpty()) {
-                elementValue = elements.get(sequence.intValue());
-            } else {
-                elementValue = switch (elementType) {
-                    case "date" -> {
-                        final LocalDate fromDate = DateTimeUtil.toLocalDate(from);
-                        final long plus = interval * sequence;
-                        final LocalDate lastDate = switch (intervalUnit) {
-                            case day -> fromDate.plusDays(plus);
-                            case week -> fromDate.plusWeeks(plus);
-                            case month -> fromDate.plusMonths(plus);
-                            case year -> fromDate.plusYears(plus);
-                            default -> throw new IllegalArgumentException();
-                        };
-                        yield lastDate.toString();
-                    }
-                    case "time" -> {
-                        final LocalTime fromTime = DateTimeUtil.toLocalTime(from);
-                        final long plus = interval * sequence;
-                        final LocalTime lastDate = switch (intervalUnit) {
-                            case second -> fromTime.plusSeconds(plus);
-                            case minute -> fromTime.plusMinutes(plus);
-                            case hour -> fromTime.plusHours(plus);
-                            default -> throw new IllegalArgumentException();
-                        };
-                        yield lastDate.toString();
-                    }
-                    case "timestamp" -> {
-                        final Instant fromInstant = DateTimeUtil.toInstant(from);
-                        final long plus = interval * sequence;
-                        final Instant lastInstant = switch (intervalUnit) {
-                            case second -> fromInstant.plusSeconds(plus);
-                            case minute -> fromInstant.plus(plus, ChronoUnit.MINUTES);
-                            case hour -> fromInstant.plus(plus, ChronoUnit.HOURS);
-                            case day -> fromInstant.plus(plus, ChronoUnit.DAYS);
-                            case week -> fromInstant.plus(plus, ChronoUnit.WEEKS);
-                            case month -> fromInstant.plus(plus, ChronoUnit.MONTHS);
-                            case year -> fromInstant.plus(plus, ChronoUnit.YEARS);
-                            default -> throw new IllegalArgumentException();
-                        };
-                        yield lastInstant.toString();
-                    }
-                    case "float", "float32", "double", "float64" -> {
-                        final double fromN = Double.parseDouble(from);
-                        final double lastN = fromN + interval * sequence;
-                        yield Double.toString(lastN);
-                    }
-                    default -> {
-                        final long fromN = Long.parseLong(from);
-                        final long lastN = fromN + interval * sequence;
-                        yield Long.toString(lastN);
-                    }
-                };
+        @ProcessElement
+        public void processElement(final ProcessContext c) {
+            final MElement element = c.element();
+            if(element == null) {
+                return;
             }
-
-            return switch (elementType) {
-                case "string" -> elementValue;
-                case "date" -> Long.valueOf(DateTimeUtil.toLocalDate(elementValue).toEpochDay()).intValue();
-                case "time" -> DateTimeUtil.toLocalTime(elementValue).toNanoOfDay() / 1000L;
-                case "timestamp" -> DateTimeUtil.toJodaInstant(elementValue).getMillis() * 1000L;
-                case "int32", "int", "integer" -> Integer.parseInt(elementValue);
-                case "int64", "long" -> Long.parseLong(elementValue);
-                case "float32", "float" -> Float.parseFloat(elementValue);
-                case "float64", "double" -> Double.parseDouble(elementValue);
-                default -> throw new IllegalArgumentException();
-            };
-        }
-
-        @BoundedPerElement
-        public static class BatchElementDoFn extends DoFn<Long, UnionValue> {
-
-            private final String elementType;
-            private final List<String> elements;
-            private final String from;
-            private final Integer interval;
-            private final DateTimeUtil.TimeUnit intervalUnit;
-
-            private final long size;
-            private final boolean enableSplit;
-            private final Integer splitSize;
-
-            private transient org.apache.avro.Schema runtimeElementSchema;
-
-            BatchElementDoFn(
-                    final String elementType,
-                    final List<String> elements,
-                    final String from,
-                    final int interval,
-                    final DateTimeUtil.TimeUnit intervalUnit,
-                    final long size,
-                    final Integer splitSize) {
-
-                this.elementType = elementType;
-                this.elements = elements;
-                this.from = from;
-                this.interval = interval;
-                this.intervalUnit = intervalUnit;
-
-                this.size = size;
-                this.splitSize = splitSize;
-                this.enableSplit = true;
-            }
-
-            @Setup
-            public void setup() {
-                this.runtimeElementSchema = createElementAvroSchema(elementType);
-            }
-
-            @Teardown
-            public void teardown() {
-
-            }
-
-            @ProcessElement
-            public void processElement(
-                    final ProcessContext c,
-                    final RestrictionTracker<OffsetRange, Long> tracker) {
-
-                final OffsetRange offsetRange = tracker.currentRestriction();
-                long position = offsetRange.getFrom();
-                while(tracker.tryClaim(position)) {
-                    final Object elementValue = createElement(elementType, elements, from, interval, intervalUnit, position);
-                    final UnionValue output = createElementUnionValue(runtimeElementSchema, elementValue, position);
-                    c.output(output);
-                    position++;
-                }
-
-            }
-
-            @GetInitialRestriction
-            public OffsetRange getInitialRestriction()  {
-                final OffsetRange initialOffsetRange = new OffsetRange(0L, size);
-                LOG.info("Initial restriction: {}", initialOffsetRange);
-                return initialOffsetRange;
-            }
-
-            @GetRestrictionCoder
-            public Coder<OffsetRange> getRestrictionCoder() {
-                return OffsetRange.Coder.of();
-            }
-
-            @SplitRestriction
-            public void splitRestriction(
-                    @Restriction OffsetRange restriction,
-                    OutputReceiver<OffsetRange> splitReceiver) {
-
-                if(enableSplit) {
-                    long size = (restriction.getTo() - restriction.getFrom()) / this.splitSize;
-                    if(size == 0) {
-                        LOG.info("Not split restriction because size is zero");
-                        splitReceiver.output(new OffsetRange(restriction.getFrom(), restriction.getTo()));
-                        return;
-                    }
-                    long start = restriction.getFrom();
-                    for(int i=1; i<this.splitSize; i++) {
-                        long end = i * size;
-                        final OffsetRange childRestriction = new OffsetRange(start, end);
-                        splitReceiver.output(childRestriction);
-                        start = end;
-                        LOG.info("create split restriction[{}]: {} for batch mode", i - 1, childRestriction);
-                    }
-                    final OffsetRange lastChildRestriction = new OffsetRange(start, restriction.getTo());
-                    splitReceiver.output(lastChildRestriction);
-                    LOG.info("create split restriction[{}]: {} for batch mode", this.splitSize - 1, lastChildRestriction);
-                } else {
-                    LOG.info("Not split restriction: {} for batch mode", restriction);
-                    splitReceiver.output(restriction);
-                }
-            }
-
-            @GetSize
-            public double getSize(@Restriction OffsetRange restriction) throws Exception {
-                final double size = restriction.getTo() - restriction.getFrom();
-                LOG.info("SDF get size: {}", size);
-                return size;
-            }
-
-        }
-
-        private static class SequenceElementDoFn extends DoFn<Long, UnionValue> {
-
-            private final String elementType;
-            private final List<String> elements;
-            private final String from;
-            private final Integer interval;
-            private final DateTimeUtil.TimeUnit intervalUnit;
-
-            private transient org.apache.avro.Schema runtimeSchema;
-
-            SequenceElementDoFn(
-                    final String elementType,
-                    final List<String> elements,
-                    final String from,
-                    final Integer interval,
-                    final DateTimeUtil.TimeUnit intervalUnit) {
-
-                this.elementType = elementType;
-                this.elements = elements;
-                this.from = from;
-                this.interval = interval;
-                this.intervalUnit = intervalUnit;
-            }
-
-
-            @Setup
-            public void setup() {
-                this.runtimeSchema = createElementAvroSchema(elementType);// UnionValue.convertRowSchema(elementSchema, outputType);
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) {
-                final Long sequence = c.element();
-                final Object value = createElement(elementType, elements, from, interval, intervalUnit, sequence);
-                final UnionValue unionValue = createElementUnionValue(runtimeSchema, value, sequence);
-                c.output(unionValue);
-            }
-
-        }
-
-        private static class FilterDoFn extends DoFn<UnionValue, UnionValue> {
-
-            private final String conditionJsons;
-
-            private transient Filter.ConditionNode conditions;
-
-            FilterDoFn(final String conditionJsons) {
-                this.conditionJsons = conditionJsons;
-            }
-
-            @Setup
-            public void setup() {
-                this.conditions = Filter.parse(new Gson().fromJson(conditionJsons, JsonElement.class));
-            }
-
-            @ProcessElement
-            public void processElement(ProcessContext c) {
-                final UnionValue element = c.element();
-                if(Filter.filter(element, UnionValue::getFieldValue, conditions)) {
-                    c.output(element);
-                }
-            }
-        }
-
-        private static class SelectDoFn<ElementT> extends DoFn<UnionValue, ElementT> {
-
-            private final DataType outputType;
-            private final Schema inputSchema;
-            private final List<SelectFunction> selectFunctions;
-            private final String flattenField;
-
-            private transient Object runtimeSchema;
-
-            SelectDoFn(
-                    final DataType outputType,
-                    final Schema inputSchema,
-                    final List<SelectFunction> selectFunctions,
-                    final String flattenField) {
-
-                this.outputType = outputType;
-                this.inputSchema = inputSchema;
-                this.selectFunctions = selectFunctions;
-                this.flattenField = flattenField;
-            }
-
-            @Setup
-            public void setup() {
-                this.runtimeSchema = UnionValue.convertRowSchema(inputSchema, outputType);
-                if(!selectFunctions.isEmpty()) {
-                    for(final SelectFunction selectFunction : selectFunctions) {
-                        selectFunction.setup();
-                    }
-                }
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) {
-                final UnionValue element = c.element();
-                if(element == null) {
-                    return;
-                }
-                final Map<String, Object> values = SelectFunction.apply(selectFunctions, element, outputType, c.timestamp());
-                if(flattenField == null) {
-                    final ElementT output = UnionValue.create(runtimeSchema, values, outputType);
-                    c.output(output);
-                } else {
-                    final List<?> flattenList = Optional.ofNullable((List<?>) values.get(flattenField)).orElseGet(ArrayList::new);
-                    for(final Object value : flattenList) {
-                        final Map<String, Object> flattenValues = new HashMap<>(values);
-                        flattenValues.put(flattenField, value);
-                        final ElementT output = UnionValue.create(runtimeSchema, flattenValues, outputType);
-                        c.output(output);
-                    }
-                }
-            }
-
-        }
-
-        private static class ValueDoFn<ElementT> extends DoFn<UnionValue, ElementT> {
-
-            private final DataType outputType;
-            private final Schema inputSchema;
-
-            private transient Object runtimeSchema;
-
-            ValueDoFn(
-                    final DataType outputType,
-                    final Schema inputSchema) {
-
-                this.outputType = outputType;
-                this.inputSchema = inputSchema;
-            }
-
-            @Setup
-            public void setup() {
-                this.runtimeSchema = UnionValue.convertRowSchema(inputSchema, outputType);
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) {
-                final ElementT output = UnionValue.convert(runtimeSchema, c.element(), outputType);
+            final Map<String, Object> values = SelectFunction.apply(selectFunctions, new HashMap<>(element.asPrimitiveMap()), c.timestamp());
+            if(flattenField == null) {
+                final MElement output = MElement.of(values, c.timestamp());
                 c.output(output);
+            } else {
+                final List<?> flattenList = Optional.ofNullable((List<?>) values.get(flattenField)).orElseGet(ArrayList::new);
+                for(final Object value : flattenList) {
+                    final Map<String, Object> flattenValues = new HashMap<>(values);
+                    flattenValues.put(flattenField, value);
+                    final MElement output = MElement.of(flattenValues, c.timestamp());
+                    c.output(output);
+                }
             }
-
         }
 
-        private static UnionValue createElementUnionValue(
-                final org.apache.avro.Schema runtimeSchema,
-                final Object value,
-                final long sequence) {
+    }
 
-            final org.joda.time.Instant timestamp = org.joda.time.Instant.now();
+    private static class OutputDoFn extends DoFn<MElement, MElement> {
+
+        private final Schema schema;
+        private final DataType outputType;
+
+        OutputDoFn(final Schema schema, final DataType outputType) {
+            this.schema = schema;
+            this.outputType = outputType;
+        }
+
+        @Setup
+        public void setup() {
+            this.schema.setup();
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final MElement input = c.element();
+            final MElement output = switch (outputType) {
+                case ELEMENT -> input;
+                case ROW -> {
+                    final Row row = ElementToRowConverter.convert(schema, input);
+                    yield MElement.of(row, input.getEpochMillis());
+                }
+                case AVRO -> {
+                    final GenericRecord record = ElementToAvroConverter.convert(schema, input);
+                    yield MElement.of(record, input.getEpochMillis());
+                }
+                default -> throw new IllegalArgumentException("Create source module does not support outputType: " + outputType);
+            };
+
+            c.output(output);
+        }
+
+    }
+
+    private static Schema createElementSchema(final Schema.FieldType elementFieldType) {
+        return switch (elementFieldType.getType()) {
+            case element -> elementFieldType.getElementSchema();
+            default -> Schema.of(List.of(
+                    Schema.Field.of("sequence", Schema.FieldType.INT64),
+                    Schema.Field.of("timestamp", Schema.FieldType.TIMESTAMP),
+                    Schema.Field.of("value", elementFieldType)
+            ));
+        };
+    }
+
+    private static long calculateElementSize(CreateSourceParameters parameters) {
+
+        if(!parameters.elements.isEmpty()) {
+            return parameters.elements.size();
+        }
+
+        if(parameters.to == null) {
+            return -1L;
+        }
+        switch (parameters.elementType) {
+            case date -> {
+                final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(parameters.intervalUnit);
+                final LocalDate fromDate = DateTimeUtil.toLocalDate(parameters.from);
+                final LocalDate toDate   = DateTimeUtil.toLocalDate(parameters.to);
+                LocalDate currentDate = LocalDate.from(fromDate);
+                long count = 0;
+                while(currentDate.isBefore(toDate)) {
+                    count++;
+                    currentDate = currentDate.plus(parameters.interval, chronoUnit);
+                }
+                if(currentDate.isEqual(toDate)) {
+                    count++;
+                }
+                return count;
+            }
+            case time -> {
+                final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(parameters.intervalUnit);
+                final LocalTime fromTime = DateTimeUtil.toLocalTime(parameters.from);
+                final LocalTime toTime   = DateTimeUtil.toLocalTime(parameters.to);
+                LocalTime currentTime = LocalTime.from(fromTime);
+                long count = 0;
+                while(currentTime.isBefore(toTime)) {
+                    count++;
+                    currentTime = currentTime.plus(parameters.interval, chronoUnit);
+                }
+                if(currentTime.equals(toTime)) {
+                    count++;
+                }
+                return count;
+            }
+            case timestamp -> {
+                final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(parameters.intervalUnit);
+                final Instant fromInstant = DateTimeUtil.toInstant(parameters.from);
+                final Instant toInstant   = DateTimeUtil.toInstant(parameters.to);
+                Instant currentInstant = Instant.from(fromInstant);
+                long count = 0;
+                while(currentInstant.isBefore(toInstant)) {
+                    count++;
+                    currentInstant = currentInstant.plus(parameters.interval, chronoUnit);
+                }
+                if(currentInstant.equals(toInstant)) {
+                    count++;
+                }
+                return count;
+            }
+            case float16, float32, float64, decimal -> {
+                final double fromN = Double.parseDouble(parameters.from);
+                final double toN   = Double.parseDouble(parameters.to);
+                final Double diff = (toN - fromN + parameters.interval) / parameters.interval;
+                return diff.longValue();
+            }
+            default -> {
+                final long fromN = Long.parseLong(parameters.from);
+                final long toN   = Long.parseLong(parameters.to);
+                return  (toN - fromN + parameters.interval) / parameters.interval;
+            }
+        }
+    }
+
+    private static Object createElements(
+            final Schema.FieldType elementFieldType,
+            final List<String> elements,
+            final Long sequence) {
+
+        final String elementValue = elements.get(sequence.intValue());
+        return switch (elementFieldType.getType()) {
+            case string -> elementValue;
+            case bytes -> ByteBuffer.wrap(Base64.getDecoder().decode(elementValue));
+            case date -> Long.valueOf(DateTimeUtil.toLocalDate(elementValue).toEpochDay()).intValue();
+            case time -> DateTimeUtil.toLocalTime(elementValue).toNanoOfDay() / 1000L;
+            case timestamp -> DateTimeUtil.toJodaInstant(elementValue).getMillis() * 1000L;
+            case int16 -> Short.parseShort(elementValue);
+            case int32 -> Integer.parseInt(elementValue);
+            case int64 -> Long.parseLong(elementValue);
+            case float32 -> Float.parseFloat(elementValue);
+            case float64 -> Double.parseDouble(elementValue);
+            case element -> JsonToElementConverter.convert(elementFieldType.getElementSchema(), elementValue);
+            default -> throw new IllegalArgumentException("Not supported element type: " + elementFieldType.getType());
+        };
+    }
+
+    private static Object createElement(
+            final Schema.FieldType elementFieldType,
+            final String from,
+            final Integer interval,
+            final DateTimeUtil.TimeUnit intervalUnit,
+            final Long sequence) {
+
+        return switch (elementFieldType.getType()) {
+            case date -> {
+                final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(intervalUnit);
+                final LocalDate fromDate = DateTimeUtil.toLocalDate(from);
+                final long plus = interval * sequence;
+                final LocalDate lastDate = fromDate.plus(plus, chronoUnit);
+                yield Long.valueOf(lastDate.toEpochDay()).intValue();
+            }
+            case time -> {
+                final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(intervalUnit);
+                final LocalTime fromTime = DateTimeUtil.toLocalTime(from);
+                final long plus = interval * sequence;
+                final LocalTime lastTime = fromTime.plus(plus, chronoUnit);
+                yield lastTime.toNanoOfDay() / 1000L;
+            }
+            case timestamp -> {
+                final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(intervalUnit);
+                final Instant fromInstant = DateTimeUtil.toInstant(from);
+                final long plus = interval * sequence;
+                final Instant lastInstant = fromInstant.plus(plus, chronoUnit);
+                yield DateTimeUtil.toEpochMicroSecond(lastInstant);
+            }
+            case float32 -> {
+                final float fromN = Float.parseFloat(from);
+                yield fromN + interval * sequence;
+            }
+            case float64 -> {
+                final double fromN = Double.parseDouble(from);
+                yield fromN + interval * sequence;
+            }
+            case decimal -> {
+                final double fromN = Double.parseDouble(from);
+                final double value = fromN + interval * sequence;
+                yield BigDecimal.valueOf(value);
+            }
+            case int32 -> {
+                final int fromN = Integer.parseInt(from);
+                yield fromN + interval * sequence;
+            }
+            case int64 -> {
+                final long fromN = Long.parseLong(from);
+                yield fromN + interval * sequence;
+            }
+            default -> {
+                final long fromN = Long.parseLong(from);
+                final long lastN = fromN + interval * sequence;
+                yield Long.toString(lastN);
+            }
+        };
+    }
+
+    private static Map<String,Object> createElement(
+            final Schema.FieldType elementFieldType,
+            final Object value,
+            final long sequence) {
+
+        if(Schema.Type.element.equals(elementFieldType.getType())) {
+            return (Map<String, Object>) value;
+        } else {
+            final long epochMicros = DateTimeUtil.toEpochMicroSecond(Instant.now());
             final Map<String, Object> values = new HashMap<>();
             values.put("sequence", sequence);
-            values.put("timestamp", timestamp.getMillis() * 1000L);
+            values.put("timestamp", epochMicros);
             values.put("value", value);
 
-            final GenericRecord object = AvroSchemaUtil.create(runtimeSchema, values);
-            return new UnionValue(0, DataType.AVRO, timestamp.getMillis(), object);
+            return values;
         }
-    }
-
-    private static Schema createElementRowSchema(final String elementType) {
-        final List<Schema.Field> fields = new ArrayList<>();
-        fields.add(Schema.Field.of("sequence", Schema.FieldType.INT64));
-        fields.add(Schema.Field.of("timestamp", Schema.FieldType.DATETIME));
-        final Schema.FieldType valueFieldType = getElementFieldType(elementType);
-        fields.add(Schema.Field.of("value", valueFieldType));
-        return Schema.builder().addFields(fields).build();
-    }
-
-    private static org.apache.avro.Schema createElementAvroSchema(final String elementType) {
-        return RowToRecordConverter.convertSchema(createElementRowSchema(elementType));
-    }
-
-    private static Schema.FieldType getElementFieldType(final String elementType) {
-        final Schema.FieldType elementFieldType = switch (elementType) {
-            case "short", "int16" -> Schema.FieldType.INT16;
-            case "int", "int32", "integer" -> Schema.FieldType.INT32;
-            case "long", "int64" -> Schema.FieldType.INT64;
-            case "float", "float32" -> Schema.FieldType.FLOAT;
-            case "double", "float64" -> Schema.FieldType.DOUBLE;
-            case "numeric", "decimal" -> Schema.FieldType.DECIMAL;
-            case "bool", "boolean" -> Schema.FieldType.BOOLEAN;
-            case "time" -> CalciteUtils.TIME;
-            case "date" -> CalciteUtils.DATE;
-            case "datetime" -> Schema.FieldType.logicalType(SqlTypes.DATETIME);
-            case "timestamp" -> Schema.FieldType.DATETIME;
-            default -> null;
-        };
-
-        if(elementFieldType == null) {
-            return null;
-        }
-
-        return elementFieldType.withNullable(true);
     }
 
 }

@@ -1,6 +1,7 @@
 package com.mercari.solution.util;
 
 import com.google.cloud.Timestamp;
+import com.google.type.TimeOfDay;
 import org.apache.commons.lang3.StringUtils;
 import org.joda.time.*;
 import org.joda.time.Duration;
@@ -114,6 +115,31 @@ public class DateTimeUtil {
         }
     }
 
+    public static LocalDate toLocalDate(final com.google.cloud.Date date) {
+        return LocalDate.of(date.getYear(), date.getMonth(), date.getDayOfMonth());
+    }
+
+    public static Instant toInstant(final Object value) {
+        return switch (value) {
+            case String s -> toInstant(s);
+            case Number n -> toInstant(n.longValue());
+            case Instant i -> i;
+            case org.joda.time.Instant i -> Instant.ofEpochMilli(i.getMillis());
+            case com.google.cloud.Timestamp t -> Instant.ofEpochSecond(t.getSeconds(), t.getNanos());
+            case null -> null;
+            default -> throw new IllegalArgumentException("Could not convert value: " + value + ", class: " + value.getClass() + " to java.time.Instant");
+        };
+    }
+
+    public static Instant toInstant(final Long microSeconds) {
+        if(microSeconds == null) {
+            return null;
+        }
+        long second = microSeconds / 1000_000L;
+        long nano   = microSeconds % 1000_000L * 1000L;
+        return Instant.ofEpochSecond(second, Math.toIntExact(nano));
+    }
+
     public static Instant toInstant(final String text) {
         return toInstant(text, false);
     }
@@ -179,6 +205,12 @@ public class DateTimeUtil {
                 throw new IllegalArgumentException("Illegal timestamp string: " + text);
             }
         }
+    }
+
+    public static org.joda.time.Instant toJodaInstant(final Object value) {
+        final Instant timestamp = toInstant(value);
+        final long epochMillis = toEpochMicroSecond(timestamp) / 1000L;
+        return org.joda.time.Instant.ofEpochMilli(epochMillis);
     }
 
     public static org.joda.time.Instant toJodaInstant(final Instant instant) {
@@ -277,6 +309,26 @@ public class DateTimeUtil {
         return Long.valueOf(LocalDate.of(date.getYear(), date.getMonth(), date.getDayOfMonth()).toEpochDay()).intValue();
     }
 
+    public static Integer toEpochDay(final com.google.type.Date date) {
+        if(date == null) {
+            return null;
+        }
+        long epochDay = LocalDate.of(date.getYear(), date.getMonth(), date.getDay()).toEpochDay();
+        return Long.valueOf(epochDay).intValue();
+    }
+
+    public static Integer toEpochDay(final String text) {
+        if(text == null) {
+            return null;
+        }
+        final LocalDate localDate = toLocalDate(text);
+        if(localDate == null) {
+            return null;
+        }
+        long epochDay = LocalDate.of(localDate.getYear(), localDate.getMonth(), localDate.getDayOfMonth()).toEpochDay();
+        return Long.valueOf(epochDay).intValue();
+    }
+
     public static Integer toMilliOfDay(final LocalTime localTime) {
         if(localTime == null) {
             return null;
@@ -289,6 +341,23 @@ public class DateTimeUtil {
             return null;
         }
         return localTime.toNanoOfDay() / 1000;
+    }
+
+    public static Long toMicroOfDay(final TimeOfDay timeOfDay) {
+        if(timeOfDay == null) {
+            return null;
+        }
+        final LocalTime localTime = LocalTime
+                .of(timeOfDay.getHours(), timeOfDay.getMinutes(), timeOfDay.getSeconds(), timeOfDay.getNanos());
+        return toMicroOfDay(localTime);
+    }
+
+    public static Long toMicroOfDay(final String text) {
+        if(text == null) {
+            return null;
+        }
+        final LocalTime localTime = toLocalTime(text);
+        return toMicroOfDay(localTime);
     }
 
     public static Long toEpochMicroSecond(final ReadableDateTime datetime) {
@@ -321,6 +390,16 @@ public class DateTimeUtil {
 
     public static long toEpochMicroSecond(final long seconds, final int nanos) {
         return seconds * 1000_000 + nanos / 1000;
+    }
+
+    public static long toEpochMicroSecond(Double epoch) {
+        if(epoch == null) {
+            return 0L;
+        }
+        final BigDecimal decimal = BigDecimal.valueOf(epoch);
+        final long second = decimal.longValue();
+        final int nanos = decimal.subtract(BigDecimal.valueOf(decimal.intValue())).intValue();
+        return toEpochMicroSecond(second, nanos);
     }
 
     public static Long toEpochMicroSecond(final String text) {

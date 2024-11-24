@@ -10,11 +10,13 @@ import com.google.protobuf.NullValue;
 import com.google.protobuf.Timestamp;
 import com.google.protobuf.util.Timestamps;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.converter.DocumentToMapConverter;
+import com.mercari.solution.util.schema.converter.DocumentToMapConverter;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
 import org.joda.time.Instant;
 
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.*;
@@ -211,6 +213,31 @@ public class DocumentSchemaUtil {
         }
     }
 
+    public static BigDecimal getAsBigDecimal(final Document document, final String fieldName) {
+        final Value value = document.getFieldsOrDefault(fieldName, null);
+        switch (value.getValueTypeCase()) {
+            case BOOLEAN_VALUE -> {
+                return BigDecimal.valueOf(value.getBooleanValue() ? 1D : 0D);
+            }
+            case INTEGER_VALUE -> {
+                return BigDecimal.valueOf(value.getIntegerValue());
+            }
+            case DOUBLE_VALUE -> {
+                return BigDecimal.valueOf(value.getDoubleValue());
+            }
+            case STRING_VALUE -> {
+                try {
+                    return BigDecimal.valueOf(Double.valueOf(value.getStringValue()));
+                } catch (Exception e) {
+                    return null;
+                }
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
     public static byte[] getBytes(final Document document, final String fieldName) {
         if(document == null || fieldName == null) {
             return null;
@@ -220,25 +247,31 @@ public class DocumentSchemaUtil {
         }
 
         final Value value = document.getFieldsOrThrow(fieldName);
-        switch(value.getValueTypeCase()) {
-            case REFERENCE_VALUE:
-            case STRING_VALUE:
-                return Base64.getDecoder().decode(value.getStringValue());
-            case BYTES_VALUE:
-                return value.getBytesValue().toByteArray();
-            case INTEGER_VALUE:
-            case DOUBLE_VALUE:
-            case BOOLEAN_VALUE:
-            case TIMESTAMP_VALUE:
-            case GEO_POINT_VALUE:
-            case MAP_VALUE:
-            case ARRAY_VALUE:
-            case NULL_VALUE:
-            case VALUETYPE_NOT_SET:
-            default:
-                return null;
+        return switch(value.getValueTypeCase()) {
+            case REFERENCE_VALUE, STRING_VALUE -> Base64.getDecoder().decode(value.getStringValue());
+            case BYTES_VALUE -> value.getBytesValue().toByteArray();
+            default -> null;
+        };
+    }
+
+    public static ByteBuffer getAsBytes(final Document document, final String fieldName) {
+        if(document == null || fieldName == null) {
+            return null;
+        }
+        if(!document.containsFields(fieldName)) {
+            return null;
         }
 
+        final Value value = document.getFieldsOrThrow(fieldName);
+        final byte[] bytes = switch(value.getValueTypeCase()) {
+            case REFERENCE_VALUE, STRING_VALUE -> Base64.getDecoder().decode(value.getStringValue());
+            case BYTES_VALUE -> value.getBytesValue().toByteArray();
+            default -> null;
+        };
+        return Optional
+                .ofNullable(bytes)
+                .map(ByteBuffer::wrap)
+                .orElse(null);
     }
 
     public static Instant getTimestamp(final Document document, final String fieldName) {
@@ -586,6 +619,28 @@ public class DocumentSchemaUtil {
         };
     }
 
+    public static Object getAsStandard(final Value value) {
+        if(value == null) {
+            return null;
+        }
+        return switch (value.getValueTypeCase()) {
+            case BOOLEAN_VALUE -> value.getBooleanValue();
+            case STRING_VALUE -> value.getStringValue();
+            case INTEGER_VALUE -> value.getIntegerValue();
+            case DOUBLE_VALUE -> value.getDoubleValue();
+            case BYTES_VALUE -> ByteBuffer.wrap(value.getBytesValue().toByteArray());
+            case TIMESTAMP_VALUE -> DateTimeUtil.toInstant(value.getTimestampValue());
+            case GEO_POINT_VALUE -> value.getGeoPointValue().toString();
+            case REFERENCE_VALUE -> value.getReferenceValue();
+            case MAP_VALUE -> DocumentToMapConverter.convert(value.getMapValue().getFieldsMap());
+            case NULL_VALUE, VALUETYPE_NOT_SET -> null;
+            case ARRAY_VALUE -> value.getArrayValue().getValuesList().stream()
+                    .map(DocumentSchemaUtil::getAsStandard)
+                    .collect(Collectors.toList());
+            default -> throw new IllegalStateException();
+        };
+    }
+
     public static Object convertPrimitive(Schema.FieldType fieldType, Object primitiveValue) {
         if (primitiveValue == null) {
             return null;
@@ -658,6 +713,20 @@ public class DocumentSchemaUtil {
             primitiveMap.put(entry.getKey(), value);
         }
         return primitiveMap;
+    }
+
+    public static Map<String, Object> asStandardMap(final Document document, final Collection<String> fields) {
+        final Map<String, Object> standardMap = new HashMap<>();
+        if(document == null) {
+            return standardMap;
+        }
+        for(final Map.Entry<String, Value> entry : document.getFieldsMap().entrySet()) {
+            if(fields == null || fields.isEmpty() || fields.contains(entry.getKey())) {
+                final Object value = getAsStandard(entry.getValue());
+                standardMap.put(entry.getKey(), value);
+            }
+        }
+        return standardMap;
     }
 
     public static Document merge(final Schema schema, Document document, final Map<String, ? extends Object> values) {

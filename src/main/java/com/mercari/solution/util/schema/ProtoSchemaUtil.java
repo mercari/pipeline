@@ -6,7 +6,6 @@ import com.google.protobuf.Duration;
 import com.google.protobuf.util.JsonFormat;
 import com.google.protobuf.util.Timestamps;
 import com.google.type.*;
-import org.apache.beam.sdk.extensions.protobuf.ProtoDomain;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +76,15 @@ public class ProtoSchemaUtil {
             final DescriptorProtos.FileDescriptorSet set = DescriptorProtos.FileDescriptorSet
                     .parseFrom(bytes);
             return getDescriptors(set);
+        } catch (InvalidProtocolBufferException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    public static DescriptorProtos.FileDescriptorSet getFileDescriptorSet(final byte[] bytes) {
+        try {
+            return DescriptorProtos.FileDescriptorSet
+                    .parseFrom(bytes);
         } catch (InvalidProtocolBufferException e) {
             throw new IllegalStateException(e);
         }
@@ -222,11 +230,11 @@ public class ProtoSchemaUtil {
     }
 
     public static Object convertBuildInValue(final String typeFullName, final DynamicMessage value) {
-        if(value == null || value.getAllFields().size() == 0) {
+        if(value == null || value.getAllFields().isEmpty()) {
             return null;
         }
-        switch (ProtoType.of(typeFullName)) {
-            case DATE: {
+        return switch (ProtoType.of(typeFullName)) {
+            case DATE -> {
                 Integer year = 0;
                 Integer month = 0;
                 Integer day = 0;
@@ -242,9 +250,9 @@ public class ProtoSchemaUtil {
                         day = (Integer) entry.getValue();
                     }
                 }
-                return Date.newBuilder().setYear(year).setMonth(month).setDay(day).build();
+                yield Date.newBuilder().setYear(year).setMonth(month).setDay(day).build();
             }
-            case TIME: {
+            case TIME -> {
                 Integer hours = 0;
                 Integer minutes = 0;
                 Integer seconds = 0;
@@ -263,9 +271,9 @@ public class ProtoSchemaUtil {
                         nanos = (Integer) entry.getValue();
                     }
                 }
-                return TimeOfDay.newBuilder().setHours(hours).setMinutes(minutes).setSeconds(seconds).setNanos(nanos).build();
+                yield TimeOfDay.newBuilder().setHours(hours).setMinutes(minutes).setSeconds(seconds).setNanos(nanos).build();
             }
-            case DATETIME: {
+            case DATETIME -> {
                 int year = 0;
                 int month = 0;
                 int day = 0;
@@ -313,14 +321,14 @@ public class ProtoSchemaUtil {
                         .setSeconds(seconds)
                         .setNanos(nanos);
                 if(duration != null) {
-                    return builder.setUtcOffset(duration).build();
+                    yield builder.setUtcOffset(duration).build();
                 } else if(timeZone != null) {
-                    return builder.setTimeZone(timeZone).build();
+                    yield builder.setTimeZone(timeZone).build();
                 } else {
-                    return builder.build();
+                    yield builder.build();
                 }
             }
-            case ANY: {
+            case ANY -> {
                 String typeUrl = null;
                 ByteString anyValue = null;
                 for (final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
@@ -331,9 +339,9 @@ public class ProtoSchemaUtil {
                     }
                 }
                 if(typeUrl == null && anyValue == null) {
-                    return Any.newBuilder().build();
+                    yield Any.newBuilder().build();
                 }
-                return Any.newBuilder().setTypeUrl(typeUrl).setValue(anyValue).build();
+                yield Any.newBuilder().setTypeUrl(typeUrl).setValue(anyValue).build();
             }
             /*
             case DURATION: {
@@ -362,80 +370,79 @@ public class ProtoSchemaUtil {
                 return LatLng.newBuilder().setLatitude(latitude).setLongitude(longitude).build();
             }
             */
-            case BOOL_VALUE: {
+            case BOOL_VALUE -> {
                 for (final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if ("value".equals(entry.getKey().getName())) {
-                        return BoolValue.newBuilder().setValue((Boolean)entry.getValue()).build();
+                        yield BoolValue.newBuilder().setValue((Boolean)entry.getValue()).build();
                     }
                 }
-                return BoolValue.newBuilder().build();
+                yield BoolValue.newBuilder().build();
             }
-            case STRING_VALUE: {
+            case STRING_VALUE -> {
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return StringValue.newBuilder().setValue(entry.getValue().toString()).build();
+                        yield StringValue.newBuilder().setValue(entry.getValue().toString()).build();
                     }
                 }
-                return StringValue.newBuilder().build();
+                yield StringValue.newBuilder().build();
             }
-            case BYTES_VALUE: {
+            case BYTES_VALUE -> {
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return BytesValue.newBuilder().setValue((ByteString)entry.getValue()).build();
+                        yield BytesValue.newBuilder().setValue((ByteString)entry.getValue()).build();
                     }
                 }
-                return BytesValue.newBuilder().build();
-
+                yield BytesValue.newBuilder().build();
             }
-            case INT32_VALUE: {
+            case INT32_VALUE -> {
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return Int32Value.newBuilder().setValue((Integer)entry.getValue()).build();
+                        yield Int32Value.newBuilder().setValue((Integer)entry.getValue()).build();
                     }
                 }
-                return Int32Value.newBuilder().build();
+                yield Int32Value.newBuilder().build();
             }
-            case INT64_VALUE: {
+            case INT64_VALUE ->{
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return Int64Value.newBuilder().setValue((Long)entry.getValue()).build();
+                        yield Int64Value.newBuilder().setValue((Long)entry.getValue()).build();
                     }
                 }
-                return Int64Value.newBuilder().build();
+                yield Int64Value.newBuilder().build();
             }
-            case UINT32_VALUE: {
+            case UINT32_VALUE -> {
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return UInt32Value.newBuilder().setValue((Integer)entry.getValue()).build();
+                        yield UInt32Value.newBuilder().setValue((Integer)entry.getValue()).build();
                     }
                 }
-                return UInt32Value.newBuilder().build();
+                yield UInt32Value.newBuilder().build();
             }
-            case UINT64_VALUE: {
+            case UINT64_VALUE -> {
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return UInt64Value.newBuilder().setValue((Long)entry.getValue()).build();
+                        yield UInt64Value.newBuilder().setValue((Long)entry.getValue()).build();
                     }
                 }
-                return UInt64Value.newBuilder().build();
+                yield UInt64Value.newBuilder().build();
             }
-            case FLOAT_VALUE: {
+            case FLOAT_VALUE -> {
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return FloatValue.newBuilder().setValue((Float)entry.getValue()).build();
+                        yield FloatValue.newBuilder().setValue((Float)entry.getValue()).build();
                     }
                 }
-                return FloatValue.newBuilder().build();
+                yield FloatValue.newBuilder().build();
             }
-            case DOUBLE_VALUE: {
+            case DOUBLE_VALUE -> {
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
                     if("value".equals(entry.getKey().getName())) {
-                        return DoubleValue.newBuilder().setValue((Double)entry.getValue()).build();
+                        yield DoubleValue.newBuilder().setValue((Double)entry.getValue()).build();
                     }
                 }
-                return DoubleValue.newBuilder().build();
+                yield DoubleValue.newBuilder().build();
             }
-            case TIMESTAMP: {
+            case TIMESTAMP -> {
                 Long seconds = 0L;
                 Integer nanos = 0;
                 for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {
@@ -452,17 +459,12 @@ public class ProtoSchemaUtil {
                         nanos = (Integer) entry.getValue();
                     }
                 }
-                return Timestamp.newBuilder().setSeconds(seconds).setNanos(nanos).build();
+                yield Timestamp.newBuilder().setSeconds(seconds).setNanos(nanos).build();
             }
-            case EMPTY: {
-                return Empty.newBuilder().build();
-            }
-            case NULL_VALUE: {
-                return NullValue.NULL_VALUE;
-            }
-            default:
-                return value;
-        }
+            case EMPTY -> Empty.newBuilder().build();
+            case NULL_VALUE -> NullValue.NULL_VALUE;
+            default -> value;
+        };
     }
 
     public static Descriptors.FieldDescriptor getField(final Descriptors.Descriptor descriptor, final String field) {
@@ -500,7 +502,7 @@ public class ProtoSchemaUtil {
                 dateTime.getYear(), dateTime.getMonth(), dateTime.getDay(),
                 dateTime.getHours(), dateTime.getMinutes(), dateTime.getSeconds(), dateTime.getNanos());
 
-        if(dateTime.getTimeZone() == null || dateTime.getTimeZone().getId() == null || dateTime.getTimeZone().getId().trim().length() == 0) {
+        if(dateTime.getTimeZone() == null || dateTime.getTimeZone().getId() == null || dateTime.getTimeZone().getId().trim().isEmpty()) {
             return ldt.atOffset(ZoneOffset.UTC).toInstant().toEpochMilli();
         }
         return ldt.atZone(ZoneId.of(dateTime.getTimeZone().getId()))
@@ -541,11 +543,11 @@ public class ProtoSchemaUtil {
             }
         }
 
-        if(processedSize == fileDescriptors.size() && failedFiles.size() > 0) {
+        if(processedSize == fileDescriptors.size() && !failedFiles.isEmpty()) {
             throw new IllegalStateException("Failed to parse descriptors");
         }
 
-        if(failedFiles.size() > 0) {
+        if(!failedFiles.isEmpty()) {
             descriptors.putAll(getDescriptors(failedFiles, fileDescriptors));
         }
 

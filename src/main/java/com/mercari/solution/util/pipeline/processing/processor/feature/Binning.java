@@ -3,8 +3,8 @@ package com.mercari.solution.util.pipeline.processing.processor.feature;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import com.mercari.solution.util.pipeline.processing.ProcessingBuffer;
 import com.mercari.solution.util.pipeline.processing.ProcessingState;
 import com.mercari.solution.util.pipeline.processing.processor.Processor;
@@ -58,7 +58,7 @@ public class Binning implements Processor {
             }
             bins.add(bin.getAsDouble());
         }
-        if(bins.size() == 0) {
+        if(bins.isEmpty()) {
             throw new IllegalArgumentException("Binning: " + name + " requires bins over size zero");
         }
 
@@ -154,11 +154,11 @@ public class Binning implements Processor {
     @Override
     public Map<String, Schema.FieldType> getBufferTypes(Map<String, Schema.FieldType> inputTypes) {
         final Map<String, Schema.FieldType> bufferTypes = new HashMap<>();
-        if(this.fields.size() > 0) {
+        if(!this.fields.isEmpty()) {
             for(final String field : fields) {
                 bufferTypes.put(field, inputTypes.get(field));
             }
-        } else if(this.expressions.size() > 0) {
+        } else if(!this.expressions.isEmpty()) {
             for(final String variable : bufferSizes.keySet()) {
                 bufferTypes.put(variable, inputTypes.get(variable));
             }
@@ -176,7 +176,7 @@ public class Binning implements Processor {
     @Override
     public void setup() {
         this.expressionList = new ArrayList<>();
-        if(this.expressions.size() > 0) {
+        if(!this.expressions.isEmpty()) {
             for(int i=0; i<this.expressions.size(); i++) {
                 this.expressionList.add(ExpressionUtil.createDefaultExpression(this.expressions.get(i), this.variablesList.get(i)));
             }
@@ -190,14 +190,14 @@ public class Binning implements Processor {
     public Map<String, Object> process(ProcessingBuffer buffer, ProcessingState state, Instant timestamp) {
 
         final Map<String, Object> outputs = new HashMap<>();
-        if(this.fields.size() > 0) {
+        if(!this.fields.isEmpty()) {
             for(final String field : fields) {
                 final Double value = buffer.getAsDouble(field, 0);
                 final String outputName = createOutputName(field);
                 final Integer enumId = getEnumId(value);
                 outputs.put(outputName, enumId);
             }
-        } else if(this.expressions.size() > 0) {
+        } else if(!this.expressions.isEmpty()) {
             for(int i=0; i<expressions.size(); i++) {
                 final String outputName = createOutputName(i);
                 final Map<String, Double> values = new HashMap<>();

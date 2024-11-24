@@ -5,10 +5,9 @@ import com.google.api.gax.retrying.RetrySettings;
 import com.google.api.gax.rpc.FixedHeaderProvider;
 import com.google.cloud.spanner.*;
 import com.google.spanner.admin.database.v1.UpdateDatabaseDdlMetadata;
-import com.mercari.solution.util.Filter;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.RowSchemaUtil;
-import com.mercari.solution.util.converter.StructToRowConverter;
+import com.mercari.solution.util.schema.converter.StructToRowConverter;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.SchemaBuilder;
 import org.apache.beam.sdk.extensions.sql.impl.utils.CalciteUtils;
@@ -506,7 +505,7 @@ public class SpannerUtil {
     private static Type convertTypeFromInformationSchema(final List<Struct> structs, final Collection<String> columnNames) {
         final List<Type.StructField> fields = new ArrayList<>();
         for(final Struct struct : structs) {
-            if(columnNames != null && !columnNames.contains(struct.getString("COLUMN_NAME"))) {
+            if(columnNames != null && !columnNames.isEmpty() && !columnNames.contains(struct.getString("COLUMN_NAME"))) {
                 LOG.info("skipField: " + struct.getString("COLUMN_NAME"));
                 continue;
             }

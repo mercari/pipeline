@@ -2,7 +2,7 @@ package com.mercari.solution.util.gcp;
 
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.converter.ResultSetToRecordConverter;
+import com.mercari.solution.util.schema.converter.ResultSetToRecordConverter;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.reflect.Nullable;
