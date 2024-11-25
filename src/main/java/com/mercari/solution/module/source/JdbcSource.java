@@ -1,12 +1,9 @@
 package com.mercari.solution.module.source;
 
 import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
-import com.google.gson.Gson;
-import com.mercari.solution.config.SourceConfig;
 import com.mercari.solution.config.options.DataflowOptions;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.util.converter.DataTypeTransform;
+import com.mercari.solution.module.*;
+import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.converter.ResultSetToRecordConverter;
 import com.mercari.solution.util.gcp.JdbcUtil;
 import com.mercari.solution.util.gcp.SecretManagerUtil;
@@ -36,11 +33,10 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 
-public class JdbcSource {
+@Source.Module(name="jdbc")
+public class JdbcSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcSource.class);
-
-    public String getName() { return "jdbc"; }
 
     private static class JdbcSourceParameters implements Serializable {
 
@@ -63,82 +59,26 @@ public class JdbcSource {
         private Integer splitSize;
         private Boolean enableSplit;
 
-        public String getUrl() {
-            return url;
-        }
-
-        public String getDriver() {
-            return driver;
-        }
-
-        public String getUser() {
-            return user;
-        }
-
-        public String getPassword() {
-            return password;
-        }
-
-        public String getQuery() {
-            return query;
-        }
-
-        public List<String> getPrepareCalls() {
-            return prepareCalls;
-        }
-
-        public List<PrepareParameterQuery> getPrepareParameterQueries() {
-            return prepareParameterQueries;
-        }
-
-        public String getTable() {
-            return table;
-        }
-
-        public String getFields() {
-            return fields;
-        }
-
-        public List<String> getExcludeFields() {
-            return excludeFields;
-        }
-
-        public List<String> getKeyFields() {
-            return keyFields;
-        }
-
-        public Integer getFetchSize() {
-            return fetchSize;
-        }
-
-        public Integer getSplitSize() {
-            return splitSize;
-        }
-
-        public Boolean getEnableSplit() {
-            return enableSplit;
-        }
-
         public void validate() {
 
             final List<String> errorMessages = new ArrayList<>();
             if(url == null) {
-                errorMessages.add("Jdbc source module requires url parameter");
+                errorMessages.add("parameters.url must not be null");
             }
             if(driver == null) {
-                errorMessages.add("Jdbc source module requires driver parameter");
+                errorMessages.add("parameters.driver must not be null");
             }
             if(user == null) {
-                errorMessages.add("Jdbc source module requires user parameter");
+                errorMessages.add("parameters.user must not be null");
             }
             if(password == null) {
-                errorMessages.add("Jdbc source module requires password parameter");
+                errorMessages.add("parameters.password must not be null");
             }
 
             if(query == null && table == null) {
-                errorMessages.add("Jdbc source module requires query or table parameter");
+                errorMessages.add("parameters.query or parameters.table must not be null");
             } else if(query != null && table != null) {
-                errorMessages.add("Jdbc source module requires parameter either query or table. " + query + " : " + table);
+                errorMessages.add("parameters.query or parameters.table only one of " + query + " : " + table + " must be specified");
             }
 
             if(prepareParameterQueries != null) {
@@ -147,8 +87,8 @@ public class JdbcSource {
                 }
             }
 
-            if(errorMessages.size() > 0) {
-                throw new IllegalArgumentException(errorMessages.stream().collect(Collectors.joining(", ")));
+            if(!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
@@ -196,7 +136,7 @@ public class JdbcSource {
                 }
             }
 
-            if(table != null && keyFields.size() == 0) {
+            if(table != null && keyFields.isEmpty()) {
                 try (final JdbcUtil.CloseableDataSource dataSource = JdbcUtil.createDataSource(
                         driver, url, user, password, true)) {
                     try(final Connection connection = dataSource.getConnection()) {
@@ -241,19 +181,17 @@ public class JdbcSource {
 
     }
 
-    public Map<String, FCollection<?>> expand(PBegin begin, SourceConfig config, PCollection<Long> beats, List<FCollection<?>> waits) {
+    @Override
+    public MCollectionTuple expand(PBegin begin) {
 
-        final JdbcSourceParameters parameters = new Gson().fromJson(config.getParameters(), JdbcSourceParameters.class);
-        if(parameters == null) {
-            throw new IllegalArgumentException("Jdbc source module parameters must not be empty!");
-        }
-        if(parameters.getUser() == null) {
+        final JdbcSourceParameters parameters = getParameters(JdbcSourceParameters.class);
+        if(parameters.user == null) {
             final String serviceAccount = DataflowOptions.getServiceAccount(begin.getPipeline().getOptions());//.as(DataflowPipelineOptions.class).getServiceAccount();
-            LOG.info("Using worker service account: '" + serviceAccount + "' for database user");
+            LOG.info("Using worker service account: '{}' for database user", serviceAccount);
             parameters.user = serviceAccount.replace(".gserviceaccount.com", "");
             parameters.password = "dummy";
-            if(!parameters.getUrl().contains("enableIamAuth")) {
-                parameters.url = parameters.getUrl() + "&enableIamAuth=true";
+            if(!parameters.url.contains("enableIamAuth")) {
+                parameters.url = parameters.url + "&enableIamAuth=true";
             }
         }
 
@@ -261,65 +199,94 @@ public class JdbcSource {
         parameters.setDefaults();
         parameters.replaceParameters();
 
-        return Collections.singletonMap(config.getName(), batch(begin, config, parameters));
-    }
-
-    public static FCollection<GenericRecord> batch(final PBegin begin, final SourceConfig config, final JdbcSourceParameters parameters) {
         try {
             final Schema outputSchema;
             final PCollection<GenericRecord> output;
-            if(parameters.getQuery() != null) {
+            if(parameters.query != null) {
                 final Schema queryOutputSchema = JdbcUtil.createAvroSchemaFromQuery(
-                        parameters.getDriver(), parameters.getUrl(),
-                        parameters.getUser(), parameters.getPassword(),
-                        parameters.getQuery(), parameters.getPrepareCalls());
-                if(parameters.getExcludeFields().size() > 0) {
+                        parameters.driver, parameters.url,
+                        parameters.user, parameters.password,
+                        parameters.query, parameters.prepareCalls);
+                if(!parameters.excludeFields.isEmpty()) {
                     outputSchema = AvroSchemaUtil
-                            .toSchemaBuilder(queryOutputSchema, null, parameters.getExcludeFields())
+                            .toSchemaBuilder(queryOutputSchema, null, parameters.excludeFields)
                             .endRecord();
                 } else {
                     outputSchema = queryOutputSchema;
                 }
                 output = begin
-                        .apply(config.getName(), new JdbcBatchQuerySource(config, parameters, outputSchema.toString()))
+                        .apply("Query", new JdbcBatchQuerySource(parameters, outputSchema.toString()))
                         .setCoder(AvroCoder.of(outputSchema));
-            } else if(parameters.getTable() != null) {
-                final String tableQuery = String.format("SELECT %s FROM %s LIMIT 1", parameters.getFields(), parameters.getTable());
+            } else if(parameters.table != null) {
+                final String tableQuery = String.format("SELECT %s FROM %s LIMIT 1", parameters.fields, parameters.table);
                 final Schema queryOutputSchema = JdbcUtil.createAvroSchemaFromQuery(
-                        parameters.getDriver(), parameters.getUrl(),
-                        parameters.getUser(), parameters.getPassword(),
+                        parameters.driver, parameters.url,
+                        parameters.user, parameters.password,
                         tableQuery, new ArrayList<>());
-                if(parameters.getExcludeFields().size() > 0) {
+                if(!parameters.excludeFields.isEmpty()) {
                     outputSchema = AvroSchemaUtil
-                            .toSchemaBuilder(queryOutputSchema, null, parameters.getExcludeFields())
+                            .toSchemaBuilder(queryOutputSchema, null, parameters.excludeFields)
                             .endRecord();
                 } else {
                     outputSchema = queryOutputSchema;
                 }
 
                 final List<String> notFoundKeyFields = new ArrayList<>();
-                for(final String keyField : parameters.getKeyFields()) {
+                for(final String keyField : parameters.keyFields) {
                     Schema.Field field = outputSchema.getField(keyField);
                     if(field == null && outputSchema.getField(keyField.toLowerCase()) == null) {
                         notFoundKeyFields.add(keyField);
                     }
                 }
-                if(notFoundKeyFields.size() > 0) {
+                if(!notFoundKeyFields.isEmpty()) {
                     throw new IllegalArgumentException("Not found keyFields: " + String.join(",", notFoundKeyFields) + ", int outputSchema: " + outputSchema);
                 }
 
                 output = begin
-                        .apply(config.getName(), new JdbcBatchTableSource(config, parameters, outputSchema.toString()))
+                        .apply("Read", new JdbcBatchTableSource(parameters, getTimestampAttribute(), getTimestampDefault(), outputSchema.toString()))
                         .setCoder(AvroCoder.of(outputSchema));
             } else {
-                throw new IllegalArgumentException("Jdbc source module: " + config.getName() + " does not contain parameter both query and table");
+                throw new IllegalArgumentException("Jdbc source module: " + getName() + " does not contain parameter both query and table");
             }
-            LOG.info(config.getName() + " outputSchema: " + outputSchema);
+            LOG.info("{} outputSchema: {}", getName(), outputSchema);
 
-            return FCollection.of(config.getName(), output, DataType.AVRO, outputSchema);
+            final PCollection<MElement> element = output
+                    .apply("Convert", ParDo.of(new ConvertDoFn(getTimestampAttribute(), getTimestampDefault())));
+
+            return MCollectionTuple
+                    .of(element, com.mercari.solution.module.Schema.of(outputSchema));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static class ConvertDoFn extends DoFn<GenericRecord, MElement> {
+
+        private final String timestampAttribute;
+        private final String timestampDefault;
+
+        ConvertDoFn(
+                final String timestampAttribute,
+                final String timestampDefault) {
+
+            this.timestampAttribute = timestampAttribute;
+            this.timestampDefault = timestampDefault;
+        }
+
+        @ProcessElement
+        public void processElement(final ProcessContext c) {
+            final GenericRecord record = c.element();
+            final MElement element = MElement.of(record, c.timestamp());
+            if(timestampAttribute == null) {
+                c.output(element);
+            } else {
+                final Instant timestamp = Optional
+                        .ofNullable(element.getAsJodaInstant(timestampAttribute))
+                        .orElseGet(() -> DateTimeUtil.toJodaInstant(timestampDefault));
+                c.outputWithTimestamp(element, timestamp);
+            }
+        }
+
     }
 
     public static class JdbcBatchQuerySource extends PTransform<PBegin, PCollection<GenericRecord>> {
@@ -327,15 +294,14 @@ public class JdbcSource {
         private static final String DUMMY_FIELD = "Dummy_String_Field_";
 
         private final JdbcSourceParameters parameters;
-        private final String timestampAttribute;
-        private final String timestampDefault;
 
         private final String outputSchemaString;
 
-        private JdbcBatchQuerySource(final SourceConfig config, final JdbcSourceParameters parameters, final String outputSchemaString) {
+        private JdbcBatchQuerySource(
+                final JdbcSourceParameters parameters,
+                final String outputSchemaString) {
+
             this.parameters = parameters;
-            this.timestampAttribute = config.getTimestampAttribute();
-            this.timestampDefault = config.getTimestampDefault();
             this.outputSchemaString = outputSchemaString;
         }
 
@@ -346,11 +312,11 @@ public class JdbcSource {
                     .apply("Seed", Create
                             .of(createDummyRecord()).withCoder(AvroCoder.of(createDummySchema())));
             int num = 0;
-            for(final PrepareParameterQuery preprocessQuery : parameters.getPrepareParameterQueries()) {
+            for(final PrepareParameterQuery preprocessQuery : parameters.prepareParameterQueries) {
                 try {
                     final Schema outputPreprocessSchema = JdbcUtil.createAvroSchemaFromQuery(
-                            parameters.getDriver(), parameters.getUrl(),
-                            parameters.getUser(), parameters.getPassword(),
+                            parameters.driver, parameters.url,
+                            parameters.user, parameters.password,
                             preprocessQuery.getQuery(), preprocessQuery.getPrepareCalls());
 
                     records = records
@@ -363,19 +329,12 @@ public class JdbcSource {
                     throw new IllegalStateException(e);
                 }
             }
-            final PCollection<GenericRecord> output = records
+            return records
                     .apply("ExecuteQuery", ParDo
-                            .of(new QueryDoFn(parameters, parameters.getQuery(), parameters.getPrepareCalls(), outputSchemaString)));
-
-            if(timestampAttribute == null) {
-                return output;
-            } else {
-                return output.apply("WithTimestamp", DataTypeTransform
-                        .withTimestamp(DataType.AVRO, timestampAttribute, timestampDefault));
-            }
+                            .of(new QueryDoFn(parameters, parameters.query, parameters.prepareCalls, outputSchemaString)));
         }
 
-        public class QueryDoFn extends DoFn<GenericRecord, GenericRecord> {
+        public static class QueryDoFn extends DoFn<GenericRecord, GenericRecord> {
 
             private static final int DEFAULT_FETCH_SIZE = 50_000;
 
@@ -398,10 +357,10 @@ public class JdbcSource {
                       final List<String> prepareCalls,
                       final String outputSchemaString) {
 
-                this.driver = parameters.getDriver();
-                this.url = parameters.getUrl();
-                this.user = parameters.getUser();
-                this.password = parameters.getPassword();
+                this.driver = parameters.driver;
+                this.url = parameters.url;
+                this.user = parameters.user;
+                this.password = parameters.password;
 
                 this.query = query;
                 this.prepareCalls = prepareCalls;
@@ -439,7 +398,7 @@ public class JdbcSource {
             @ProcessElement
             public void processElement(ProcessContext c) throws SQLException, IOException {
                 LOG.info(String.format("Start Query [%s]", query));
-                if(prepareCalls.size() > 0) {
+                if(!prepareCalls.isEmpty()) {
                     for(final String prepareCall : prepareCalls) {
                         try (final CallableStatement statement = connection
                                 .prepareCall(prepareCall, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE)) {
@@ -550,10 +509,15 @@ public class JdbcSource {
 
         private final String outputSchemaString;
 
-        private JdbcBatchTableSource(final SourceConfig config, final JdbcSourceParameters parameters, final String outputSchemaString) {
+        private JdbcBatchTableSource(
+                final JdbcSourceParameters parameters,
+                final String timestampAttribute,
+                final String timestampDefault,
+                final String outputSchemaString) {
+
             this.parameters = parameters;
-            this.timestampAttribute = config.getTimestampAttribute();
-            this.timestampDefault = config.getTimestampDefault();
+            this.timestampAttribute = timestampAttribute;
+            this.timestampDefault = timestampDefault;
             this.outputSchemaString = outputSchemaString;
         }
 
@@ -561,7 +525,7 @@ public class JdbcSource {
         public PCollection<GenericRecord> expand(final PBegin begin) {
 
             final PCollection<String> table = begin
-                    .apply("SupplyTable", Create.of(parameters.getTable()).withCoder(StringUtf8Coder.of()));
+                    .apply("SupplyTable", Create.of(parameters.table).withCoder(StringUtf8Coder.of()));
 
             final Schema outputSchema = AvroSchemaUtil.convertSchema(outputSchemaString);
             final PCollection<GenericRecord> recordsStartPos = table
@@ -571,15 +535,8 @@ public class JdbcSource {
                     .apply("ReadTableRanges", ParDo.of(new TableReadRangeDoFn(parameters, outputSchemaString)))
                     .setCoder(AvroCoder.of(outputSchema));
 
-            final PCollection<GenericRecord> output = PCollectionList.of(recordsStartPos).and(recordsRanges)
+            return PCollectionList.of(recordsStartPos).and(recordsRanges)
                     .apply("Union", Flatten.pCollections());
-
-            if(timestampAttribute == null) {
-                return output;
-            } else {
-                return output.apply("WithTimestamp", DataTypeTransform
-                        .withTimestamp(DataType.AVRO, timestampAttribute, timestampDefault));
-            }
         }
 
         public abstract class TableReadDoFn extends DoFn<String, GenericRecord> {
@@ -607,16 +564,16 @@ public class JdbcSource {
             protected transient Map<String, Schema.Field> parameterFieldsMap;
 
             TableReadDoFn(final JdbcSourceParameters parameters, final String outputSchemaString) {
-                this.driver = parameters.getDriver();
-                this.url = parameters.getUrl();
-                this.user = parameters.getUser();
-                this.password = parameters.getPassword();
+                this.driver = parameters.driver;
+                this.url = parameters.url;
+                this.user = parameters.user;
+                this.password = parameters.password;
 
-                this.table = parameters.getTable();
-                this.parameterFieldNames = parameters.getKeyFields();
-                this.fields = parameters.getFields();
-                this.excludeFields = parameters.getExcludeFields();
-                this.fetchSize = parameters.getFetchSize();
+                this.table = parameters.table;
+                this.parameterFieldNames = parameters.keyFields;
+                this.fields = parameters.fields;
+                this.excludeFields = parameters.excludeFields;
+                this.fetchSize = parameters.fetchSize;
 
                 this.outputSchemaString = outputSchemaString;
             }
@@ -855,8 +812,8 @@ public class JdbcSource {
 
             TableReadRangeDoFn(final JdbcSourceParameters parameters, final String outputSchemaString) {
                 super(parameters, outputSchemaString);
-                this.enableSplit = parameters.getEnableSplit();
-                this.splitSize = parameters.getSplitSize();
+                this.enableSplit = parameters.enableSplit;
+                this.splitSize = parameters.splitSize;
             }
 
             @Setup

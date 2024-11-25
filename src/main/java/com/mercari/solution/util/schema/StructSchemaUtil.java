@@ -10,13 +10,13 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.util.Timestamps;
+import com.mercari.solution.module.MElement;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.converter.AvroToMutationConverter;
 import com.mercari.solution.util.schema.converter.StructToJsonConverter;
 import com.mercari.solution.util.schema.converter.StructToTableRowConverter;
 import com.mercari.solution.util.pipeline.mutation.MutationOp;
 import com.mercari.solution.util.pipeline.mutation.UnifiedMutation;
-import com.mercari.solution.util.pipeline.union.UnionValue;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.generic.GenericRecordBuilder;
@@ -1607,7 +1607,7 @@ public class StructSchemaUtil {
         return value.toString();
     }
 
-    public static List<KV<KV<String, String>, UnifiedMutation>> convertChangeRecordToMutations(final UnionValue unionValue) {
+    public static List<KV<KV<String, String>, UnifiedMutation>> convertChangeRecordToMutations(final MElement unionValue) {
         return switch (unionValue.getType()) {
             case AVRO -> convertChangeRecordToMutations((GenericRecord) unionValue.getValue());
             case ROW -> throw new IllegalArgumentException("Not supported input type: " + unionValue.getType());
@@ -1615,7 +1615,7 @@ public class StructSchemaUtil {
         };
     }
 
-    public static List<KV<KV<String, String>, RowMutation>> convertChangeRecordToRowMutations(final UnionValue unionValue) {
+    public static List<KV<KV<String, String>, RowMutation>> convertChangeRecordToRowMutations(final MElement unionValue) {
         return switch (unionValue.getType()) {
             case AVRO -> convertChangeRecordToRowMutations((GenericRecord) unionValue.getValue());
             case ROW -> throw new IllegalArgumentException("Not supported input type: " + unionValue.getType());
@@ -1959,7 +1959,7 @@ public class StructSchemaUtil {
 
 
      */
-    public static Long getChangeDataCommitTimestampMicros(final UnionValue unionValue) {
+    public static Long getChangeDataCommitTimestampMicros(final MElement unionValue) {
         return switch (unionValue.getType()) {
             case AVRO -> (Long)((GenericRecord) unionValue.getValue()).get("commitTimestamp");
             case ROW -> DateTimeUtil.toEpochMicroSecond(((Row) unionValue.getValue()).getDateTime("commitTimestamp"));

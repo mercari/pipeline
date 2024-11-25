@@ -1,17 +1,12 @@
 package com.mercari.solution.module.sink;
 
-import com.google.api.services.drive.DriveScopes;
 import com.mercari.solution.module.MCollectionTuple;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.module.Sink;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.aws.S3Util;
-import com.mercari.solution.util.gcp.DriveUtil;
-import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.pipeline.Union;
 import freemarker.template.Template;
-import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
