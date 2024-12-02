@@ -38,10 +38,10 @@ public class MPipeline {
         String getType();
         void setType(String type);
 
-        @Description("Use config template engine")
-        @Default.Boolean(true)
-        Boolean getUseConfigTemplate();
-        void setUseConfigTemplate(Boolean useConfigTemplate);
+        @Description("Enable template engine for config")
+        @Default.Boolean(false)
+        Boolean getEnableConfigTemplate();
+        void setEnableConfigTemplate(Boolean enableConfigTemplate);
 
     }
 
@@ -69,7 +69,7 @@ public class MPipeline {
         final Runner runner = OptionUtil.getRunner(pipelineOptions);
         LOG.info("Runner: {}", runner);
 
-        final Config config = loadConfig(pipelineOptions.getConfig(), args, pipelineOptions.getUseConfigTemplate());
+        final Config config = loadConfig(pipelineOptions.getConfig(), args, pipelineOptions.getEnableConfigTemplate());
         if(Optional.ofNullable(config.getEmpty()).orElse(false)) {
             LOG.info("Empty pipeline");
             final Pipeline pipeline = Pipeline.create(pipelineOptions);

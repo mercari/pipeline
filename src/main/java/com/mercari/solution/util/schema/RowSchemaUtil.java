@@ -1327,7 +1327,7 @@ public class RowSchemaUtil {
             return standardMap;
         }
         for(final Schema.Field field : row.getSchema().getFields()) {
-            if(fieldNames != null && !fieldNames.isEmpty() && fieldNames.contains(field.getName())) {
+            if(fieldNames != null && !fieldNames.isEmpty() && !fieldNames.contains(field.getName())) {
                 continue;
             }
             final Object value = getAsStandard(row, field.getName());

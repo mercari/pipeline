@@ -533,6 +533,36 @@ public class Schema implements Serializable {
             this.nullable = true;
         }
 
+        public static FieldType of(
+                final String name,
+                final String typeString,
+                final String modeString,
+                final List<? extends IField> fields,
+                final List<String> symbols,
+                final String valueType) {
+
+            final Type type = Type.of(typeString);
+            final Mode mode = Mode.of(modeString);
+
+            final JsonObject jsonObject = new JsonObject();
+            if(fields != null) {
+                final JsonArray fieldsArray = new JsonArray();
+                for(final IField f : fields) {
+                    final JsonObject fieldJsonObject = IField.toJson(f);
+                    fieldsArray.add(fieldJsonObject);
+                }
+                jsonObject.add("fields", fieldsArray);
+            }
+            if(symbols != null) {
+                final JsonArray symbolsArray = new JsonArray();
+                symbols.forEach(symbolsArray::add);
+                jsonObject.add("symbols", symbolsArray);
+            }
+            jsonObject.addProperty("valueType", valueType);
+
+            return parse(name, type, mode, jsonObject);
+        }
+
         public static FieldType parse(
                 final String name,
                 final Type type,
@@ -547,12 +577,14 @@ public class Schema implements Serializable {
                     case element -> {
                         if(!jsonObject.has("fields")) {
                             throw new IllegalArgumentException("field: " + name + " requires 'fields' parameter for record type");
+                        } else if(!jsonObject.get("fields").isJsonArray()) {
+                            throw new IllegalArgumentException("field: " + name + ".'fields' parameter must be json array. actual value is: " + jsonObject.get("fields"));
                         } else {
                             int i=0;
                             final List<Field> fields = new ArrayList<>();
                             for(final JsonElement fieldElement : jsonObject.getAsJsonArray("fields")) {
                                 if(!fieldElement.isJsonObject()) {
-                                    throw new IllegalArgumentException("field: " + name + ".fields[" + i + "] must be object. but: " + fieldElement);
+                                    throw new IllegalArgumentException("field: " + name + ".fields[" + i + "] must be object. actual value is: " + fieldElement);
                                 }
                                 final Field field = Field.parse(fieldElement.getAsJsonObject());
                                 if(field == null) {
@@ -1077,6 +1109,52 @@ public class Schema implements Serializable {
     @Override
     public String toString() {
         return String.format("type: " + type + ", fields: " + fields);
+    }
+
+    public interface IField extends Serializable {
+        String getName();
+        String getType();
+        String getMode();
+        List<? extends IField> getFields();
+        List<String> getSymbols();
+        String getValueType();
+
+        static Field toField(IField field) {
+            final JsonObject jsonObject = toJson(field);
+            return Field.parse(jsonObject);
+        }
+
+        static FieldType toFieldType(IField field) {
+            final JsonObject jsonObject = toJson(field);
+            final Field f = Field.parse(jsonObject);
+            if(f == null) {
+                return null;
+            }
+            return f.getFieldType();
+        }
+
+        static JsonObject toJson(IField field) {
+            final JsonObject fieldJsonObject = new JsonObject();
+            fieldJsonObject.addProperty("name", field.getName());
+            fieldJsonObject.addProperty("type", field.getType());
+            if(field.getMode() != null) {
+                fieldJsonObject.addProperty("mode", field.getMode());
+            }
+            if(field.getSymbols() != null) {
+                final JsonArray symbolsArray = new JsonArray();
+                fieldJsonObject.add("symbols", symbolsArray);
+            }
+            if(field.getFields() != null) {
+                final JsonArray fieldsArray = new JsonArray();
+                for(final IField f : field.getFields()) {
+                    final JsonObject o = toJson(f);
+                    fieldsArray.add(o);
+                }
+                fieldJsonObject.add("fields", fieldsArray);
+            }
+            fieldJsonObject.addProperty("valueType", field.getValueType());
+            return fieldJsonObject;
+        }
     }
 
 }

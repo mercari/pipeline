@@ -1,13 +1,15 @@
 package com.mercari.solution.util.schema;
 
-import com.google.bigtable.v2.Mutation;
-import com.google.bigtable.v2.Value;
+import com.google.bigtable.v2.*;
 import com.google.cloud.ByteArray;
+import com.google.cloud.bigtable.data.v2.models.RowCell;
 import com.google.protobuf.ByteString;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.TemplateUtil;
 import freemarker.template.Template;
+import org.apache.avro.util.Utf8;
+import org.apache.beam.sdk.values.KV;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.io.*;
 import org.joda.time.Instant;
@@ -17,6 +19,7 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class BigtableSchemaUtil {
 
@@ -37,17 +40,22 @@ public class BigtableSchemaUtil {
     }
 
     public enum TimestampType implements Serializable {
-        event_timestamp,
-        current_timestamp,
-        field_timestamp
+        server,
+        event,
+        current,
+        field,
+        fixed,
+        zero
     }
 
     public static class ColumnFamilyProperties implements Serializable {
 
         private String family;
         private List<ColumnQualifierProperties> qualifiers;
-        private MutationOp mutationOp;
         private Format format;
+
+        // for sink
+        private MutationOp mutationOp;
         private TimestampType timestampType;
 
         private transient Template templateFamily;
@@ -69,6 +77,10 @@ public class BigtableSchemaUtil {
             return errorMessages;
         }
 
+        public void setDefaults(final Format defaultFormat) {
+            setDefaults(defaultFormat, null, null);
+        }
+
         public void setDefaults(
                 final Format defaultFormat,
                 final MutationOp defaultOp,
@@ -78,10 +90,14 @@ public class BigtableSchemaUtil {
                 format = defaultFormat;
             }
             if(mutationOp == null) {
-                mutationOp = defaultOp;
+                mutationOp = Optional
+                        .ofNullable(defaultOp)
+                        .orElse(MutationOp.SET_CELL);
             }
             if(timestampType == null) {
-                timestampType = defaultTimestampType;
+                timestampType = Optional
+                        .ofNullable(defaultTimestampType)
+                        .orElse(TimestampType.server);
             }
             if(qualifiers == null) {
                 qualifiers = new ArrayList<>();
@@ -107,14 +123,21 @@ public class BigtableSchemaUtil {
             return templateArgs;
         }
 
-        public void setup() {
+        public void setupSource() {
             this.templateFamily = TemplateUtil.createStrictTemplate("templateColumnFamily", family);
             for(final ColumnQualifierProperties qualifier : qualifiers) {
-                qualifier.setup();
+                qualifier.setupSource();
             }
         }
 
-        public List<Mutation> toMutation(
+        public void setupSink() {
+            this.templateFamily = TemplateUtil.createStrictTemplate("templateColumnFamily", family);
+            for(final ColumnQualifierProperties qualifier : qualifiers) {
+                qualifier.setupSink();
+            }
+        }
+
+        private List<Mutation> toMutation(
                 final Map<String, Object> primitiveValues,
                 final Map<String, Object> standardValues,
                 final Instant timestamp) {
@@ -137,17 +160,93 @@ public class BigtableSchemaUtil {
             return mutations;
         }
 
+        private Map<String, Object> toElement(final Family f) {
+            final Map<String, Object> primitiveValues = new HashMap<>();
+            for(final Column c : f.getColumnsList()) {
+                for(final ColumnQualifierProperties qualifier : qualifiers) {
+                    if(qualifier.name.equals(c.getQualifier().toStringUtf8())) {
+                        final Map<String, Object> values = qualifier.toPrimitiveValues(c);
+                        primitiveValues.putAll(values);
+                        break;
+                    }
+                }
+            }
+            return primitiveValues;
+        }
+
+        @Override
+        public String toString() {
+            final String qualifiersString;
+            if(qualifiers != null) {
+                qualifiersString = qualifiers.stream().map(ColumnQualifierProperties::toString).collect(Collectors.joining(","));
+            } else {
+                qualifiersString = null;
+            }
+            return String.format("family: %s, qualifiers: %s", family, qualifiersString);
+        }
+
     }
 
-    public static class ColumnQualifierProperties implements Serializable {
+    public static class ColumnQualifierProperties implements Schema.IField {
+
         private String name;
         private String field;
-        private MutationOp mutationOp;
         private Format format;
+
+        // for sink
+        private MutationOp mutationOp;
         private TimestampType timestampType;
         private String timestampField;
+        private String timestampValue;
+
+        // for source
+        // schema
+        private String type;
+        private String mode;
+        private List<ColumnQualifierProperties> fields;
+        private List<String> symbols;
+        private String valueType;
+
+        private Schema.FieldType fieldType;
 
         private transient Template templateQualifier;
+        private transient long fixedTimestampMicros;
+
+        @Override
+        public String toString() {
+            return String.format("{ name: %s, field: %s, format: %s }", name, field, format);
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public String getType() {
+            return type;
+        }
+
+        @Override
+        public String getMode() {
+            return mode;
+        }
+
+        @Override
+        public List<ColumnQualifierProperties> getFields() {
+            return fields;
+        }
+
+        @Override
+        public List<String> getSymbols() {
+            return symbols;
+        }
+
+        @Override
+        public String getValueType() {
+            return valueType;
+        }
+
 
         public List<String> validate(int i, int j) {
             final List<String> errorMessages = new ArrayList<>();
@@ -157,9 +256,21 @@ public class BigtableSchemaUtil {
             if(field == null) {
                 errorMessages.add("parameters.columns[" + i + "].qualifiers[" + j + "].field must not be empty");
             }
-            if(TimestampType.field_timestamp.equals(timestampType)) {
-                if(timestampField == null) {
-                    errorMessages.add("parameters.columns[" + i + "].qualifiers[" + j + "].timestampField must not be empty if timestampType is field_timestamp");
+            if(symbols == null) {
+                symbols = new ArrayList<>();
+            }
+            if(timestampType != null) {
+                switch (timestampType) {
+                    case field -> {
+                        if(timestampField == null) {
+                            errorMessages.add("parameters.columns[" + i + "].qualifiers[" + j + "].timestampField must not be empty if timestampType is field");
+                        }
+                    }
+                    case fixed -> {
+                        if(timestampValue == null) {
+                            errorMessages.add("parameters.columns[" + i + "].qualifiers[" + j + "].timestampValue must not be empty if timestampType is fixed");
+                        }
+                    }
                 }
             }
             return errorMessages;
@@ -185,11 +296,16 @@ public class BigtableSchemaUtil {
             return TemplateUtil.extractTemplateArgs(name, inputSchema);
         }
 
-        public void setup() {
+        public void setupSource() {
+            this.fieldType = Schema.IField.toFieldType(this);
             this.templateQualifier = TemplateUtil.createStrictTemplate("templateQualifier", name);
         }
 
-        public Mutation toMutation(
+        public void setupSink() {
+            this.templateQualifier = TemplateUtil.createStrictTemplate("templateQualifier", name);
+        }
+
+        private Mutation toMutation(
                 final String cf,
                 final Map<String, Object> primitiveValues,
                 final Map<String, Object> standardValues,
@@ -200,9 +316,12 @@ public class BigtableSchemaUtil {
                 case SET_CELL -> {
                     final ByteString fieldValue = toByteString(format, primitiveValues.get(field));
                     final long timestampMicros = switch (timestampType) {
-                        case event_timestamp -> timestamp.getMillis() * 1000L;
-                        case current_timestamp -> DateTimeUtil.toEpochMicroSecond(java.time.Instant.now());
-                        case field_timestamp -> (Long) primitiveValues.get(timestampField);
+                        case server -> -1L;
+                        case event -> timestamp.getMillis() * 1000L;
+                        case current -> DateTimeUtil.reduceAccuracy(DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()), 1000L);
+                        case field -> DateTimeUtil.reduceAccuracy((Long) primitiveValues.get(timestampField), 1000L);
+                        case fixed -> DateTimeUtil.toEpochMicroSecond(timestampValue);
+                        case zero -> 0L;
                     };
                     final Mutation.SetCell cell = Mutation.SetCell.newBuilder()
                             .setFamilyName(cf)
@@ -214,9 +333,12 @@ public class BigtableSchemaUtil {
                 }
                 case ADD_TO_CELL -> {
                     final long timestampMicros = switch (timestampType) {
-                        case event_timestamp -> timestamp.getMillis() * 1000L;
-                        case current_timestamp -> DateTimeUtil.toEpochMicroSecond(java.time.Instant.now());
-                        case field_timestamp -> (Long) primitiveValues.get(timestampField);
+                        case server -> -1L;
+                        case event -> timestamp.getMillis() * 1000L;
+                        case current -> DateTimeUtil.reduceAccuracy(DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()), 1000L);
+                        case field -> DateTimeUtil.reduceAccuracy((Long) primitiveValues.get(timestampField), 1000L);
+                        case fixed -> DateTimeUtil.toEpochMicroSecond(timestampValue);
+                        case zero -> 0L;
                     };
                     final Mutation.AddToCell cell = Mutation.AddToCell.newBuilder()
                             .setFamilyName(cf)
@@ -244,6 +366,107 @@ public class BigtableSchemaUtil {
                 default -> throw new IllegalArgumentException("Illegal mutationOp: " + mutationOp + " for columnQualifier");
             };
         }
+
+        private Map<String, Object> toPrimitiveValues(final Column column) {
+            final Map<String, Object> primitiveValues = new HashMap<>();
+            for(final Cell c : column.getCellsList()) {
+                final Object primitiveValue = BigtableSchemaUtil.toPrimitiveValue(format, fieldType, c.getValue());
+                primitiveValues.put(field, primitiveValue);
+            }
+            return primitiveValues;
+        }
+
+        private Object toPrimitiveValue(final ByteString byteString) {
+            return BigtableSchemaUtil.toPrimitiveValue(format, fieldType, byteString);
+        }
+    }
+
+    public static Schema createSchema(final List<ColumnFamilyProperties> families) {
+        final List<Schema.Field> fields = families.stream()
+                .flatMap(f -> f.qualifiers.stream())
+                .peek(ColumnQualifierProperties::setupSource)
+                .map(q -> Schema.Field.of(q.field, q.fieldType))
+                .toList();
+        return Schema.builder().withFields(fields).build();
+    }
+
+    public static Map<String, ColumnFamilyProperties> toMap(List<ColumnFamilyProperties> families) {
+        final Map<String, ColumnFamilyProperties> map = new HashMap<>();
+        if(families == null) {
+            return map;
+        }
+        for(final ColumnFamilyProperties family : families) {
+            map.put(family.family, family);
+        }
+        return map;
+    }
+
+    public static List<Mutation> toMutations(
+            final List<ColumnFamilyProperties> families,
+            final Map<String, Object> primitiveValues,
+            final Map<String, Object> standardValues,
+            final Instant timestamp) {
+
+        final List<Mutation> mutations = new ArrayList<>();
+        for(var family : families) {
+            final List<Mutation> m = family.toMutation(primitiveValues, standardValues, timestamp);
+            mutations.addAll(m);
+        }
+        return mutations;
+    }
+
+    public static Map<String, Object> toPrimitiveValues(
+            final Row row,
+            final Map<String, ColumnFamilyProperties> families) {
+
+        final Map<String, Object> primitiveValues = new HashMap<>();
+        for(final Family family : row.getFamiliesList()) {
+            if(!families.containsKey(family.getName())) {
+                continue;
+            }
+            final Map<String, Object> values = families.get(family.getName()).toElement(family);
+            primitiveValues.putAll(values);
+        }
+        return primitiveValues;
+    }
+
+    public static Map<String, Object> toPrimitiveValues(
+            final com.google.cloud.bigtable.data.v2.models.Row row,
+            final Map<String, ColumnFamilyProperties> families) {
+
+        final Map<String, Object> primitiveValues = new HashMap<>();
+        for(final RowCell cell : row.getCells()) {
+            if(!families.containsKey(cell.getFamily())) {
+                continue;
+            }
+            final ColumnFamilyProperties family = families.get(cell.getFamily());
+            for(final ColumnQualifierProperties qualifier : family.qualifiers) {
+                if(!cell.getQualifier().toStringUtf8().equals(qualifier.name)) {
+                    continue;
+                }
+                final Object primitiveValue = qualifier.toPrimitiveValue(cell.getValue());
+                primitiveValues.put(qualifier.field, primitiveValue);
+            }
+        }
+        return primitiveValues;
+    }
+
+    public static KV<Long, Long> getCellTimestamps(final Row row) {
+        long max = 0;
+        long min = Long.MAX_VALUE;
+        for(final Family family : row.getFamiliesList()) {
+            for(final Column column : family.getColumnsList()) {
+                for(final Cell cell : column.getCellsList()) {
+                    if(cell.getTimestampMicros() > max) {
+                        max = cell.getTimestampMicros();
+                    }
+                    if(cell.getTimestampMicros() < min) {
+                        min = cell.getTimestampMicros();
+                    }
+                }
+            }
+        }
+        return KV.of(min, max);
     }
 
     public static class ColumnSetting implements Serializable {
@@ -308,7 +531,7 @@ public class BigtableSchemaUtil {
 
     private static ByteString toByteString(final Format format, final Object primitiveValue) {
         return switch (format) {
-            case bytes -> toByteString(primitiveValue);
+            case bytes -> toByteStringBytes(primitiveValue);
             case hadoop -> toByteStringHadoop(primitiveValue);
             case avro -> {
                 try {
@@ -318,6 +541,7 @@ public class BigtableSchemaUtil {
                     throw new RuntimeException("Failed to convert to avro ByteString", e);
                 }
             }
+
             default -> throw new IllegalArgumentException("Not supported byte string convert format: " + format);
         };
     }
@@ -344,13 +568,51 @@ public class BigtableSchemaUtil {
         return ByteString.copyFrom(bytes);
     }
 
+    public static ByteString toByteStringBytes(final Object primitiveValue) {
+        if(primitiveValue == null) {
+            return ByteString.copyFrom(new byte[0]);
+        }
+        final byte[] bytes = switch (primitiveValue) {
+            case Boolean b -> Bytes.toBytes(b);
+            case String s -> Bytes.toBytes(s);
+            case Utf8 u -> Bytes.toBytes(u.toString());
+            case byte[] bs -> bs;
+            case ByteBuffer bb -> bb.array();
+            case ByteString bs -> bs.toByteArray();
+            case ByteArray ba -> ba.toByteArray();
+            case BigDecimal bd -> Bytes.toBytes(bd);
+            case Short s -> Bytes.toBytes(s);
+            case Integer i -> Bytes.toBytes(i);
+            case Long l -> Bytes.toBytes(l);
+            case Float f -> Bytes.toBytes(f);
+            case Double d -> Bytes.toBytes(d);
+            default -> throw new IllegalArgumentException("Not supported bytes class: " + primitiveValue.getClass());
+        };
+        return ByteString.copyFrom(bytes);
+    }
+
     public static ByteString toByteStringHadoop(final Object primitiveValue) {
         final Writable writable = toWritable(primitiveValue);
         final byte[] bytes = WritableUtils.toByteArray(writable);
         return ByteString.copyFrom(bytes);
     }
 
-    public static Object toPrimitiveValue(Schema.FieldType fieldtype, final ByteString byteString) {
+    public static Object toPrimitiveValue(final Format format, final Schema.FieldType fieldtype, final ByteString byteString) {
+        return switch (format) {
+            case bytes -> toPrimitiveValueFromBytes(fieldtype, byteString);
+            case avro -> {
+                try {
+                    yield AvroSchemaUtil.decode(fieldtype, byteString.toByteArray());
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            case hadoop -> toPrimitiveValueFromWritable(fieldtype, byteString);
+            case string -> ElementSchemaUtil.getAsPrimitive(fieldtype, new String(byteString.toByteArray(), StandardCharsets.UTF_8));
+        };
+    }
+
+    public static Object toPrimitiveValueFromBytes(final Schema.FieldType fieldtype, final ByteString byteString) {
         if (byteString == null) {
             return null;
         }
@@ -364,7 +626,7 @@ public class BigtableSchemaUtil {
             case int64, time, timestamp -> Bytes.toLong(bytes);
             case float32 -> Bytes.toFloat(bytes);
             case float64 -> Bytes.toDouble(bytes);
-            default -> throw new RuntimeException();
+            default -> throw new IllegalArgumentException("Not supported deserialize type: " + fieldtype.getType());
         };
     }
 

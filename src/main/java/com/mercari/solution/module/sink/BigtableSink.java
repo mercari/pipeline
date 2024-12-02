@@ -89,7 +89,7 @@ public class BigtableSink extends Sink {
                 mutationOp = BigtableSchemaUtil.MutationOp.SET_CELL;
             }
             if(timestampType == null) {
-                timestampType = BigtableSchemaUtil.TimestampType.current_timestamp;
+                timestampType = BigtableSchemaUtil.TimestampType.server;
             }
             if(columns == null) {
                 columns = new ArrayList<>();
@@ -126,12 +126,12 @@ public class BigtableSink extends Sink {
         if(parameters.withWriteResults) {
             final PCollection<BigtableWriteResult> writeResults = mutation
                     .apply("WriteWithResult", write.withWriteResults());
+            return null;
         } else {
             final PDone done = mutation
                     .apply("Write", write);
+            return MCollectionTuple.done(done);
         }
-
-        return null;
     }
 
     private static BigtableIO.Write createWrite(
@@ -186,15 +186,14 @@ public class BigtableSink extends Sink {
             this.mutationOp = parameters.mutationOp;
             this.inputSchema = inputSchema;
 
-            this.valueArgs = new HashSet<>();
-            for(var column : columns) {
-                this.valueArgs.addAll(column.extractValueArgs());
-            }
-
             this.templateArgs = new HashSet<>();
             this.templateArgs.addAll(TemplateUtil.extractTemplateArgs(rowKey, inputSchema));
-            for(var column : columns) {
-                this.templateArgs.addAll(column.extractTemplateArgs(inputSchema));
+            this.valueArgs = new HashSet<>();
+            if(columns != null && !columns.isEmpty()) {
+                for(var column : columns) {
+                    this.valueArgs.addAll(column.extractValueArgs());
+                    this.templateArgs.addAll(column.extractTemplateArgs(inputSchema));
+                }
             }
         }
 
@@ -203,7 +202,7 @@ public class BigtableSink extends Sink {
             this.inputSchema.setup();
             this.templateRowKey = TemplateUtil.createStrictTemplate("rowKeyTemplate", rowKey);
             for(var column : columns) {
-                column.setup();
+                column.setupSink();
             }
         }
 
@@ -231,12 +230,7 @@ public class BigtableSink extends Sink {
             }
 
             final Map<String, Object> primitiveValues = element.asPrimitiveMap(valueArgs);
-            final List<Mutation> mutations = new ArrayList<>();
-            for(var column : columns) {
-                final List<Mutation> m = column.toMutation(primitiveValues, templateVariables, c.timestamp());
-                mutations.addAll(m);
-            }
-
+            final List<Mutation> mutations = BigtableSchemaUtil.toMutations(columns, primitiveValues, templateVariables, c.timestamp());
             final KV<ByteString, Iterable<Mutation>> output = KV.of(rowKey, mutations);
             c.output(output);
         }

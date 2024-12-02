@@ -199,7 +199,7 @@ public class BigQuerySink extends Sink {
         final Schema inputSchema = Union.createUnionSchema(inputs, getUnion());
 
 
-        final TableSchema destinationTableSchema = TemplateUtil.isTemplateText(parameters.table) ? null : BigQueryUtil.getTableSchemaFromTable(parameters.getTableReference());
+        //final TableSchema destinationTableSchema = TemplateUtil.isTemplateText(parameters.table) ? null : BigQueryUtil.getTableSchemaFromTable(parameters.getTableReference());
         /*
         final TableSchema insertTableSchema = Optional
                 .ofNullable(destinationTableSchema)

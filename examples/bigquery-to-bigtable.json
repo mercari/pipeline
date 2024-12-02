@@ -19,7 +19,7 @@
         "projectId": "myproject",
         "instanceId": "myinstance",
         "tableId": "mytable",
-        "rowKey": "${userId}#${_DateTimeUtil.formatTimestamp(createdAt, 'yyyyMMddHHmmSS', 'Asia/Tokyo')}",
+        "rowKey": "${userId}#${utils.bigtable.reverseTimestampMicros(timestampField)}",
         "columns": [
           {
             "family": "u",

@@ -15,7 +15,6 @@ import org.apache.avro.SchemaBuilder;
 import org.apache.avro.file.DataFileStream;
 import org.apache.avro.generic.*;
 import org.apache.avro.io.*;
-import org.apache.avro.specific.SpecificDatumWriter;
 import org.apache.avro.util.Utf8;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
@@ -1134,7 +1133,7 @@ public class AvroSchemaUtil {
             return standardValues;
         }
         for(final Schema.Field field : record.getSchema().getFields()) {
-            if(fieldNames != null && !fieldNames.isEmpty() && fieldNames.contains(field.name())) {
+            if(fieldNames != null && !fieldNames.isEmpty() && !fieldNames.contains(field.name())) {
                 continue;
             }
             final Object standardValue = getAsStandard(field.schema(), record.get(field.name()));
@@ -1690,7 +1689,7 @@ public class AvroSchemaUtil {
         for(final Schema.Field field : record.getSchema().getFields()) {
             final Object value;
             if(record.hasField(field.name())) {
-                value = record.get(field.name());
+                value = getAsPrimitive(record, field.name());
             } else {
                 value = null;
             }
@@ -1896,6 +1895,7 @@ public class AvroSchemaUtil {
                 decoder.readMapStart();
                 yield map;
             }
+            case element -> decode(fieldType.getElementSchema().getAvroSchema(), decoder.readBytes(null).array());
             case array -> {
                 List<?> list = new ArrayList<>();
                 long count = decoder.readArrayStart();

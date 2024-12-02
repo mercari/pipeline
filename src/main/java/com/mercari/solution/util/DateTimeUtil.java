@@ -410,6 +410,14 @@ public class DateTimeUtil {
         return toEpochMicroSecond(instant);
     }
 
+    public static Long reduceAccuracy(final Long value, final long n) {
+        if(value == null) {
+            return null;
+        }
+        return (value / n) * n;
+    }
+
+
     public static Long assumeEpochMicroSecond(final Long epoch) {
         if(epoch == null) {
             return null;

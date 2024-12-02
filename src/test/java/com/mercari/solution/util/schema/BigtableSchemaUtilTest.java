@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema;
 
+import com.google.gson.GsonBuilder;
 import com.google.protobuf.ByteString;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
@@ -14,10 +15,43 @@ import java.util.Map;
 
 public class BigtableSchemaUtilTest {
 
+    public static class Parameters {
+        public String text;
+        public List<BigtableSchemaUtil.ColumnFamilyProperties> columns;
+    }
+
     @Test
-    public void testByteStringHBase() {
+    public void testCreateSchema() {
+
+
+
+        final String config = """
+                {
+                  "text": "okok",
+                  "columns": [
+                    {
+                      "family": "a",
+                      "qualifiers": [
+                        { "name": "f1", "field": "field1", "type": "element", "fields" :[{"name": "aa", "type": "string"}] }
+                      ],
+                      "format": "bytes"
+                    }
+                  ]
+                }
+                """;
+
+        final Parameters parameters = new GsonBuilder().create().fromJson(config, Parameters.class);
+        parameters.columns.forEach(BigtableSchemaUtil.ColumnFamilyProperties::setupSource);
+        System.out.println(parameters.columns.getFirst().toString());
+        final Schema schema = BigtableSchemaUtil.createSchema(parameters.columns);
+        System.out.println(schema);
+
+    }
+
+    @Test
+    public void testByteStringBytes() {
         ByteString byteString = BigtableSchemaUtil.toByteString("abc");
-        Object value = BigtableSchemaUtil.toPrimitiveValue(Schema.FieldType.STRING, byteString);
+        Object value = BigtableSchemaUtil.toPrimitiveValueFromBytes(Schema.FieldType.STRING, byteString);
         Assert.assertEquals("abc", value);
     }
 

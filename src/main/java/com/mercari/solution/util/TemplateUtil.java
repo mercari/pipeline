@@ -4,6 +4,7 @@ import com.mercari.solution.module.Schema;
 import freemarker.core.Environment;
 import freemarker.ext.beans.BeansWrapper;
 import freemarker.template.*;
+import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.commons.csv.CSVRecord;
 
 import java.io.IOException;
@@ -12,11 +13,18 @@ import java.io.StringWriter;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 public class TemplateUtil {
+
+    private static final Map<String, Object> UTILS = Map.of(
+            "string", new StringFunctions(),
+            "datetime", new DateTimeFunctions(),
+            "bigtable", new BigtableFunctions()
+    );
 
     public static Template createSafeTemplate(final String name, final String template) {
 
@@ -26,8 +34,9 @@ public class TemplateUtil {
         templateConfig.setLogTemplateExceptions(false);
         templateConfig.setSharedVariable("statics", BeansWrapper.getDefaultInstance().getStaticModels());
         try {
+            templateConfig.setSharedVariable("utils", UTILS);
             return new Template(name, new StringReader(template), templateConfig);
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new IllegalStateException(e);
         }
     }
@@ -38,8 +47,9 @@ public class TemplateUtil {
         templateConfig.setSharedVariable("statics", BeansWrapper.getDefaultInstance().getStaticModels());
         //templateConfig.setObjectWrapper(new CSVWrapper(Configuration.VERSION_2_3_30));
         try {
+            templateConfig.setSharedVariable("utils", UTILS);
             return new Template(name, new StringReader(template), templateConfig);
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new IllegalStateException(e);
         }
     }
@@ -82,6 +92,15 @@ public class TemplateUtil {
         return args;
     }
 
+    public static void setContextVariables(
+            final DoFn.ProcessContext c,
+            final Map<String, Object> values) {
+
+        final Map<String, Object> contextValues = new HashMap<>();
+        contextValues.put("timestamp", DateTimeUtil.toInstant(c.timestamp().getMillis() * 1000L));
+        values.put("context", contextValues);
+    }
+
     public static void setFunctions(final Map<String, Object> values) {
         setFunctions(values, "__");
     }
@@ -92,34 +111,21 @@ public class TemplateUtil {
     }
 
     public static class StringFunctions {
+
         public String format(String format, Object... args) {
             return String.format(format, args);
+        }
+
+        public String reverse(String text) {
+            if(text == null) {
+                return "";
+            }
+            return new StringBuilder(text).reverse().toString();
         }
 
     }
 
     public static class DateTimeFunctions {
-
-        public String format(String pattern, Instant timestamp, String timezone) {
-            if(timestamp == null) {
-                return "";
-            }
-            final LocalDateTime dateTime = getLocalDateTime(timestamp, timezone);
-            return dateTime.format(DateTimeFormatter.ofPattern(pattern));
-        }
-
-        public String format(String pattern, Long epocMicros, String timezone) {
-            if(epocMicros == null) {
-                return "";
-            }
-            final Instant timestamp = Instant.ofEpochMilli(epocMicros / 1000L);
-            final LocalDateTime dateTime = getLocalDateTime(timestamp, timezone);
-            return dateTime.format(DateTimeFormatter.ofPattern(pattern));
-        }
-
-        public String format(String pattern, Long epocMicros) {
-            return format(pattern, epocMicros, "UTC");
-        }
 
         public String formatTimestamp(Long epocMicros) {
             if(epocMicros == null) {
@@ -130,8 +136,43 @@ public class TemplateUtil {
             return dateTime.format(DateTimeFormatter.ISO_DATE_TIME);
         }
 
+        public String formatTimestamp(Instant timestamp) {
+            if(timestamp == null) {
+                return "";
+            }
+            return formatTimestamp(DateTimeUtil.toEpochMicroSecond(timestamp));
+        }
+
+        public String formatTimestamp(Long epocMicros, String pattern) {
+            return formatTimestamp(epocMicros, pattern,"UTC");
+        }
+
+        public String formatTimestamp(Instant timestamp, String pattern) {
+            return formatTimestamp(timestamp, pattern,"UTC");
+        }
+
+        public String formatTimestamp(Instant timestamp, String pattern, String timezone) {
+            if(timestamp == null) {
+                return "";
+            }
+            final LocalDateTime dateTime = getLocalDateTime(timestamp, timezone);
+            return dateTime.format(DateTimeFormatter.ofPattern(pattern));
+        }
+
+        public String formatTimestamp(Long epocMicros, String pattern, String timezone) {
+            if(epocMicros == null) {
+                return "";
+            }
+            final Instant timestamp = DateTimeUtil.toInstant(epocMicros);
+            return formatTimestamp(timestamp, pattern, timezone);
+        }
+
         public String formatDate(Integer epocDays) {
             return formatDate(epocDays, null);
+        }
+
+        public String formatDate(LocalDate localDate) {
+            return formatDate(localDate, null);
         }
 
         public String formatDate(Integer epocDays, String pattern) {
@@ -139,17 +180,7 @@ public class TemplateUtil {
                 return "";
             }
             final LocalDate localDate = LocalDate.ofEpochDay(epocDays);
-            final DateTimeFormatter formatter;
-            if(pattern == null) {
-                formatter = DateTimeFormatter.ISO_DATE;
-            } else {
-                formatter = DateTimeFormatter.ofPattern(pattern);
-            }
-            return localDate.format(formatter);
-        }
-
-        public String formatDate(LocalDate localDate) {
-            return formatDate(localDate, null);
+            return formatDate(localDate, pattern);
         }
 
         public String formatDate(LocalDate localDate, String pattern) {
@@ -165,21 +196,37 @@ public class TemplateUtil {
             return localDate.format(formatter);
         }
 
-        public String formatDateTime(Long epocMicros) {
-            return formatDateTime(epocMicros, "UTC");
+        public String formatTime(Long epocMicros) {
+            return formatTime(epocMicros, null);
         }
 
-        public String formatDateTime(Long epocMicros, String timezone) {
+        public String formatTime(LocalTime localTime) {
+            return formatTime(localTime, null);
+        }
+
+        public String formatTime(Long epocMicros, String pattern) {
             if(epocMicros == null) {
                 return "";
             }
-            final Instant timestamp = Instant.ofEpochMilli(epocMicros / 1000L);
-            final LocalDateTime dateTime = getLocalDateTime(timestamp, timezone);
-            return dateTime.format(DateTimeFormatter.ISO_DATE_TIME);
+            final LocalTime localTime = LocalTime.ofNanoOfDay(epocMicros * 1000L);
+            return formatTime(localTime, pattern);
+        }
+
+        public String formatTime(LocalTime localTime, String pattern) {
+            if(localTime == null) {
+                return "";
+            }
+            final DateTimeFormatter formatter;
+            if(pattern == null) {
+                formatter = DateTimeFormatter.ISO_TIME;
+            } else {
+                formatter = DateTimeFormatter.ofPattern(pattern);
+            }
+            return localTime.format(formatter);
         }
 
         public String currentDate(final String zone) {
-            return currentDate(zone, 0L, "yyyy-MM-dd");
+            return currentDate(zone, 0L);
         }
 
         public String currentDate(final String zone, final Long plusDays) {
@@ -192,7 +239,7 @@ public class TemplateUtil {
         }
 
         public String currentTime(final String zone) {
-            return currentTime(zone, 0L, "HH:mm:ss");
+            return currentTime(zone, 0L);
         }
 
         public String currentTime(final String zone, final Long plusSeconds) {
@@ -250,11 +297,38 @@ public class TemplateUtil {
 
     }
 
+    public static class BigtableFunctions {
+
+        public Long reverseTimestampMicros(final Instant instant) {
+            return reverseTimestampMicros(DateTimeUtil.toEpochMicroSecond(instant));
+        }
+
+        public Long reverseTimestampMicros(final Long epochMicros) {
+            return Long.MAX_VALUE - epochMicros;
+        }
+
+        public Long reverseTimestampMillis(final Instant instant) {
+            return reverseTimestampMillis(DateTimeUtil.reduceAccuracy(DateTimeUtil.toEpochMicroSecond(instant), 1000));
+        }
+
+        public Long reverseTimestampMillis(final Long epochMillis) {
+            return (Long.MAX_VALUE / 1000) - epochMillis;
+        }
+
+    }
+
     static class ImputeSameVariablesTemplateExceptionHandler implements TemplateExceptionHandler {
 
         @Override
         public void handleTemplateException(TemplateException te, Environment env, java.io.Writer out) {
             try {
+                if(te instanceof TemplateModelException e) {
+                    final List<String> lines = env.getCurrentTemplate().toString().lines().collect(Collectors.toList());
+                    final String line = lines.get(te.getLineNumber() - 1);
+                    final String content = line.substring(te.getColumnNumber()-1, te.getEndColumnNumber());
+                    out.write(content);
+                    return;
+                }
                 if(te.getBlamedExpressionString() == null) {
                     throw new IllegalArgumentException(te);
                 }
