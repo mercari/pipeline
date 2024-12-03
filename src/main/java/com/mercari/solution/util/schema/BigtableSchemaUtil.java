@@ -27,7 +27,7 @@ public class BigtableSchemaUtil {
         bytes,
         avro,
         hadoop,
-        string
+        text
     }
 
     public enum MutationOp implements Serializable {
@@ -608,7 +608,7 @@ public class BigtableSchemaUtil {
                 }
             }
             case hadoop -> toPrimitiveValueFromWritable(fieldtype, byteString);
-            case string -> ElementSchemaUtil.getAsPrimitive(fieldtype, new String(byteString.toByteArray(), StandardCharsets.UTF_8));
+            case text -> ElementSchemaUtil.getAsPrimitive(fieldtype, new String(byteString.toByteArray(), StandardCharsets.UTF_8));
         };
     }
 

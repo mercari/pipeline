@@ -101,7 +101,7 @@ public class RowToBigtableConverter {
                         bytes = RowSchemaUtil.getAsByteString(row, field.getName());
                         break;
                     }
-                    case string: {
+                    case text: {
                         final String stringValue = RowSchemaUtil.getAsString(row, field.getName());
                         if(stringValue == null) {
                             bytes = null;

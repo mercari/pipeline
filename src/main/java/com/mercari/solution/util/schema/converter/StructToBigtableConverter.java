@@ -92,7 +92,7 @@ public class StructToBigtableConverter {
 
                 final ByteString bytes = switch (format) {
                     case bytes -> StructSchemaUtil.getAsByteString(struct, field.getName());
-                    case string -> {
+                    case text -> {
                         final String stringValue = StructSchemaUtil.getAsString(struct, field.getName());
                         if(stringValue == null) {
                             yield null;

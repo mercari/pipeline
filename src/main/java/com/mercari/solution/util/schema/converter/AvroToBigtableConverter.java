@@ -91,7 +91,7 @@ public class AvroToBigtableConverter {
 
                 final ByteString bytes = switch (format) {
                     case bytes -> AvroSchemaUtil.getAsByteString(record, field.name());
-                    case string -> {
+                    case text -> {
                         final String stringValue = AvroSchemaUtil.getAsString(record, field.name());
                         if(stringValue == null) {
                             yield null;

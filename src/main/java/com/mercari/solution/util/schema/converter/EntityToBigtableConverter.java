@@ -101,7 +101,7 @@ public class EntityToBigtableConverter {
                         bytes = EntitySchemaUtil.getAsByteString(entity, field.getName());
                         break;
                     }
-                    case string: {
+                    case text: {
                         final String stringValue = EntitySchemaUtil.getAsString(entity, field.getName());
                         if(stringValue == null) {
                             bytes = null;
