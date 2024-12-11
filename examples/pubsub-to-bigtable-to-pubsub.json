@@ -1,0 +1,58 @@
+{
+  "sources": [
+    {
+      "name": "pubsubInput",
+      "module": "pubsub",
+      "parameters": {
+        "subscription": "projects/myproject/subscriptions/mysubscription",
+        "format": "json"
+      },
+      "schema": {
+        "fields": [
+          { "name": "user_id", "type": "string", "mode": "required" }
+        ]
+      }
+    }
+  ],
+  "transforms": [
+    {
+      "name": "bigtableTransform",
+      "module": "bigtable",
+      "inputs": [
+        "pubsubInput"
+      ],
+      "parameters": {
+        "projectId": "myproject",
+        "instanceId": "myinstance",
+        "tableId": "mytable",
+        "keyRange": {
+          "start": "${user_id}#${utils.bigtable.reverseTimestampMicros(timestampField)}",
+          "end": "${user_id}#${utils.bigtable.reverseTimestampMicros(utils.datetime.timestampAdd(timestampField, -1, 'MONTH'))}"
+        },
+        "columns": [
+          {
+            "family": "e",
+            "qualifiers": [
+              { "name": "name", "field": "EventName", "type": "string" },
+              { "name": "created", "field": "CreatedAt", "type": "timestamp" },
+              { "name": "event", "field": "Metadata", "type": "json" }
+            ],
+            "cell": "last"
+          }
+        ],
+        "sql": "SELECT user_id, ARGMAX(CASE WHEN name='buy' THEN created ELSE NULL END, event) AS lastEvent, EVENT_TIMESTAMP() AS timestamp FROM INPUT GROUP BY user_id"
+      }
+    }
+  ],
+  "sinks": [
+    {
+      "name": "pubsubOutput",
+      "module": "pubsub",
+      "input": "bigtableTransform",
+      "parameters": {
+        "topic": "projects/myproject/topics/mytopic",
+        "format": "json"
+      }
+    }
+  ]
+}
