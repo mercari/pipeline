@@ -67,12 +67,14 @@ public class ElementSchemaUtil {
         throw new IllegalArgumentException("Not found field: " + field + " in input fields: " + inputFields);
     }
 
-    public static Object getValue(Map<String, ?> input, String field) {
-        if(field.contains(".")) {
+    public static Object getValue(Map<?, ?> input, String field) {
+        if(input.containsKey(field)) {
+            return input.get(field);
+        } else if(field.contains(".")) {
             final String[] fields = field.split("\\.", 2);
             final Object value = input.get(fields[0]);
             return switch (value) {
-                case Map map -> getValue(map, fields[1]);
+                case Map<?, ?> map -> getValue(map, fields[1]);
                 case String str -> {
                     try {
                         final JsonElement jsonElement = new Gson().fromJson(str, JsonElement.class);
@@ -102,7 +104,7 @@ public class ElementSchemaUtil {
                 default -> throw new IllegalArgumentException("Illegal nested field: " + field + ", value: " + value);
             };
         } else {
-            return input.get(field);
+            return null;
         }
     }
 
@@ -129,24 +131,34 @@ public class ElementSchemaUtil {
                 case String s -> ByteBuffer.wrap(Base64.getDecoder().decode(s));
                 default -> null;
             };
+            case int16 -> switch (primitiveValue) {
+                case Short s -> s;
+                case Number n -> n.shortValue();
+                case String s -> Short.parseShort(s);
+                default -> null;
+            };
             case int32 -> switch (primitiveValue) {
                 case Integer i -> i;
                 case Number n -> n.intValue();
+                case String s -> Integer.parseInt(s);
                 default -> null;
             };
             case int64 -> switch (primitiveValue) {
                 case Long l -> l;
                 case Number n -> n.longValue();
+                case String s -> Long.parseLong(s);
                 default -> null;
             };
             case float32 -> switch (primitiveValue) {
                 case Float f -> f;
                 case Number n -> n.floatValue();
+                case String s -> Float.parseFloat(s);
                 default -> null;
             };
             case float64 -> switch (primitiveValue) {
                 case Double d -> d;
                 case Number n -> n.doubleValue();
+                case String s -> Double.parseDouble(s);
                 default -> null;
             };
             case date -> switch (primitiveValue) {
@@ -166,7 +178,8 @@ public class ElementSchemaUtil {
             };
             case enumeration -> switch (primitiveValue) {
                 case String s -> fieldType.getSymbolIndex(s);
-                case Integer i -> fieldType.getSymbols().get(i);
+                case Integer i -> i;
+                case Number n -> n.intValue();
                 default -> null;
             };
             case element, map -> switch (primitiveValue) {

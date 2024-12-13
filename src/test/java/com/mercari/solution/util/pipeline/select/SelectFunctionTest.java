@@ -24,7 +24,10 @@ public class SelectFunctionTest {
                 Schema.Field.of("floatField", Schema.FieldType.FLOAT32),
                 Schema.Field.of("doubleField", Schema.FieldType.FLOAT64),
                 Schema.Field.of("enumField", Schema.FieldType.enumeration(List.of("a","b","c"))),
-                Schema.Field.of("timestampField", Schema.FieldType.TIMESTAMP)
+                Schema.Field.of("timestampField", Schema.FieldType.TIMESTAMP),
+                Schema.Field.of("nestedField", Schema.FieldType.element(Schema.builder()
+                                .withField("stringField", Schema.FieldType.STRING)
+                        .build()))
         );
 
         final String config = """
@@ -38,10 +41,13 @@ public class SelectFunctionTest {
                   { "name": "currentTimestampField", "func": "current_timestamp" },
                   { "name": "eventTimestampField", "func": "event_timestamp" },
                   { "name": "concatField", "func": "concat", "delimiter": " ", "fields": ["stringField","intField","longField"] },
+                  { "name": "intField", "field": "nestedField.stringField", "type": "int32" },
+                  { "name": "stringFieldA", "field": "nestedField.stringField", "type": "string" },
                   { "name": "structField", "func": "struct", "mode": "repeated", "fields": [
                     { "name": "enumField" },
                     { "name": "stringFieldA", "field": "stringField" },
                     { "name": "intFieldA", "field": "intField" },
+                    { "name": "textFieldA", "func": "hash", "text": "${stringFieldA}" },
                     { "name": "nestedStructField", "func": "struct", "fields": [
                       { "name": "stringFieldA", "field": "stringField" },
                       { "name": "nestedNestedStructField", "func": "struct", "fields": [
@@ -83,6 +89,7 @@ public class SelectFunctionTest {
         Assert.assertTrue(outputSchema.hasField("concatField"));
         Assert.assertTrue(outputSchema.hasField("structField"));
         Assert.assertTrue(outputSchema.hasField("jsonField"));
+        Assert.assertTrue(outputSchema.hasField("intField"));
         Assert.assertEquals(Schema.Type.int64, outputSchema.getField("longField").getFieldType().getType());
         Assert.assertEquals(Schema.Type.int32, outputSchema.getField("renameIntField").getFieldType().getType());
         Assert.assertEquals(Schema.Type.string, outputSchema.getField("constantStringField").getFieldType().getType());
@@ -94,13 +101,14 @@ public class SelectFunctionTest {
         Assert.assertEquals(Schema.Type.string, outputSchema.getField("concatField").getFieldType().getType());
         Assert.assertEquals(Schema.Type.array, outputSchema.getField("structField").getFieldType().getType());
         Assert.assertEquals(Schema.Type.string, outputSchema.getField("jsonField").getFieldType().getType());
+        Assert.assertEquals(Schema.Type.int32, outputSchema.getField("intField").getFieldType().getType());
 
         //
         for(final SelectFunction selectFunction : selectFunctions) {
             selectFunction.setup();
         }
 
-        final Map<String,Object> values = new HashMap<>();
+        final Map<String, Object> values = new HashMap<>();
         values.put("stringField", "stringValue");
         values.put("intField", 32);
         values.put("longField", 10L);
@@ -108,6 +116,10 @@ public class SelectFunctionTest {
         values.put("doubleField", 10.10D);
         values.put("enumField", 1);
         values.put("timestampField", Instant.parse("2024-08-30T00:00:00Z").getMillis() * 1000L);
+
+        final Map<String, Object> nestedFieldValues = new HashMap<>();
+        nestedFieldValues.put("stringField", "100");
+        values.put("nestedField", nestedFieldValues);
 
         final Instant eventTimestamp = Instant.parse("2024-01-01T00:00:00Z");
 
@@ -121,6 +133,7 @@ public class SelectFunctionTest {
         Assert.assertNotNull(results.get("currentTimestampField"));
         Assert.assertEquals(eventTimestamp.getMillis() * 1000L, results.get("eventTimestampField"));
         Assert.assertEquals("stringValue 32 10", results.get("concatField"));
+        Assert.assertEquals(100, results.get("intField"));
 
         final JsonObject jsonObject = new Gson().fromJson((String)results.get("jsonField"), JsonObject.class);
         Assert.assertEquals("stringValue", jsonObject.get("stringFieldA").getAsString());
