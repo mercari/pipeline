@@ -49,6 +49,8 @@ public class Config implements Serializable {
 
     private Boolean empty;
 
+    private String content;
+
     public String getName() {
         return name;
     }
@@ -119,6 +121,10 @@ public class Config implements Serializable {
 
     public void setEmpty(Boolean empty) {
         this.empty = empty;
+    }
+
+    public String getContent() {
+        return content;
     }
 
     public void validate() {
@@ -380,6 +386,8 @@ public class Config implements Serializable {
             config.setSources(sources);
             config.setTransforms(transforms);
             config.setSinks(sinks);
+
+            config.content = templatedConfigJson;
 
             return config;
         } catch (Throwable e) {

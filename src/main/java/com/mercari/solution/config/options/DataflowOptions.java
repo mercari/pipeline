@@ -55,7 +55,7 @@ public class DataflowOptions implements Serializable {
             final PipelineOptions dataflowOptions = pipelineOptions.as(clazz);
 
             if(dataflow.tempLocation != null) {
-                clazz.getMethod("setTempLocation", String.class).invoke(dataflowOptions, dataflow.tempLocation);
+                pipelineOptions.setTempLocation(dataflow.tempLocation);
             }
             if(dataflow.stagingLocation != null) {
                 clazz.getMethod("setStagingLocation", String.class).invoke(dataflowOptions, dataflow.stagingLocation);
@@ -84,10 +84,10 @@ public class DataflowOptions implements Serializable {
                 clazz.getMethod("setWorkerMachineType", String.class).invoke(dataflowOptions, dataflow.workerMachineType);
             }
             if(dataflow.workerRegion != null) {
-                clazz.getMethod("setWorkerRegion", String.class).invoke(dataflowOptions, dataflow.workerRegion);
+                pipelineOptions.as(GcpOptions.class).setWorkerRegion(dataflow.workerRegion);
             }
             if(dataflow.workerZone != null) {
-                clazz.getMethod("setWorkerZone", String.class).invoke(dataflowOptions, dataflow.workerZone);
+                pipelineOptions.as(GcpOptions.class).setWorkerZone(dataflow.workerZone);
             }
             if(dataflow.diskSizeGb != null) {
                 clazz.getMethod("setDiskSizeGb", int.class).invoke(dataflowOptions, dataflow.diskSizeGb);
@@ -99,7 +99,7 @@ public class DataflowOptions implements Serializable {
                 clazz.getMethod("setServiceAccount", String.class).invoke(dataflowOptions, dataflow.serviceAccount);
             }
             if(dataflow.impersonateServiceAccount != null) {
-                clazz.getMethod("setImpersonateServiceAccount", String.class).invoke(dataflowOptions, dataflow.impersonateServiceAccount);
+                pipelineOptions.as(GcpOptions.class).setImpersonateServiceAccount(dataflow.impersonateServiceAccount);
             }
             if(dataflow.network != null) {
                 clazz.getMethod("setNetwork", String.class).invoke(dataflowOptions, dataflow.network);
@@ -130,8 +130,8 @@ public class DataflowOptions implements Serializable {
                     }
                 }
             }
-            if(pipelineOptions.as(StreamingOptions.class).isStreaming()) {
-                clazz.getMethod("setEnableStreamingEngine", Boolean.class).invoke(dataflowOptions, Optional.ofNullable(dataflow.enableStreamingEngine).orElse(true));
+            if(dataflow.enableStreamingEngine != null && pipelineOptions.as(StreamingOptions.class).isStreaming()) {
+                dataflowOptions.as(GcpOptions.class).setEnableStreamingEngine(dataflow.enableStreamingEngine);
             }
             if(dataflow.dataflowServiceOptions != null && !dataflow.dataflowServiceOptions.isEmpty()) {
                 final List<String> existingDataflowServiceOptions = Optional
