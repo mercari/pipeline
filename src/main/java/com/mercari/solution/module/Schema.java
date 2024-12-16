@@ -1037,8 +1037,8 @@ public class Schema implements Serializable {
             }
             return switch (type.trim().toLowerCase()) {
                 case "bool", "boolean" -> Type.bool;
-                case "bytes" -> Type.bytes;
-                case "string" -> Type.string;
+                case "bytes", "blob" -> Type.bytes;
+                case "string", "char" -> Type.string;
                 case "json" -> Type.json;
                 case "byte", "int8" -> Type.int8;
                 case "short", "int16" -> Type.int16;
@@ -1048,14 +1048,14 @@ public class Schema implements Serializable {
                 case "float", "float32" -> Type.float32;
                 case "double", "float64" -> Type.float64;
                 case "numeric", "decimal" -> Type.decimal;
-                case "geography" -> Type.geography;
-                case "time" -> Type.time;
                 case "date" -> Type.date;
+                case "time" -> Type.time;
                 case "datetime" -> Type.datetime;
                 case "timestamp" -> Type.timestamp;
                 case "enum", "enumeration" -> Type.enumeration;
                 case "row", "struct", "record", "element" -> Type.element;
                 case "map" -> Type.map;
+                case "geography" -> Type.geography;
                 default -> throw new IllegalArgumentException("Not supported schema type[" + type + "]");
             };
         }

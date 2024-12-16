@@ -213,6 +213,28 @@ public class DocumentSchemaUtil {
         }
     }
 
+    public static Long getAsLong(final Document document, final String fieldName) {
+        if(!document.getFieldsMap().containsKey(fieldName)) {
+            return null;
+        }
+        final Value value = document.getFieldsOrThrow(fieldName);
+        return switch(value.getValueTypeCase()) {
+            case BOOLEAN_VALUE -> value.getBooleanValue() ? 1L : 0L;
+            case INTEGER_VALUE -> value.getIntegerValue();
+            case DOUBLE_VALUE -> Double.valueOf(value.getDoubleValue()).longValue();
+            case STRING_VALUE -> {
+                try {
+                    yield Long.parseLong(value.getStringValue());
+                } catch (Exception e) {
+                    yield null;
+                }
+            }
+            case BYTES_VALUE, TIMESTAMP_VALUE, GEO_POINT_VALUE,
+                 REFERENCE_VALUE, MAP_VALUE, ARRAY_VALUE,
+                 VALUETYPE_NOT_SET, NULL_VALUE -> null;
+        };
+    }
+
     public static BigDecimal getAsBigDecimal(final Document document, final String fieldName) {
         final Value value = document.getFieldsOrDefault(fieldName, null);
         switch (value.getValueTypeCase()) {

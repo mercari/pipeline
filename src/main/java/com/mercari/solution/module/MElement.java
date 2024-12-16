@@ -421,6 +421,32 @@ public class MElement implements Serializable {
         };
     }
 
+    public Long getAsLong(final String field) {
+        if(value == null) {
+            return null;
+        }
+        return switch (type) {
+            case ELEMENT -> {
+                final Map<String, Object> map = (Map<String, Object>) value;
+                final Object fieldValue = map.get(field);
+                yield switch (fieldValue) {
+                    case Long v -> v;
+                    case Number n -> n.longValue();
+                    case ByteBuffer b -> BigDecimal.valueOf(new BigInteger(b.array()).longValue(), 9).longValue();
+                    case Boolean b -> b ? 1L : 0L;
+                    case String s -> Long.parseLong(s);
+                    case null, default -> null;
+                };
+            }
+            case ROW -> RowSchemaUtil.getAsLong((Row) value, field);
+            case AVRO -> AvroSchemaUtil.getAsLong((GenericRecord) value, field);
+            case STRUCT -> StructSchemaUtil.getAsLong((Struct) value, field);
+            case DOCUMENT -> DocumentSchemaUtil.getAsLong((Document) value, field);
+            case ENTITY -> EntitySchemaUtil.getAsLong((Entity) value, field);
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
     public BigDecimal getAsBigDecimal(final String field) {
         if(value == null) {
             return null;
