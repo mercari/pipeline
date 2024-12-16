@@ -333,7 +333,7 @@ public class Filter implements Serializable {
         return filter(condition, element.asStandardMap(schema, condition.variables));
     }
 
-    public static boolean filter(final ConditionNode condition, final Map<String, Object> standardValues) {
+    public static boolean filter(final ConditionNode condition, final Map<String, ?> standardValues) {
         final List<Boolean> bits = new ArrayList<>();
 
         if(condition.getLeaves() != null && !condition.getLeaves().isEmpty()) {

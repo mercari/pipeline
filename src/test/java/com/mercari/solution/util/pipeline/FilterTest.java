@@ -20,6 +20,48 @@ import java.util.Map;
 public class FilterTest {
 
     @Test
+    public void testFilter() {
+        final String config1 = """
+                [
+                  { "key": "stringField", "op": "=", "value": "stringValue" },
+                  { "key": "longField", "op": ">=", "value": 100 }
+                ]
+                """;
+
+        final Filter.ConditionNode node1 = Filter.parse(config1);
+
+        final Schema schema = Schema.builder()
+                .withField("stringField", Schema.FieldType.STRING)
+                .withField("longField", Schema.FieldType.INT64)
+                .build();
+
+        MElement element1 = MElement.builder()
+                .withString("stringField", "stringValue")
+                .withInt64("longField", 100L)
+                .build();
+        Assert.assertTrue(Filter.filter(node1, schema, element1));
+
+        element1 = MElement.builder()
+                .withString("stringField", "stringValue")
+                .withInt64("longField", 99L)
+                .build();
+        Assert.assertFalse(Filter.filter(node1, schema, element1));
+
+        element1 = MElement.builder()
+                .withString("stringField", "stringValue_")
+                .withInt64("longField", 99L)
+                .build();
+        Assert.assertFalse(Filter.filter(node1, schema, element1));
+
+        element1 = MElement.builder()
+                .withString("stringField", "stringValue_")
+                .withInt64("longField", 100L)
+                .build();
+        Assert.assertFalse(Filter.filter(node1, schema, element1));
+
+    }
+
+    @Test
     public void testLeafCompare() {
 
         // Number
