@@ -3,6 +3,7 @@ package com.mercari.solution.module.sink;
 import com.google.bigtable.v2.Mutation;
 import com.google.protobuf.ByteString;
 import com.mercari.solution.module.*;
+import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.schema.*;
@@ -14,6 +15,7 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
+import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,6 +53,8 @@ public class BigtableSink extends Sink {
         private Long maxOutstandingBytes;
         private Long maxOutstandingElements;
 
+        private Integer operationTimeoutSecond;
+        private Integer attemptTimeoutSecond;
 
         public void validate() {
             final List<String> errorMessages = new ArrayList<>();
@@ -73,6 +77,37 @@ public class BigtableSink extends Sink {
             } else {
                 for(int i=0; i<columns.size(); i++) {
                     errorMessages.addAll(columns.get(i).validate(i));
+                }
+            }
+            if(maxBytesPerBatch != null) {
+                if(maxBytesPerBatch <= 0) {
+                    errorMessages.add("parameters.maxBytesPerBatch must be over zero");
+                }
+            }
+            if(maxElementsPerBatch != null) {
+                if(maxElementsPerBatch <= 0) {
+                    errorMessages.add("parameters.maxElementsPerBatch must be over zero");
+                }
+            }
+            if(maxOutstandingBytes != null) {
+                if(maxOutstandingBytes <= 0) {
+                    errorMessages.add("parameters.maxOutstandingBytes must be over zero");
+                }
+            }
+            if(maxOutstandingElements != null) {
+                if(maxOutstandingElements <= 0) {
+                    errorMessages.add("parameters.maxOutstandingElements must be over zero");
+                }
+            }
+
+            if(operationTimeoutSecond != null) {
+                if(operationTimeoutSecond <= 0) {
+                    errorMessages.add("parameters.operationTimeoutSecond must be over zero");
+                }
+            }
+            if(attemptTimeoutSecond != null) {
+                if(attemptTimeoutSecond <= 0) {
+                    errorMessages.add("parameters.attemptTimeoutSecond must be over zero");
                 }
             }
 
@@ -137,7 +172,8 @@ public class BigtableSink extends Sink {
     private static BigtableIO.Write createWrite(
             final BigtableSinkParameters parameters) {
 
-        BigtableIO.Write write = BigtableIO.write()
+        BigtableIO.Write write = BigtableIO
+                .write()
                 .withProjectId(parameters.projectId)
                 .withInstanceId(parameters.instanceId)
                 .withTableId(parameters.tableId)
@@ -160,6 +196,12 @@ public class BigtableSink extends Sink {
         }
         if(parameters.maxOutstandingElements != null) {
             write = write.withMaxOutstandingElements(parameters.maxOutstandingElements);
+        }
+        if(parameters.operationTimeoutSecond != null) {
+            write = write.withOperationTimeout(Duration.standardSeconds(parameters.operationTimeoutSecond));
+        }
+        if(parameters.attemptTimeoutSecond != null) {
+            write = write.withAttemptTimeout(Duration.standardSeconds(parameters.attemptTimeoutSecond));
         }
 
         return write;
@@ -214,8 +256,7 @@ public class BigtableSink extends Sink {
             }
 
             final Map<String,Object> templateVariables = element.asStandardMap(inputSchema, templateArgs);
-            TemplateUtil.setFunctions(templateVariables);
-            //data.put("_EVENTTIME", Instant.ofEpochMilli(c.timestamp().getMillis()));
+            templateVariables.put("_timestamp", DateTimeUtil.toInstant(c.timestamp().getMillis() * 1000L));
             final String rowKeyString = TemplateUtil.executeStrictTemplate(templateRowKey, templateVariables);
             final ByteString rowKey = ByteString.copyFrom(rowKeyString, StandardCharsets.UTF_8);
 

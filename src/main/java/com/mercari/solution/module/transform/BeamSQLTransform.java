@@ -1,6 +1,5 @@
 package com.mercari.solution.module.transform;
 
-import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.coder.ElementCoder;
@@ -11,7 +10,6 @@ import com.mercari.solution.util.sql.udf.ArrayFunctions;
 import com.mercari.solution.util.sql.udf.MathFunctions;
 import org.apache.beam.sdk.coders.RowCoder;
 import org.apache.beam.sdk.extensions.sql.SqlTransform;
-import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.PCollection;
@@ -30,7 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-@Transform.Module(name="sql")
+@Transform.Module(name="beamsql")
 public class BeamSQLTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(BeamSQLTransform.class);

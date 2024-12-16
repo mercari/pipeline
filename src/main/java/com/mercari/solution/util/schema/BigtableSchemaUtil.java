@@ -48,6 +48,12 @@ public class BigtableSchemaUtil {
         zero
     }
 
+    public enum CellType implements Serializable {
+        all,
+        first,
+        last
+    }
+
     public static class ColumnFamilyProperties implements Serializable {
 
         private String family;
@@ -57,6 +63,9 @@ public class BigtableSchemaUtil {
         // for sink
         private MutationOp mutationOp;
         private TimestampType timestampType;
+
+        // for source
+        private CellType cellType;
 
         private transient Template templateFamily;
 
@@ -77,14 +86,26 @@ public class BigtableSchemaUtil {
             return errorMessages;
         }
 
-        public void setDefaults(final Format defaultFormat) {
-            setDefaults(defaultFormat, null, null);
+        public void setDefaults(
+                final Format defaultFormat,
+                final CellType cellType) {
+
+            setDefaults(defaultFormat, null, null, cellType);
         }
 
         public void setDefaults(
                 final Format defaultFormat,
                 final MutationOp defaultOp,
                 final TimestampType defaultTimestampType) {
+
+            setDefaults(defaultFormat, defaultOp, defaultTimestampType, null);
+        }
+
+        private void setDefaults(
+                final Format defaultFormat,
+                final MutationOp defaultOp,
+                final TimestampType defaultTimestampType,
+                final CellType defaultCellType) {
 
             if(format == null) {
                 format = defaultFormat;
@@ -98,6 +119,9 @@ public class BigtableSchemaUtil {
                 timestampType = Optional
                         .ofNullable(defaultTimestampType)
                         .orElse(TimestampType.server);
+            }
+            if(cellType == null) {
+                cellType = Optional.ofNullable(defaultCellType).orElse(CellType.last);
             }
             if(qualifiers == null) {
                 qualifiers = new ArrayList<>();
@@ -160,13 +184,21 @@ public class BigtableSchemaUtil {
             return mutations;
         }
 
-        private Map<String, Object> toElement(final Family f) {
+        private Map<String, Object> toElement(final Family family) {
             final Map<String, Object> primitiveValues = new HashMap<>();
-            for(final Column c : f.getColumnsList()) {
-                for(final ColumnQualifierProperties qualifier : qualifiers) {
-                    if(qualifier.name.equals(c.getQualifier().toStringUtf8())) {
-                        final Map<String, Object> values = qualifier.toPrimitiveValues(c);
-                        primitiveValues.putAll(values);
+            for(final Column column : family.getColumnsList()) {
+                for(final ColumnQualifierProperties qualifierProperty : qualifiers) {
+                    if(qualifierProperty.name.equals(column.getQualifier().toStringUtf8())) {
+                        final List<Object> values = qualifierProperty.toPrimitiveValues(column);
+                        if(values.isEmpty()) {
+                            continue;
+                        }
+                        final Object cellValue = switch (cellType) {
+                            case all -> values;
+                            case last -> values.getFirst();
+                            case first -> values.getLast();
+                        };
+                        primitiveValues.put(qualifierProperty.field, cellValue);
                         break;
                     }
                 }
@@ -200,6 +232,7 @@ public class BigtableSchemaUtil {
         private String timestampValue;
 
         // for source
+        private CellType cellType;
         // schema
         private String type;
         private String mode;
@@ -281,6 +314,15 @@ public class BigtableSchemaUtil {
                 final MutationOp defaultOp,
                 final TimestampType defaultTimestampType) {
 
+            setDefaults(defaultFormat, defaultOp, defaultTimestampType, null);
+        }
+
+        public void setDefaults(
+                final Format defaultFormat,
+                final MutationOp defaultOp,
+                final TimestampType defaultTimestampType,
+                final CellType defaultCellType) {
+
             if(format == null) {
                 format = defaultFormat;
             }
@@ -289,6 +331,9 @@ public class BigtableSchemaUtil {
             }
             if(timestampType == null) {
                 timestampType = defaultTimestampType;
+            }
+            if(cellType == null) {
+                cellType = defaultCellType;
             }
         }
 
@@ -367,13 +412,13 @@ public class BigtableSchemaUtil {
             };
         }
 
-        private Map<String, Object> toPrimitiveValues(final Column column) {
-            final Map<String, Object> primitiveValues = new HashMap<>();
+        private List<Object> toPrimitiveValues(final Column column) {
+            final List<Object> list = new ArrayList<>();
             for(final Cell c : column.getCellsList()) {
                 final Object primitiveValue = BigtableSchemaUtil.toPrimitiveValue(format, fieldType, c.getValue());
-                primitiveValues.put(field, primitiveValue);
+                list.add(primitiveValue);
             }
-            return primitiveValues;
+            return list;
         }
 
         private Object toPrimitiveValue(final ByteString byteString) {
@@ -388,6 +433,16 @@ public class BigtableSchemaUtil {
                 .map(q -> Schema.Field.of(q.field, q.fieldType))
                 .toList();
         return Schema.builder().withFields(fields).build();
+    }
+
+    public static Schema createCellSchema() {
+        return Schema.builder()
+                .withField("rowKey", Schema.FieldType.STRING)
+                .withField("family", Schema.FieldType.STRING)
+                .withField("qualifier", Schema.FieldType.STRING)
+                .withField("value", Schema.FieldType.BYTES)
+                .withField("timestamp", Schema.FieldType.TIMESTAMP)
+                .build();
     }
 
     public static Map<String, ColumnFamilyProperties> toMap(List<ColumnFamilyProperties> families) {
@@ -417,14 +472,15 @@ public class BigtableSchemaUtil {
 
     public static Map<String, Object> toPrimitiveValues(
             final Row row,
-            final Map<String, ColumnFamilyProperties> families) {
+            final Map<String, ColumnFamilyProperties> familyProperties) {
 
         final Map<String, Object> primitiveValues = new HashMap<>();
         for(final Family family : row.getFamiliesList()) {
-            if(!families.containsKey(family.getName())) {
+            if(!familyProperties.containsKey(family.getName())) {
                 continue;
             }
-            final Map<String, Object> values = families.get(family.getName()).toElement(family);
+            final ColumnFamilyProperties familyProperty = familyProperties.get(family.getName());
+            final Map<String, Object> values = familyProperty.toElement(family);
             primitiveValues.putAll(values);
         }
         return primitiveValues;
@@ -435,6 +491,15 @@ public class BigtableSchemaUtil {
             final Map<String, ColumnFamilyProperties> families) {
 
         final Map<String, Object> primitiveValues = new HashMap<>();
+        for(final Map.Entry<String, ColumnFamilyProperties> entry : families.entrySet()) {
+            for(final ColumnQualifierProperties qualifier : entry.getValue().qualifiers) {
+                final List<RowCell> cells = row.getCells(entry.getKey(), qualifier.name);
+                final Object primitiveValue = qualifier.toPrimitiveValue(cells.getFirst().getValue());
+                primitiveValues.put(qualifier.field, primitiveValue);
+            }
+        }
+
+        /*
         for(final RowCell cell : row.getCells()) {
             if(!families.containsKey(cell.getFamily())) {
                 continue;
@@ -448,10 +513,12 @@ public class BigtableSchemaUtil {
                 primitiveValues.put(qualifier.field, primitiveValue);
             }
         }
+
+         */
         return primitiveValues;
     }
 
-    public static KV<Long, Long> getCellTimestamps(final Row row) {
+    public static KV<Long, Long> getRowMinMaxTimestamps(final Row row) {
         long max = 0;
         long min = Long.MAX_VALUE;
         for(final Family family : row.getFamiliesList()) {

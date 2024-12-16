@@ -19,18 +19,18 @@
 
 ## Transform Modules
 
-| module                                  | batch | streaming | description                                                                                   |
-|-----------------------------------------|-------|-----------|-----------------------------------------------------------------------------------------------|
-| [sql](transform/beamsql.md)             | ○     | ○         | Process the data in a given SQL                                                               |
-| [filter](transform/filter.md)           | ○     | ○         | Filter and process input rows according to specified conditions                               |
-| [partition](transform/partition.md)     | ○     | ○         | Splits a data collection into separate data collections based on specified conditions         |
-| [aggregation](transform/aggregation.md) | ○     | ○         | Performs aggregation from a simple aggregation process definition.                            |
-| [http](transform/http.md)               | ○     | ○         | Send http request to the specified endpoint and get the result                                |
-| [onnx](transform/onnx.md)               | ○     | ○         | Make inferences using the specified [onnx](https://onnxruntime.ai/) file                      |
-| [deserialize](transform/deserialize.md) | ○     | ○         | Deserialize a value serialized in specified format.                                           |
-| [tokenize](transform/tokenize.md)       | ○     | ○         | Tokenizes and processes input text                                                            |
-| [pdfextract](transform/pdfextract.md)   | ○     | ○         | Extract text and metadata from PDF files                                                      |
-| [reshuffle](transform/reshuffle.md)     | ○     | ○         | Insert reshuffle stage to prevent dataflow fusion optimizations                               |
+| module                                  | batch | streaming | description                                                                           |
+|-----------------------------------------|-------|-----------|---------------------------------------------------------------------------------------|
+| [beamsql](transform/beamsql.md)         | ○     | ○         | Process the data in a given SQL (by Beam SQL)                                         |
+| [filter](transform/filter.md)           | ○     | ○         | Filter and process input rows according to specified conditions                       |
+| [partition](transform/partition.md)     | ○     | ○         | Splits a data collection into separate data collections based on specified conditions |
+| [aggregation](transform/aggregation.md) | ○     | ○         | Performs aggregation from a simple aggregation process definition.                    |
+| [http](transform/http.md)               | ○     | ○         | Send http request to the specified endpoint and get the result                        |
+| [onnx](transform/onnx.md)               | ○     | ○         | Make inferences using the specified [onnx](https://onnxruntime.ai/) file              |
+| [deserialize](transform/deserialize.md) | ○     | ○         | Deserialize a value serialized in specified format.                                   |
+| [tokenize](transform/tokenize.md)       | ○     | ○         | Tokenizes and processes input text                                                    |
+| [pdfextract](transform/pdfextract.md)   | ○     | ○         | Extract text and metadata from PDF files                                              |
+| [reshuffle](transform/reshuffle.md)     | ○     | ○         | Insert reshuffle stage to prevent dataflow fusion optimizations                       |
 
 ## Sink Modules
 

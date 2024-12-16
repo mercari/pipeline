@@ -4,6 +4,7 @@ import com.google.bigtable.v2.ColumnRange;
 import com.google.bigtable.v2.RowFilter;
 import com.google.bigtable.v2.TimestampRange;
 import com.google.bigtable.v2.ValueRange;
+import com.google.cloud.bigtable.data.v2.models.Filters;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -288,6 +289,208 @@ public class BigtableUtil {
                         case chain -> RowFilter.newBuilder().setChain(RowFilter.Chain.newBuilder().addAllFilters(filters).build()).build();
                         case interleave -> RowFilter.newBuilder().setInterleave(RowFilter.Interleave.newBuilder().addAllFilters(filters).build()).build();
                         default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
+                }
+                case condition -> throw new IllegalArgumentException("Not supported condition");
+                default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+            };
+        } else {
+            throw new IllegalArgumentException();
+        }
+    }
+
+    public static Filters.Filter createFilter(final JsonElement jsonElement) {
+        if(jsonElement == null || jsonElement.isJsonNull()) {
+            return Filters.FILTERS.pass();
+        } else if(jsonElement.isJsonPrimitive()) {
+            throw new IllegalArgumentException("Illegal filter: " + jsonElement);
+        }
+
+        if(jsonElement.isJsonArray()) {
+            Filters.ChainFilter chainFilter = Filters.FILTERS.chain();
+            for(JsonElement child : jsonElement.getAsJsonArray()) {
+                chainFilter = Filters.FILTERS.chain().filter(createFilter(child));
+            }
+            return chainFilter;
+        } else if(jsonElement.isJsonObject()) {
+            final JsonObject jsonObject = jsonElement.getAsJsonObject();
+            if(!jsonObject.has("type")) {
+                throw new IllegalArgumentException("filter requires type parameter");
+            }
+            final FilterType filterType = FilterType.valueOf(jsonObject.get("type").getAsString());
+            return switch (filterType) {
+                case sample -> {
+                    if(!jsonObject.has("rate")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires rate parameter");
+                    }
+                    final double sample = jsonObject.get("sample").getAsDouble();
+                    yield Filters.FILTERS.key().sample(sample);
+                }
+                case row_key_regex, family_name_regex, column_qualifier_regex, value_regex -> {
+                    if(!jsonObject.has("regex")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires regex parameter");
+                    }
+                    final String regex = jsonObject.get("regex").getAsString();
+                    yield switch (filterType) {
+                        case row_key_regex -> Filters.FILTERS.key().regex(regex);
+                        case family_name_regex -> Filters.FILTERS.family().regex(regex);
+                        case column_qualifier_regex -> Filters.FILTERS.qualifier().regex(regex);
+                        case value_regex -> Filters.FILTERS.value().regex(regex);
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
+                }
+                case limit_cells_per_row, limit_cells_per_column -> {
+                    if(!jsonObject.has("limit")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires limit parameter");
+                    }
+                    final int limit = jsonObject.get("limit").getAsInt();
+                    yield switch (filterType) {
+                        case limit_cells_per_row -> Filters.FILTERS.limit().cellsPerRow(limit);
+                        case limit_cells_per_column -> Filters.FILTERS.limit().cellsPerColumn(limit);
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
+                }
+                case offset_cells_per_row -> {
+                    if(!jsonObject.has("offset")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires offset parameter");
+                    }
+                    final int offset = jsonObject.get("offset").getAsInt();
+                    yield Filters.FILTERS.offset().cellsPerRow(offset);
+                }
+                case column_range, value_range, timestamp_range -> {
+                    final boolean startIsOpen;
+                    final boolean endIsOpen;
+                    final String start;
+                    final String end;
+                    if(jsonObject.has("startOpen")) {
+                        start = jsonObject.get("startOpen").getAsString();
+                        startIsOpen = true;
+                    } else if(jsonObject.has("startClosed")) {
+                        start = jsonObject.get("startClosed").getAsString();
+                        startIsOpen = false;
+                    } else {
+                        start = null;
+                        startIsOpen = false;
+                    }
+                    if(jsonObject.has("endOpen")) {
+                        end = jsonObject.get("endOpen").getAsString();
+                        endIsOpen = true;
+                    } else if(jsonObject.has("endClosed")) {
+                        end = jsonObject.get("endOpen").getAsString();
+                        endIsOpen = false;
+                    } else {
+                        end = null;
+                        endIsOpen = false;
+                    }
+                    if(start == null && end == null) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires startOpen or endOpen");
+                    }
+
+                    yield switch (filterType) {
+                        case column_range -> {
+                            final String familyName = jsonObject.get("family").getAsString();
+                            Filters.QualifierRangeFilter filter = Filters.FILTERS.qualifier().rangeWithinFamily(familyName);
+                            if(start != null) {
+                                final ByteString startByteString = ByteString.copyFrom(start, StandardCharsets.UTF_8);
+                                if(startIsOpen) {
+                                    filter = filter.startOpen(startByteString);
+                                } else {
+                                    filter = filter.startClosed(startByteString);
+                                }
+                            }
+                            if(end != null) {
+                                final ByteString endByteString = ByteString.copyFrom(end, StandardCharsets.UTF_8);
+                                if(endIsOpen) {
+                                    filter = filter.endOpen(endByteString);
+                                } else {
+                                    filter = filter.endClosed(endByteString);
+                                }
+                            }
+                            yield filter;
+                        }
+                        case value_range -> {
+                            Filters.ValueRangeFilter filter = Filters.FILTERS.value().range();
+                            if(start != null) {
+                                final ByteString startByteString = ByteString.copyFrom(start, StandardCharsets.UTF_8);
+                                if(startIsOpen) {
+                                    filter = filter.startOpen(startByteString);
+                                } else {
+                                    filter = filter.startClosed(startByteString);
+                                }
+                            }
+                            if(end != null) {
+                                final ByteString endByteString = ByteString.copyFrom(end, StandardCharsets.UTF_8);
+                                if(endIsOpen) {
+                                    filter = filter.endOpen(endByteString);
+                                } else {
+                                    filter = filter.endClosed(endByteString);
+                                }
+                            }
+                            yield filter;
+                        }
+                        case timestamp_range -> {
+                            Filters.TimestampRangeFilter filter = Filters.FILTERS.timestamp().range();
+                            if(start != null) {
+                                final long startMicros = DateTimeUtil.toEpochMicroSecond(start);
+                                if(startIsOpen) {
+                                    filter = filter.startOpen(startMicros);
+                                } else {
+                                    filter = filter.startClosed(startMicros);
+                                }
+                            }
+                            if(end != null) {
+                                final long endMicros = DateTimeUtil.toEpochMicroSecond(end);
+                                if(endIsOpen) {
+                                    filter = filter.endOpen(endMicros);
+                                } else {
+                                    filter = filter.endClosed(endMicros);
+                                }
+                            }
+                            yield filter;
+                        }
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
+                }
+                case block, pass, sink, strip -> switch (filterType) {
+                    case block -> Filters.FILTERS.block();
+                    case pass -> Filters.FILTERS.pass();
+                    case sink -> Filters.FILTERS.sink();
+                    case strip -> Filters.FILTERS.value().strip();
+                    default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                };
+                case label -> {
+                    if(!jsonObject.has("label")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires label parameter");
+                    }
+                    final String label = jsonObject.get("label").getAsString();
+                    yield Filters.FILTERS.label(label);
+                }
+                case chain, interleave -> {
+                    if(jsonObject.has("children")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires children parameter");
+                    }
+                    final JsonElement childrenElement = jsonObject.get("children");
+                    if(!childrenElement.isJsonArray()) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " children parameter must be array of rowFilter");
+                    }
+                    final JsonArray children = childrenElement.getAsJsonArray();
+
+                    yield switch (filterType) {
+                        case chain -> {
+                            Filters.ChainFilter filter = Filters.FILTERS.chain();
+                            for(JsonElement child : children) {
+                                filter = filter.filter(createFilter(child));
+                            }
+                            yield filter;
+                        }
+                        case interleave -> {
+                            Filters.InterleaveFilter filter = Filters.FILTERS.interleave();
+                            for(JsonElement child : children) {
+                                filter = filter.filter(createFilter(child));
+                            }
+                            yield filter;
+                        }
+                        default -> throw new IllegalArgumentException();
                     };
                 }
                 case condition -> throw new IllegalArgumentException("Not supported condition");
