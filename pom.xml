@@ -12,7 +12,7 @@
   <packaging>${packaging}</packaging>
 
   <properties>
-    <beam.version>2.60.0</beam.version>
+    <beam.version>2.61.0</beam.version>
 
     <freemarker.version>2.3.33</freemarker.version>
     <hadoop.version>3.4.1</hadoop.version>
@@ -294,7 +294,7 @@
         <activeByDefault>false</activeByDefault>
       </activation>
       <properties>
-        <flink.version>1.18</flink.version>
+        <flink.version>1.19</flink.version>
         <jib.image>apache/beam_flink${flink.version}_job_server</jib.image>
       </properties>
       <dependencies>
