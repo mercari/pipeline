@@ -25,3 +25,43 @@ Bigtable transform module can be used to query rows from bigtable and processing
 | cellType     | optional           | Enum                                    | Specify cellType that defines how to retrieve the multiple cells associated with a column qualifier. Used as default value if not specified in each `columns` parameter. One of `last`, `first` or `all`. The default is `first`. If `all` is specified, it will be an array of the type specified in `type` |
 | sql          | optional           | String                                  | If you want to post-process the data retrieved from bigtable, specify the SQL for that processing.                                                                                                                                                                                                           |
 | appProfileId | optional           | String                                  | Specify the app profile id                                                                                                                                                                                                                                                                                   |
+
+## Example
+
+```json
+{
+  "transforms": [
+    {
+      "name": "BigtableInput",
+      "module": "bigtable",
+      "inputs": [
+        "pubsubInput"
+      ],
+      "parameters": {
+        "projectId": "example-project",
+        "instanceId": "example-instance",
+        "tableId": "example-table",
+        "keyRange": {
+          "prefix": "${user_id}#"
+        },
+        "filter": {
+          "type": "family_name_regex",
+          "exact": "e"
+        },
+        "columns": [
+          {
+            "family": "e",
+            "qualifiers": [
+              { "name": "iid", "field": "item_id", "type": "string" },
+              { "name": "at", "field": "action_type", "type": "string" },
+              { "name": "am", "field": "amount", "type": "int64" }
+            ],
+            "cellType": "last"
+          }
+        ],
+        "sql": "SELECT SUM(amount) AS 'sum', COUNT(1) AS `count` FROM INPUT"
+      }
+    }
+  ]
+}
+```
