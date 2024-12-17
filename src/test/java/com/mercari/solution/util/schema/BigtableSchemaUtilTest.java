@@ -32,7 +32,9 @@ public class BigtableSchemaUtilTest {
                     {
                       "family": "a",
                       "qualifiers": [
-                        { "name": "f1", "field": "field1", "type": "element", "fields" :[{"name": "aa", "type": "string"}] }
+                        { "name": "f1", "field": "field1", "type": "element", "format": "avro", "fields" :[
+                          { "name": "childField1", "type": "string" }
+                        ] }
                       ],
                       "format": "bytes"
                     }
@@ -42,10 +44,11 @@ public class BigtableSchemaUtilTest {
 
         final Parameters parameters = new GsonBuilder().create().fromJson(config, Parameters.class);
         parameters.columns.forEach(BigtableSchemaUtil.ColumnFamilyProperties::setupSource);
-        System.out.println(parameters.columns.getFirst().toString());
         final Schema schema = BigtableSchemaUtil.createSchema(parameters.columns);
-        System.out.println(schema);
-
+        Assert.assertTrue(schema.hasField("field1"));
+        Assert.assertEquals(Schema.Type.element, schema.getField("field1").getFieldType().getType());
+        final Schema childSchema = schema.getField("field1").getFieldType().getElementSchema();
+        Assert.assertTrue(childSchema.hasField("childField1"));
     }
 
     @Test

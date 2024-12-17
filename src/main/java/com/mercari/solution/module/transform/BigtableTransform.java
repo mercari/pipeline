@@ -39,7 +39,7 @@ public class BigtableTransform extends Transform {
         private String instanceId;
         private String tableId;
 
-        private JsonElement rowFilter;
+        private JsonElement filter;
         private KeyRange keyRange;
 
         private List<BigtableSchemaUtil.ColumnFamilyProperties> columns;
@@ -57,7 +57,7 @@ public class BigtableTransform extends Transform {
             if(instanceId == null) {
                 errorMessages.add("parameters.instanceId must not be null");
             }
-            if((rowFilter == null || rowFilter.isJsonNull()) && keyRange == null) {
+            if((filter == null || filter.isJsonNull()) && keyRange == null) {
                 errorMessages.add("parameters.rowFilter and keyRange must not be null");
             } else if(keyRange != null) {
                 errorMessages.addAll(keyRange.validate());
@@ -91,12 +91,14 @@ public class BigtableTransform extends Transform {
         private String start;
         private String end;
         private String prefix;
+        private String exact;
 
         private Set<String> templateArgs;
 
         private transient Template startTemplate;
         private transient Template endTemplate;
         private transient Template prefixTemplate;
+        private transient Template exactTemplate;
 
         public List<String> validate() {
             final List<String> errorMessages = new ArrayList<>();
@@ -113,6 +115,9 @@ public class BigtableTransform extends Transform {
             }
             if(prefix != null) {
                 this.prefixTemplate = TemplateUtil.createStrictTemplate("bigtableKeyRangePrefixTemplate", prefix);
+            }
+            if(exact != null) {
+                this.exactTemplate = TemplateUtil.createStrictTemplate("bigtableKeyRangeExactTemplate", exact);
             }
         }
 
@@ -234,7 +239,7 @@ public class BigtableTransform extends Transform {
             this.instanceId = parameters.instanceId;
             this.tableId = parameters.tableId;
             this.keyRange = parameters.keyRange;
-            this.rowFilterJson = Optional.ofNullable(parameters.rowFilter).map(JsonElement::toString).orElse(null);
+            this.rowFilterJson = Optional.ofNullable(parameters.filter).map(JsonElement::toString).orElse(null);
             this.families = BigtableSchemaUtil.toMap(parameters.columns);
             this.inputSchema = inputSchema;
             this.filterResultSchema = filterResultSchema;
@@ -311,10 +316,13 @@ public class BigtableTransform extends Transform {
 
         private Iterable<Row> read(final MElement input) {
             final Map<String, Object> inputValues = input.asStandardMap(inputSchema, null);
-            final Query query = Query.create(TableId.of(tableId));
 
+            final Query query = Query.create(TableId.of(tableId));
             if(keyRange != null) {
-                if(keyRange.prefix != null) {
+                if(keyRange.exact != null) {
+                    final String exact = TemplateUtil.executeStrictTemplate(keyRange.exactTemplate, inputValues);
+                    query.rowKey(exact);
+                } else if(keyRange.prefix != null) {
                     final String prefix = TemplateUtil.executeStrictTemplate(keyRange.prefixTemplate, inputValues);
                     query.prefix(prefix);
                 } else if(keyRange.start != null || keyRange.end != null) {

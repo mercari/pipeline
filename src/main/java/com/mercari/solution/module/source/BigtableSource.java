@@ -39,8 +39,8 @@ public class BigtableSource extends Source {
         private String tableId;
 
         // for batch
-        private JsonElement rowFilter;
-        private JsonElement keyRanges;
+        private JsonElement filter;
+        private JsonElement keyRange;
         private List<BigtableSchemaUtil.ColumnFamilyProperties> columns;
         private BigtableSchemaUtil.Format format;
         private BigtableSchemaUtil.CellType cellType;
@@ -240,12 +240,12 @@ public class BigtableSource extends Source {
             read = read.withMaxBufferElementCount(parameters.maxBufferElementCount);
         }
 
-        if(parameters.keyRanges != null && !parameters.keyRanges.isJsonNull()) {
-            final List<ByteKeyRange> keyRanges = BigtableUtil.createKeyRanges(parameters.keyRanges);
+        if(parameters.keyRange != null && !parameters.keyRange.isJsonNull()) {
+            final List<ByteKeyRange> keyRanges = BigtableUtil.createKeyRanges(parameters.keyRange);
             read = read.withKeyRanges(keyRanges);
         }
-        if(parameters.rowFilter != null && !parameters.rowFilter.isJsonNull()) {
-            final RowFilter rowFilter = BigtableUtil.createRowFilter(parameters.rowFilter);
+        if(parameters.filter != null && !parameters.filter.isJsonNull()) {
+            final RowFilter rowFilter = BigtableUtil.createRowFilter(parameters.filter);
             read = read.withRowFilter(rowFilter);
         }
 

@@ -50,11 +50,19 @@ public class BigtableUtil {
 
     public static List<ByteKeyRange> createKeyRanges(final JsonElement jsonElement) {
         if(jsonElement == null || jsonElement.isJsonNull() || jsonElement.isJsonPrimitive()) {
-            return Arrays.asList(ByteKeyRange.ALL_KEYS);
+            return List.of(ByteKeyRange.ALL_KEYS);
         }
 
         if(jsonElement.isJsonObject()) {
             final JsonObject jsonObject = jsonElement.getAsJsonObject();
+            if(jsonObject.has("prefix")) {
+                final String startKey = jsonObject.get("prefix").getAsString();
+                final ByteString endKey = ByteString.copyFromUtf8(startKey).concat(ByteString.copyFromUtf8("\uffff"));
+                final ByteKey start = ByteKey.copyFrom(startKey.getBytes(StandardCharsets.UTF_8));
+                final ByteKey end = ByteKey.copyFrom(endKey.toByteArray());
+                return List.of(ByteKeyRange.of(start, end));
+            }
+
             final ByteKey start;
             if(jsonObject.has("start")) {
                 final String startKey = jsonObject.get("start").getAsString();
@@ -327,15 +335,16 @@ public class BigtableUtil {
                     yield Filters.FILTERS.key().sample(sample);
                 }
                 case row_key_regex, family_name_regex, column_qualifier_regex, value_regex -> {
-                    if(!jsonObject.has("regex")) {
-                        throw new IllegalArgumentException("filterType: " + filterType + " requires regex parameter");
+                    if(!jsonObject.has("exact") && !jsonObject.has("regex")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires regex or exact parameter");
                     }
-                    final String regex = jsonObject.get("regex").getAsString();
+                    final String exact = jsonObject.has("exact") ? jsonObject.get("exact").getAsString() : null;
+                    final String regex = jsonObject.has("regex") ? jsonObject.get("regex").getAsString() : null;
                     yield switch (filterType) {
-                        case row_key_regex -> Filters.FILTERS.key().regex(regex);
-                        case family_name_regex -> Filters.FILTERS.family().regex(regex);
-                        case column_qualifier_regex -> Filters.FILTERS.qualifier().regex(regex);
-                        case value_regex -> Filters.FILTERS.value().regex(regex);
+                        case row_key_regex -> exact != null ? Filters.FILTERS.key().exactMatch(exact) : Filters.FILTERS.key().regex(regex);
+                        case family_name_regex -> exact != null ? Filters.FILTERS.family().exactMatch(exact) : Filters.FILTERS.family().regex(regex);
+                        case column_qualifier_regex -> exact != null ? Filters.FILTERS.qualifier().exactMatch(exact) : Filters.FILTERS.qualifier().regex(regex);
+                        case value_regex -> exact != null ? Filters.FILTERS.value().exactMatch(exact) : Filters.FILTERS.value().regex(regex);
                         default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
                     };
                 }
