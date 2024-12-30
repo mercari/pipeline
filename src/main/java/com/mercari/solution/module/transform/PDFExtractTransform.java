@@ -12,6 +12,9 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Reshuffle;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionTuple;
+import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.sdk.values.TupleTagList;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -100,11 +103,18 @@ public class PDFExtractTransform extends Transform {
             selectFunctions = new ArrayList<>();
         }
 
-        final PCollection<MElement> extracted = input
-                .apply(ParDo.of(new PDFExtractDoFn(parameters.field, parameters.prefix, selectFunctions, isContentFieldString)));
+        final TupleTag<MElement> outputTag = new TupleTag<>() {};
+        final TupleTag<MElement> failureTag = new TupleTag<>() {};
+
+        final PCollectionTuple outputs = input
+                .apply(ParDo.of(new PDFExtractDoFn(
+                        getJobName(), getName(), failureTag, getFailFast(),
+                        parameters, selectFunctions, isContentFieldString))
+                        .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
         return MCollectionTuple
-                .of(extracted, outputSchema);
+                .of(outputs.get(outputTag), outputSchema)
+                .failure(outputs.get(failureTag));
     }
 
     private static Schema createPdfSchema(String prefix) {
@@ -131,6 +141,11 @@ public class PDFExtractTransform extends Transform {
 
     private static class PDFExtractDoFn extends DoFn<MElement, MElement> {
 
+        private final String jobName;
+        private final String name;
+        private final TupleTag<MElement> failureTag;
+        private final boolean failFast;
+
         private final String field;
         private final String prefix;
         private final List<SelectFunction> selectFunctions;
@@ -139,13 +154,22 @@ public class PDFExtractTransform extends Transform {
         private transient PDFTextStripper stripper;
         private transient Storage storage;
 
-        PDFExtractDoFn(final String field,
-                       final String prefix,
-                       final List<SelectFunction> selectFunctions,
-                       final boolean isContentFieldString) {
+        PDFExtractDoFn(
+                final String jobName,
+                final String moduleName,
+                final TupleTag<MElement> failureTag,
+                final boolean failFast,
+                final PDFExtractTransformParameters parameters,
+                final List<SelectFunction> selectFunctions,
+                final boolean isContentFieldString) {
 
-            this.field = field;
-            this.prefix = prefix;
+            this.jobName = jobName;
+            this.name = moduleName;
+            this.failureTag = failureTag;
+            this.failFast = failFast;
+
+            this.field = parameters.field;
+            this.prefix = parameters.prefix;
             this.selectFunctions = selectFunctions;
             this.isContentFieldString = isContentFieldString;
         }
@@ -167,53 +191,66 @@ public class PDFExtractTransform extends Transform {
             if(input == null) {
                 return;
             }
-            final byte[] bytes;
-            String errorMessage = null;
-            if(isContentFieldString) {
-                String stringFieldValue = input.getAsString(field);
-                if(stringFieldValue == null) {
-                    errorMessage = "pdf content field: " + field + " value is null";
-                    LOG.warn(errorMessage);
-                    bytes = null;
-                } else {
-                    if(stringFieldValue.startsWith("/gs/")) { // modify app engine style gcs path
-                        stringFieldValue = stringFieldValue.replaceFirst("/gs/", "gs://");
-                    }
-                    if(stringFieldValue.startsWith("gs://")) {
-                        LOG.info("Read pdf content from gcs path: {}", stringFieldValue);
-                        bytes = StorageUtil.readBytes(storage, stringFieldValue);
-                    } else if(stringFieldValue.startsWith("https://") || stringFieldValue.startsWith("http://")) {
-                        LOG.info("Read pdf content from url: {}", stringFieldValue);
-                        bytes = null;
-                    } else {
-                        errorMessage = "Not supported pdf content uri: " + stringFieldValue;
+
+            Map<String, Object> pdfContent = new HashMap<>();
+            try {
+                final byte[] bytes;
+                String errorMessage = null;
+                if (isContentFieldString) {
+                    String stringFieldValue = input.getAsString(field);
+                    if (stringFieldValue == null) {
+                        errorMessage = "pdf content field: " + field + " value is null";
                         LOG.warn(errorMessage);
                         bytes = null;
+                    } else {
+                        if (stringFieldValue.startsWith("/gs/")) { // modify app engine style gcs path
+                            stringFieldValue = stringFieldValue.replaceFirst("/gs/", "gs://");
+                        }
+                        if (stringFieldValue.startsWith("gs://")) {
+                            LOG.info("Read pdf content from gcs path: {}", stringFieldValue);
+                            bytes = StorageUtil.readBytes(storage, stringFieldValue);
+                        } else if (stringFieldValue.startsWith("https://") || stringFieldValue.startsWith("http://")) {
+                            LOG.info("Read pdf content from url: {}", stringFieldValue);
+                            bytes = null;
+                        } else {
+                            errorMessage = "Not supported pdf content uri: " + stringFieldValue;
+                            LOG.warn(errorMessage);
+                            bytes = null;
+                        }
+                    }
+                } else {
+                    bytes = Optional.ofNullable(input.getAsBytes(field)).map(ByteBuffer::array).orElse(null);
+                    if (bytes == null) {
+                        errorMessage = "PDF content field: " + field + " value is null";
                     }
                 }
-            } else {
-                bytes = Optional.ofNullable(input.getAsBytes(field)).map(ByteBuffer::array).orElse(null);
-                if(bytes == null) {
-                    errorMessage = "PDF content field: " + field + " value is null";
+
+                pdfContent = extractPDF(bytes);
+                if (errorMessage != null) {
+                    pdfContent.put(prefix + FIELD_NAME_ERROR_MESSAGE, errorMessage);
                 }
+
+                pdfContent.putAll(input.asPrimitiveMap());
+
+                final MElement output;
+                if (selectFunctions.isEmpty()) {
+                    output = MElement.of(pdfContent, c.timestamp());
+                } else {
+                    final Map<String, Object> selectedValues = SelectFunction.apply(selectFunctions, pdfContent, c.timestamp());
+                    output = MElement.of(selectedValues, c.timestamp());
+                }
+
+                c.output(output);
+            } catch (final Throwable e) {
+                //errorCounter.inc();
+                final MFailure failure = MFailure.of(jobName, name, input.toString(), e, c.timestamp());
+                if(failFast) {
+                    throw new RuntimeException("pdfExtract module " + name + " failed to execute partition for element: " + input + ", pdfContent: " + pdfContent, e);
+                }
+
+                c.output(failureTag, failure.toElement(c.timestamp()));
+                LOG.error("Failed to execute pdfExtract for element: {}, pdfContent: {}, cause: {}", input, pdfContent, failure.getError());
             }
-
-            final Map<String, Object> pdfContent = extractPDF(bytes);
-            if(errorMessage != null) {
-                pdfContent.put(prefix + FIELD_NAME_ERROR_MESSAGE, errorMessage);
-            }
-
-            pdfContent.putAll(input.asPrimitiveMap());
-
-            final MElement output;
-            if(selectFunctions.isEmpty()) {
-                output = MElement.of(pdfContent, c.timestamp());
-            } else {
-                final Map<String, Object> selectedValues = SelectFunction.apply(selectFunctions, pdfContent, c.timestamp());
-                output = MElement.of(selectedValues, c.timestamp());
-            }
-
-            c.output(output);
         }
 
         private Map<String, Object> extractPDF(final byte[] bytes) {

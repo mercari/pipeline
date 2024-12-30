@@ -1496,7 +1496,13 @@ public class AvroSchemaUtil {
             return null;
         }
         return switch (fieldSchema.getType()) {
-            case FLOAT, DOUBLE, BOOLEAN, BYTES -> fieldValue;
+            case FLOAT, DOUBLE, BOOLEAN, BYTES, MAP -> fieldValue;
+            case ENUM -> switch (fieldValue) {
+                case Number i -> i.intValue();
+                case String s -> fieldSchema.getEnumSymbols().indexOf(s);
+                case GenericData.EnumSymbol s -> fieldSchema.getEnumSymbols().indexOf(s.toString());
+                default -> throw new IllegalArgumentException();
+            };
             case STRING -> fieldValue.toString();
             case INT -> {
                 if(LogicalTypes.date().equals(fieldSchema.getLogicalType())) {
@@ -1529,22 +1535,22 @@ public class AvroSchemaUtil {
                             if(LogicalTypes.date().equals(fieldSchema.getElementType().getLogicalType())) {
                                 return i;
                             } else if(LogicalTypes.timeMillis().equals(fieldSchema.getLogicalType())) {
-                                return ((Integer) fieldValue).longValue() * 1000L;
+                                return i.longValue() * 1000L;
                             } else {
-                                return fieldValue;
+                                return i;
                             }
                         })
                         .collect(Collectors.toList());
                 case LONG -> ((List<Long>) fieldValue).stream()
                         .map(l -> {
                             if(LogicalTypes.timestampMicros().equals(fieldSchema.getElementType().getLogicalType())) {
-                                return fieldValue;
+                                return l;
                             } else if(LogicalTypes.timestampMillis().equals(fieldSchema.getElementType().getLogicalType())) {
-                                return ((Long) fieldValue) * 1000L;
+                                return l * 1000L;
                             } else if(LogicalTypes.timeMillis().equals(fieldSchema.getElementType().getLogicalType())) {
-                                return ((Integer) fieldValue).longValue() * 1000L;
+                                return l * 1000L;
                             } else {
-                                return fieldValue;
+                                return l;
                             }
                         })
                         .collect(Collectors.toList());
@@ -1560,7 +1566,7 @@ public class AvroSchemaUtil {
                             })
                             .collect(Collectors.toList());
                 case RECORD -> ((List<GenericRecord>) fieldValue).stream()
-                        .map(o -> asPrimitiveMap((GenericRecord) o))
+                        .map(AvroSchemaUtil::asPrimitiveMap)
                         .collect(Collectors.toList());
                 default -> throw new IllegalStateException("Not supported primitive type: " + fieldSchema.getElementType());
             };
