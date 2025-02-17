@@ -110,6 +110,8 @@ public class ResultSetToRecordConverter {
             case Types.LONGNVARCHAR: {
                 if("json".equalsIgnoreCase(typeName)) {
                     return AvroSchemaUtil.NULLABLE_JSON;
+                } else if("uuid".equalsIgnoreCase(typeName)) {
+                    return AvroSchemaUtil.NULLABLE_LOGICAL_UUID_TYPE;
                 }
                 return AvroSchemaUtil.NULLABLE_STRING;
             }
@@ -220,7 +222,11 @@ public class ResultSetToRecordConverter {
         }
     }
 
-    private static Object convertFieldValue(final ResultSet resultSet, final int column, final int columnType) throws SQLException, IOException {
+    private static Object convertFieldValue(
+            final ResultSet resultSet,
+            final int column,
+            final int columnType) throws SQLException, IOException {
+
         switch (columnType) {
             case Types.BIT:
             case Types.BOOLEAN: {
