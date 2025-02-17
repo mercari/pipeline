@@ -71,10 +71,18 @@ public class ToStatementConverter {
                     }
                 }
                 case ENUM, STRING -> {
-                    if (isNull) {
-                        statement.setNull(index, Types.VARCHAR);
+                    if(LogicalTypes.uuid().equals(fieldSchema.getLogicalType())) {
+                        if (isNull) {
+                            statement.setNull(index, Types.OTHER);
+                        } else {
+                            statement.setUUID(index, (record.get(field.name())).toString());
+                        }
                     } else {
-                        statement.setString(index, (record.get(field.name())).toString());
+                        if (isNull) {
+                            statement.setNull(index, Types.VARCHAR);
+                        } else {
+                            statement.setString(index, (record.get(field.name())).toString());
+                        }
                     }
                 }
                 case INT -> {

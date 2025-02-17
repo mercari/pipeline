@@ -7,6 +7,7 @@ import com.google.datastore.v1.Value;
 import com.google.gson.*;
 import com.google.protobuf.ByteString;
 import com.mercari.solution.util.DateTimeUtil;
+import com.mercari.solution.util.coder.UnionMapCoder;
 import com.mercari.solution.util.schema.converter.JsonToAvroConverter;
 import com.mercari.solution.util.schema.converter.RowToRecordConverter;
 import org.apache.avro.LogicalTypes;
@@ -78,6 +79,7 @@ public class AvroSchemaUtil {
     public static final Schema REQUIRED_DOUBLE = Schema.create(Schema.Type.DOUBLE);
     public static final Schema REQUIRED_JSON = SchemaBuilder.builder().stringBuilder().prop("sqlType", "JSON").endString();
 
+    public static final Schema REQUIRED_LOGICAL_UUID_TYPE = LogicalTypes.uuid().addToSchema(Schema.create(Schema.Type.STRING));
     public static final Schema REQUIRED_LOGICAL_DATE_TYPE = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
     public static final Schema REQUIRED_LOGICAL_TIME_MILLI_TYPE = LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
     public static final Schema REQUIRED_LOGICAL_TIME_MICRO_TYPE = LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG));
@@ -100,6 +102,7 @@ public class AvroSchemaUtil {
             .nullType()
             .endUnion();
 
+    public static final Schema NULLABLE_LOGICAL_UUID_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.uuid().addToSchema(Schema.create(Schema.Type.STRING)));
     public static final Schema NULLABLE_LOGICAL_DATE_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT)));
     public static final Schema NULLABLE_LOGICAL_TIME_MILLI_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT)));
     public static final Schema NULLABLE_LOGICAL_TIME_MICRO_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG)));
@@ -1811,6 +1814,13 @@ public class AvroSchemaUtil {
         }
     }
 
+    public static byte[] encodeUnion(Object object) throws IOException {
+        try(ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            UnionMapCoder.unionValueCoder().encode(object, outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+
     public static GenericRecord decode(final Schema schema, final byte[] bytes) throws IOException {
         final DatumReader<GenericRecord> datumReader = new GenericDatumReader<>(schema);
         final BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(bytes, null);
@@ -1846,6 +1856,12 @@ public class AvroSchemaUtil {
     public static <T> T decode(Class<T> clazz, byte[] bytes) throws IOException {
         try(ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes)) {
             return AvroCoder.of(clazz).decode(inputStream);
+        }
+    }
+
+    public static Object decodeUnion(byte[] bytes) throws IOException {
+        try(ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes)) {
+            return UnionMapCoder.unionValueCoder().decode(inputStream);
         }
     }
 
@@ -1903,10 +1919,12 @@ public class AvroSchemaUtil {
             }
             case element -> decode(fieldType.getElementSchema().getAvroSchema(), decoder.readBytes(null).array());
             case array -> {
-                List<?> list = new ArrayList<>();
-                long count = decoder.readArrayStart();
-                for(long i=0; i<count; i++) {
-                    decoder.readArrayStart();
+                final List<Object> list = new ArrayList<>();
+                for(long i=decoder.readArrayStart(); i != 0; i = decoder.arrayNext()) {
+                    for(long j=0; j<i; j++) {
+                        final Object v = read(decoder, fieldType.getArrayValueType());
+                        list.add(v);
+                    }
                 }
                 yield list;
             }

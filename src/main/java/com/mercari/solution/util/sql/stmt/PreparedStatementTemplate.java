@@ -2,13 +2,11 @@ package com.mercari.solution.util.sql.stmt;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.PreparedStatement;
-import java.sql.Time;
-import java.sql.Timestamp;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 public class PreparedStatementTemplate implements Serializable {
     private final String statement;
@@ -146,6 +144,21 @@ public class PreparedStatementTemplate implements Serializable {
             List<Integer> mappedIndices = placeholderMappings.getMappings().get(index);
             for (Integer placeholderIndex : mappedIndices) {
                 preparedStatement.setBytes(placeholderIndex, value);
+            }
+        }
+
+        public void setUUID(int index, String value) throws java.sql.SQLException {
+            List<Integer> mappedIndices = placeholderMappings.getMappings().get(index);
+            for (Integer placeholderIndex : mappedIndices) {
+                final UUID uuid = UUID.fromString(value);
+                preparedStatement.setObject(placeholderIndex, uuid, Types.OTHER);
+            }
+        }
+
+        public void setObject(int index, Object value) throws java.sql.SQLException {
+            List<Integer> mappedIndices = placeholderMappings.getMappings().get(index);
+            for (Integer placeholderIndex : mappedIndices) {
+                preparedStatement.setObject(placeholderIndex, value, Types.OTHER);
             }
         }
     }
