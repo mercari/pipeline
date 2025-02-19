@@ -111,8 +111,6 @@ public class ResultSetToRecordConverter {
             case Types.LONGNVARCHAR: {
                 if("json".equalsIgnoreCase(typeName)) {
                     return AvroSchemaUtil.NULLABLE_JSON;
-                } else if("uuid".equalsIgnoreCase(typeName)) {
-                    return AvroSchemaUtil.NULLABLE_LOGICAL_UUID_TYPE;
                 }
                 return AvroSchemaUtil.NULLABLE_STRING;
             }
@@ -134,6 +132,8 @@ public class ResultSetToRecordConverter {
             case Types.OTHER: {
                 if("json".equalsIgnoreCase(typeName)) {
                     return AvroSchemaUtil.NULLABLE_JSON;
+                } else if("uuid".equalsIgnoreCase(typeName)) {
+                    return AvroSchemaUtil.NULLABLE_LOGICAL_UUID_TYPE;
                 }
                 LOG.warn("Type Other, TypeName: " + typeName + " as NULLABLE STRING");
                 return AvroSchemaUtil.NULLABLE_STRING;
