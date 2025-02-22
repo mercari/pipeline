@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema.converter;
 
+/*
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.SolrSchemaUtil;
 import com.mercari.solution.util.domain.text.XmlUtil;
@@ -21,9 +22,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
+ */
 
 public class AvroToSolrDocumentConverter {
 
+    /*
     private static final Logger LOG = LoggerFactory.getLogger(AvroToSolrDocumentConverter.class);
 
     public static SolrInputDocument convert(final GenericRecord record, final List<String> fieldNames) {
@@ -268,5 +271,7 @@ public class AvroToSolrDocumentConverter {
         }
         fields.appendChild(fieldElement);
     }
+
+     */
 
 }

@@ -1,5 +1,6 @@
 package com.mercari.solution.module.sink;
 
+/*
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
@@ -24,9 +25,12 @@ import java.io.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
-@Sink.Module(name="localSolr")
-public class LocalSolrSink extends Sink {
+ */
 
+//@Sink.Module(name="localSolr")
+public class LocalSolrSink {
+
+    /*
     private static final Logger LOG = LoggerFactory.getLogger(LocalSolrSink.class);
 
     private static class LocalSolrSinkParameters implements Serializable {
@@ -320,4 +324,6 @@ public class LocalSolrSink extends Sink {
 
     }
 
+
+     */
 }

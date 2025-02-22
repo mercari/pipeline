@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema.converter;
 
+/*
 import com.mercari.solution.util.schema.RowSchemaUtil;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
@@ -14,9 +15,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
+ */
+
 
 public class RowToSolrDocumentConverter {
 
+    /*
     public static SolrInputDocument convert(final Row row, final List<String> fieldNames) {
         final SolrInputDocument doc = new SolrInputDocument();
         for(final org.apache.beam.sdk.schemas.Schema.Field field : row.getSchema().getFields()) {
@@ -184,5 +188,7 @@ public class RowToSolrDocumentConverter {
                 return;
         }
     }
+
+     */
 
 }

@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema.converter;
 
+/*
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
 import org.apache.solr.common.SolrInputDocument;
@@ -7,9 +8,11 @@ import org.apache.solr.common.SolrInputDocument;
 import java.nio.ByteBuffer;
 import java.time.LocalDate;
 import java.util.*;
+ */
 
 public class ElementToSolrDocumentConverter {
 
+    /*
     public static SolrInputDocument convert(final Schema schema, final Map<String, Object> values, final List<String> fieldNames) {
         final SolrInputDocument doc = new SolrInputDocument();
         for(final Schema.Field field : schema.getFields()) {
@@ -55,5 +58,6 @@ public class ElementToSolrDocumentConverter {
             default -> throw new IllegalArgumentException();
         };
     }
+     */
 
 }

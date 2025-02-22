@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema.converter;
 
+/*
 import com.google.datastore.v1.ArrayValue;
 import com.google.datastore.v1.Entity;
 import com.google.datastore.v1.Value;
@@ -11,10 +12,11 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-
+ */
 
 public class EntityToSolrDocumentConverter {
 
+    /*
     public static SolrInputDocument convert(final Entity entity, final List<String> fieldNames) {
         return convert(entity, null, fieldNames);
     }
@@ -143,8 +145,8 @@ public class EntityToSolrDocumentConverter {
                             return;
                     }
                 });
-
-
     }
+
+     */
 
 }

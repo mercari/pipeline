@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema.converter;
 
+/*
 import com.google.cloud.Timestamp;
 import com.google.cloud.spanner.Struct;
 import com.google.cloud.spanner.Type;
@@ -13,9 +14,11 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Objects;
+ */
 
 public class StructToSolrDocumentConverter {
 
+    /*
     public static SolrInputDocument convert(final Struct struct, final List<String> fieldNames) {
         return convert(struct, null, fieldNames);
     }
@@ -161,5 +164,7 @@ public class StructToSolrDocumentConverter {
         }
         fields.appendChild(fieldElement);
     }
+
+     */
 
 }

@@ -1,5 +1,6 @@
 package com.mercari.solution.util.domain.search;
 
+/*
 import com.mercari.solution.util.gcp.StorageUtil;
 import org.apache.solr.common.SolrInputDocument;
 import org.apache.solr.common.params.ModifiableSolrParams;
@@ -25,9 +26,11 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
+ */
 
 public class SolrUtil {
 
+    /*
     private static final Logger LOG = LoggerFactory.getLogger(SolrUtil.class);
 
     private static final String SOLR_BASE_PATH = "/solr/";
@@ -198,5 +201,7 @@ public class SolrUtil {
             bos.flush();
         }
     }
+
+     */
 
 }

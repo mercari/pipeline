@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema;
 
+/*
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.util.domain.text.XmlUtil;
@@ -20,10 +21,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+ */
 
 
 public class SolrSchemaUtil {
 
+    /*
     private static final Logger LOG = LoggerFactory.getLogger(SolrSchemaUtil.class);
 
     public static class SolrConfig implements Serializable {
@@ -753,25 +756,6 @@ public class SolrSchemaUtil {
                 }
             }
 
-            /*
-            if (node.hasChildNodes()) {
-                final NodeList cfs = node.getChildNodes();
-                for (int j=0; j<cfs.getLength(); j++) {
-                    final Node childNode = cfs.item(j);
-                    if(!"field".equals(childNode.getNodeName())) {
-                        continue;
-                    }
-                    if(childNode.getAttributes().getNamedItem("name") == null) {
-                        continue;
-                    }
-                    if(childNode.getAttributes().getNamedItem("type") == null) {
-                        continue;
-                    }
-                    final String childFieldName = childNode.getAttributes().getNamedItem("name").getNodeValue();
-                    final String childFieldType = childNode.getAttributes().getNamedItem("name").getNodeValue();
-                }
-            }
-             */
         }
 
         final Schema.Options.Builder optionBuilder = Schema.Options.builder()
@@ -1034,4 +1018,5 @@ public class SolrSchemaUtil {
         }
     }
 
+    */
 }

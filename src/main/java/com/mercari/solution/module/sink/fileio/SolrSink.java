@@ -1,5 +1,6 @@
 package com.mercari.solution.module.sink.fileio;
 
+/*
 import com.google.api.services.storage.Storage;
 import com.google.cloud.spanner.Struct;
 import com.google.datastore.v1.Entity;
@@ -36,8 +37,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class SolrSink implements FileIO.Sink<MElement> {
+ */
 
+//public class SolrSink implements FileIO.Sink<MElement> {
+public class SolrSink  {
+
+    /*
     private static final String SOLR_HOME = "/solr/";
     private static final String SOLR_XML_DEFAULT = "<solr></solr>";
 
@@ -188,4 +193,6 @@ public class SolrSink implements FileIO.Sink<MElement> {
         LOG.info("Finished to upload documents!");
     }
 
+
+     */
 }

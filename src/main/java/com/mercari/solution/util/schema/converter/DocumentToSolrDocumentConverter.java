@@ -1,5 +1,6 @@
 package com.mercari.solution.util.schema.converter;
 
+/*
 import com.google.firestore.v1.ArrayValue;
 import com.google.firestore.v1.Value;
 import com.google.firestore.v1.Document;
@@ -9,9 +10,11 @@ import org.apache.solr.common.SolrInputDocument;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.*;
+ */
 
 public class DocumentToSolrDocumentConverter {
 
+    /*
     public static SolrInputDocument convert(final Document document, final List<String> fieldNames) {
         return convert(document, null, fieldNames);
     }
@@ -156,5 +159,6 @@ public class DocumentToSolrDocumentConverter {
                     }
                 });
     }
+     */
 
 }
