@@ -16,8 +16,7 @@ import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PDone;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.slf4j.*;
 
 import java.io.Serializable;
 import java.util.HashMap;
@@ -54,6 +53,7 @@ public class DebugSink extends Sink {
         if (inputs.size() == 0) {
             throw new IllegalArgumentException("debug sink module requires inputs parameter");
         }
+
         final DebugSinkParameters parameters = getParameters(DebugSinkParameters.class);
         parameters.setDefaults();
 
@@ -63,7 +63,7 @@ public class DebugSink extends Sink {
             final PCollection<MElement> element = inputs.get(tag);
             final String name = String.format("%s.%s", getName(), tag);
             final PCollection<Void> done = element
-                    .apply("Debug" + tag, ParDo.of(new DebugDoFn(name, schema, parameters)));
+                    .apply("Debug" + tag, ParDo.of(new DebugDoFn(getJobName(), name, schema, parameters)));
             voids = voids.and(done);
         }
 
@@ -73,6 +73,7 @@ public class DebugSink extends Sink {
 
     private static class DebugDoFn extends DoFn<MElement, Void> {
 
+        private final String jobName;
         private final String name;
         private final Schema schema;
         private final String templateText;
@@ -80,7 +81,13 @@ public class DebugSink extends Sink {
 
         private transient Template template;
 
-        DebugDoFn(final String name, Schema schema, DebugSinkParameters parameters) {
+        DebugDoFn(
+                final String jobName,
+                final String name,
+                final Schema schema,
+                final DebugSinkParameters parameters) {
+
+            this.jobName = jobName;
             this.name = name;
             this.schema = schema;
             this.templateText = parameters.logTemplate;
@@ -103,7 +110,13 @@ public class DebugSink extends Sink {
                 return;
             }
             final String text;
-            final JsonObject json = ElementToJsonConverter.convert(schema, element.asPrimitiveMap());
+            JsonObject json;
+            try {
+                json = ElementToJsonConverter.convert(schema, element.asPrimitiveMap());
+            } catch (final Throwable e) {
+                json = new JsonObject();
+                json.addProperty("error", e.getMessage());
+            }
             if(this.template == null) {
                 final JsonObject output = new JsonObject();
                 output.add("data", json);

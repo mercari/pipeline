@@ -53,6 +53,21 @@ public class IAMUtil {
         }
     }
 
+    public static String getIdToken(final String endpoint) {
+        try(final HttpClient client = HttpClient.newHttpClient()) {
+            final String url = ENDPOINT_METADATA + endpoint;
+            final HttpRequest req = HttpRequest.newBuilder()
+                    .uri(new URI(url))
+                    .header("Metadata-Flavor", "Google")
+                    .GET()
+                    .build();
+            final HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
+            return res.body();
+        } catch (IOException | URISyntaxException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public static String getIdToken(final HttpClient client, final String endpoint)
             throws IOException, URISyntaxException, InterruptedException {
         final String metaserver = ENDPOINT_METADATA + endpoint;

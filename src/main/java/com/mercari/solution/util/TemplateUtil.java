@@ -54,12 +54,12 @@ public class TemplateUtil {
         }
     }
 
-    public static String executeStrictTemplate(final String templateText, final Map<String, Object> data) {
+    public static String executeStrictTemplate(final String templateText, final Map<?, ?> data) {
         final Template template = createStrictTemplate("template", templateText);
         return executeStrictTemplate(template, data);
     }
 
-    public static String executeStrictTemplate(final Template template, final Map<String, Object> data) {
+    public static String executeStrictTemplate(final Template template, final Map<?, ?> data) {
         try(final StringWriter writer = new StringWriter()) {
             template.process(data, writer);
             return writer.toString();

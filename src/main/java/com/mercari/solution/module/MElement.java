@@ -361,7 +361,7 @@ public class MElement implements Serializable {
                         .map(Object::toString)
                         .orElse(null);
             }
-            case ROW -> ((Row) value).getString(field);
+            case ROW -> RowSchemaUtil.getAsString(((Row) value), field);
             case AVRO -> Optional.ofNullable(((GenericRecord) value).get(field)).map(Object::toString).orElse(null);
             case STRUCT -> StructSchemaUtil.getAsString((Struct) value, field);
             case DOCUMENT -> DocumentSchemaUtil.getAsString((Document) value, field);
@@ -711,6 +711,19 @@ public class MElement implements Serializable {
             };
         }
 
+    }
+
+    public static com.mercari.solution.module.Schema dummySchema() {
+        return Schema.builder()
+                .withField("field", Schema.FieldType.STRING)
+                .build();
+    }
+
+    public static MElement createDummyElement(final org.joda.time.Instant timestamp) {
+        return MElement.builder()
+                .withString("field", "")
+                .withEventTime(timestamp)
+                .build();
     }
 
     @Override

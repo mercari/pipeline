@@ -95,6 +95,7 @@ public class TableRowToAvroConverter {
         return switch (schema.getType()) {
             case "BYTES" -> nullable ? AvroSchemaUtil.NULLABLE_BYTES : AvroSchemaUtil.REQUIRED_BYTES;
             case "STRING" -> nullable ? AvroSchemaUtil.NULLABLE_STRING : AvroSchemaUtil.REQUIRED_STRING;
+            case "JSON" -> nullable ? AvroSchemaUtil.NULLABLE_JSON : AvroSchemaUtil.REQUIRED_JSON;
             case "INT64", "INTEGER" -> {
                 if (schema.containsKey("avroSchema") && "INT".equals(schema.get("avroSchema"))) {
                     yield nullable ? AvroSchemaUtil.NULLABLE_INT : AvroSchemaUtil.REQUIRED_INT;

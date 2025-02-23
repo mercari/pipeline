@@ -9,9 +9,13 @@ import com.google.protobuf.util.JsonFormat;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.gcp.PubSubUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
+import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.OptionUtil;
+import com.mercari.solution.util.pipeline.Union;
+import com.mercari.solution.util.schema.CalciteSchemaUtil;
 import com.mercari.solution.util.schema.ProtoSchemaUtil;
 import com.mercari.solution.util.schema.converter.*;
+import com.mercari.solution.util.sql.calcite.MemorySchema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericRecord;
@@ -25,6 +29,7 @@ import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.*;
+import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.tools.Planner;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +37,9 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.*;
 
 @Source.Module(name="pubsub")
@@ -46,12 +54,15 @@ public class PubSubSource extends Source {
         private String topic;
         private String subscription;
 
-        private Format format;
         private String idAttribute;
         private SeekParameters seek;
+
+        private Format format;
         private AdditionalFieldsParameters additionalFields;
 
-        private void validate(final String name, final PBegin begin, final Schema schema) {
+        private List<PartitionParameters> partitions;
+
+        private void validate(final PBegin begin, final Schema schema) {
 
             if(!OptionUtil.isStreaming(begin)) {
                 throw new IllegalArgumentException("PubSub source module only support streaming mode.");
@@ -96,7 +107,12 @@ public class PubSubSource extends Source {
                 errorMessages.addAll(seek.validate());
             }
             if(additionalFields != null) {
-                errorMessages.addAll(additionalFields.validate(name));
+                errorMessages.addAll(additionalFields.validate());
+            }
+            if(partitions != null) {
+                for(int i=0; i<partitions.size(); i++) {
+                    errorMessages.addAll(partitions.get(i).validate(i));
+                }
             }
 
             if(!errorMessages.isEmpty()) {
@@ -113,6 +129,13 @@ public class PubSubSource extends Source {
             }
             if(additionalFields != null) {
                 additionalFields.setDefaults();
+            }
+            if(partitions == null) {
+                partitions = new ArrayList<>();
+            } else {
+                for(final PartitionParameters partition : partitions) {
+                    partition.setDefaults();
+                }
             }
         }
 
@@ -146,7 +169,7 @@ public class PubSubSource extends Source {
         private String orderingKey;
         private Map<String, String> attributes;
 
-        private List<String> validate(final String name) {
+        private List<String> validate() {
             final List<String> errorMessages = new ArrayList<>();
             return errorMessages;
         }
@@ -159,6 +182,133 @@ public class PubSubSource extends Source {
 
     }
 
+    private static class PartitionParameters implements Serializable {
+
+        private String name;
+        private JsonElement filter;
+        private JsonElement schema;
+        private Format format;
+        private AdditionalFieldsParameters additionalFields;
+        private JsonElement select;
+        private String sql;
+
+        private List<String> validate(int index) {
+            final List<String> errorMessages = new ArrayList<>();
+            if(name == null) {
+                errorMessages.add("parameters.partition[" + index + "].name must not be null");
+            }
+            if(filter == null || filter.isJsonNull()) {
+                errorMessages.add("parameters.partition[" + index + "].filter must not be null");
+            } else if(filter.isJsonPrimitive()) {
+                errorMessages.add("parameters.partition[" + index + "].filter is illegal format: " + filter);
+            }
+
+            if(schema == null || schema.isJsonNull()) {
+                if(!Format.json.equals(format)) {
+                    errorMessages.add("parameters.partition[" + index + "].schema must not be null");
+                }
+            } else if(schema.isJsonPrimitive()) {
+                errorMessages.add("parameters.partition[" + index + "].schema is illegal format: " + schema);
+            }
+
+            if(additionalFields != null) {
+                errorMessages.addAll(additionalFields.validate());
+            }
+
+            return errorMessages;
+        }
+
+        private void setDefaults() {
+
+        }
+
+    }
+
+    private static class Partition implements Serializable {
+
+        private String filterString;
+        private Schema inputSchema;
+        private Format format;
+        private AdditionalFieldsParameters messageFields;
+        private String sql;
+
+        private transient Filter.ConditionNode filter;
+
+        private transient DatumReader<GenericRecord> datumReader;
+        private transient BinaryDecoder decoder = null;
+
+        private transient List<MElement> elements;
+        private transient Planner planner;
+        private transient PreparedStatement statement;
+
+
+        Partition(final PartitionParameters partitionParameters) {
+            this.filterString = partitionParameters.filter.toString();
+            this.inputSchema = Schema.parse(partitionParameters.schema);
+            this.format = partitionParameters.format;
+            this.messageFields = partitionParameters.additionalFields;
+        }
+
+        public void setup(
+                final Map<String, Descriptors.Descriptor> descriptors,
+                final Map<String, JsonFormat.Printer> printers) {
+
+            this.filter = Filter.parse(filterString);
+            switch (format) {
+                case avro -> {
+                    this.inputSchema.setup(DataType.AVRO);
+                    this.datumReader = new GenericDatumReader<>(inputSchema.getAvroSchema());
+                }
+                case protobuf -> {
+                    final Descriptors.Descriptor descriptor = getOrLoadDescriptor(
+                            descriptors,
+                            printers,
+                            inputSchema.getProtobuf().getMessageName(),
+                            inputSchema.getProtobuf().getDescriptorFile());
+                }
+                default -> {
+                    this.inputSchema.setup();
+                }
+            }
+
+            this.elements = new ArrayList<>();
+            if(sql != null) {
+                final MemorySchema memorySchema = MemorySchema.create("schema", List.of(
+                        MemorySchema.createTable("INPUT", inputSchema, elements)
+                ));
+                //this.planner = Query.createPlanner(memorySchema);
+                try {
+                    //this.statement = Query.createStatement(planner, sql);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+
+        public boolean filter(final Map<String, ?> standardValues) {
+            return Filter.filter(filter, standardValues);
+        }
+
+        public List<MElement> process(final MElement element, final Instant timestamp) {
+            if(sql == null) {
+                return List.of(element);
+            }
+
+            this.elements.clear();
+            this.elements.add(element);
+            try(final ResultSet resultSet = statement.executeQuery()) {
+                final List<MElement> outputs = new ArrayList<>();
+                final List<Map<String, Object>> results = CalciteSchemaUtil.convert(resultSet);
+                for(final Map<String, Object> result : results) {
+                    final MElement output = MElement.of(result, timestamp);
+                    outputs.add(output);
+                }
+                return outputs;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
 
     private enum Format {
         avro,
@@ -171,7 +321,7 @@ public class PubSubSource extends Source {
     public MCollectionTuple expand(PBegin begin) {
 
         final PubSubSourceParameters parameters = getParameters(PubSubSourceParameters.class);
-        parameters.validate(getName(), begin, getSchema());
+        parameters.validate(begin, getSchema());
         parameters.setDefaults();
 
         if(parameters.seek != null) {
@@ -187,6 +337,55 @@ public class PubSubSource extends Source {
             }
         }
 
+        final PubsubIO.Read<PubsubMessage> read = createRead(parameters, getTimestampAttribute());
+        final PCollection<PubsubMessage> pubsubMessages = begin.apply("Read", read);
+
+        final TupleTag<MElement> outputTag = new TupleTag<>() {};
+        final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+        if(parameters.partitions.isEmpty()) {
+            final Schema outputSchema = createOutputSchema(parameters, getSchema());
+            if(!getOutputFailure() || getFailFast()) {
+                final PCollection<MElement> output = pubsubMessages
+                        .apply("Format", ParDo
+                                .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
+                                        getFailFast(), getOutputFailure(), failuresTag)));
+                return MCollectionTuple
+                        .of(output, outputSchema);
+            } else {
+                final PCollectionTuple outputs = pubsubMessages
+                        .apply("Format", ParDo
+                                .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
+                                        getFailFast(), getOutputFailure(), failuresTag))
+                                .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+
+                return MCollectionTuple
+                        .of(outputs.get(outputTag), outputSchema)
+                        .failure(outputs.get(failuresTag));
+            }
+        } else {
+            final List<Schema> inputSchemas = new ArrayList<>();
+            for(final PartitionParameters partition : parameters.partitions) {
+                final Schema schema = Schema.parse(partition.schema);
+                inputSchemas.add(schema);
+            }
+
+            final PCollectionTuple outputs = pubsubMessages
+                    .apply("PartitionFormat", ParDo
+                            .of(new PartitionOutputDoFn(getJobName(), getName(), parameters.partitions,
+                                    getFailFast(), failuresTag))
+                            .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+            final Schema outputSchema = Union.createUnionSchema(inputSchemas);
+
+            return MCollectionTuple
+                    .of(outputs.get(outputTag), outputSchema)
+                    .failure(outputs.get(failuresTag));
+        }
+
+    }
+
+    private static PubsubIO.Read<PubsubMessage> createRead(
+            final PubSubSourceParameters parameters,
+            final String timestampAttribute) {
         PubsubIO.Read<PubsubMessage> read = PubsubIO.readMessagesWithAttributesAndMessageIdAndOrderingKey();
         if (parameters.topic != null) {
             read = read.fromTopic(parameters.topic);
@@ -197,36 +396,10 @@ public class PubSubSource extends Source {
         if (parameters.idAttribute != null) {
             read = read.withIdAttribute(parameters.idAttribute);
         }
-        if (getTimestampAttribute() != null) {
-            read = read.withTimestampAttribute(getTimestampAttribute());
+        if (timestampAttribute != null) {
+            read = read.withTimestampAttribute(timestampAttribute);
         }
-
-        final TupleTag<MElement> outputTag = new TupleTag<>() {};
-        final TupleTag<MElement> failuresTag = new TupleTag<>() {};
-
-        final PCollection<PubsubMessage> pubsubMessages = begin
-                .apply("Read", read);
-
-        final Schema outputSchema = createOutputSchema(parameters, getSchema());
-
-        if(!getOutputFailure() || getFailFast()) {
-            final PCollection<MElement> output = pubsubMessages
-                    .apply("Format", ParDo
-                            .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
-                                    getFailFast(), getOutputFailure(), failuresTag)));
-            return MCollectionTuple
-                    .of(output, outputSchema);
-        } else {
-            final PCollectionTuple outputs = pubsubMessages
-                    .apply("Format", ParDo
-                            .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
-                                    getFailFast(), getOutputFailure(), failuresTag))
-                            .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
-
-            return MCollectionTuple
-                    .of(outputs.get(outputTag), outputSchema)
-                    .failure(outputs.get(failuresTag));
-        }
+        return read;
     }
 
     private static Schema createOutputSchema(PubSubSourceParameters parameters, Schema schema) {
@@ -261,6 +434,7 @@ public class PubSubSource extends Source {
 
         private final String jobName;
         private final String moduleName;
+
         private final Schema schema;
         private final Format format;
         private final AdditionalFieldsParameters messageFields;
@@ -351,19 +525,6 @@ public class PubSubSource extends Source {
             }
         }
 
-        private MElement parseMessage(final PubsubMessage message, Instant timestamp) {
-            return MElement.builder()
-                    .withString("topic", message.getTopic())
-                    .withString("messageId", message.getMessageId())
-                    .withString("orderingKey", message.getOrderingKey())
-                    .withMap("attributes", message.getAttributeMap())
-                    .withBytes("payload", message.getPayload())
-                    .withTimestamp("timestamp", Instant.now())
-                    .withTimestamp("eventTime", timestamp)
-                    .withEventTime(timestamp)
-                    .build();
-        }
-
         private MElement parseJson(final PubsubMessage message, Instant timestamp) {
             final byte[] content = message.getPayload();
             final String json = new String(content, StandardCharsets.UTF_8);
@@ -434,6 +595,145 @@ public class PubSubSource extends Source {
 
     }
 
+    private static class PartitionOutputDoFn extends DoFn<PubsubMessage, MElement> {
+
+        private final String jobName;
+        private final String moduleName;
+
+        private List<Partition> partitions;
+
+        private final boolean failFast;
+        private final TupleTag<MElement> failuresTag;
+
+
+        // for protobuf format
+        private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();
+        private static final Map<String, JsonFormat.Printer> printers = new HashMap<>();
+
+
+        PartitionOutputDoFn(
+                final String jobName,
+                final String moduleName,
+                final List<PartitionParameters> partitionParameters,
+                final boolean failFast,
+                final TupleTag<MElement> failuresTag) {
+
+            this.jobName = jobName;
+            this.moduleName = moduleName;
+            this.partitions = new ArrayList<>();
+            for(final PartitionParameters partitionParameter : partitionParameters) {
+                this.partitions.add(new Partition(partitionParameter));
+            }
+
+            this.failFast = failFast;
+            this.failuresTag = failuresTag;
+        }
+
+        @Setup
+        public void setup() {
+            for(final Partition partition : partitions) {
+                partition.setup(descriptors, printers);
+            }
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final PubsubMessage message = c.element();
+            if(message == null) {
+                return;
+            }
+
+            for(final Partition partition : partitions) {
+                try {
+                    if(!partition.filter(message.getAttributeMap())) {
+                        continue;
+                    }
+                    final MElement element = switch (partition.format) {
+                        case message -> MElement.of(message, c.timestamp());
+                        case json -> parseJson(partition, message, c.timestamp());
+                        case avro -> parseAvro(partition, message, c.timestamp());
+                        case protobuf -> parseProtobuf(partition, message, c.timestamp());
+                    };
+
+                    final List<MElement> outputs = partition.process(element, c.timestamp());
+                    for(final MElement output : outputs) {
+                        c.output(output);
+                    }
+                    return;
+                } catch (final Throwable e) {
+
+                }
+            }
+        }
+
+        private MElement parseJson(
+                final Partition partition,
+                final PubsubMessage message,
+                final Instant timestamp) {
+
+            final byte[] content = message.getPayload();
+            final String json = new String(content, StandardCharsets.UTF_8);
+            final Map<String, Object> map;
+            if(partition.inputSchema != null) {
+                map = JsonToElementConverter.convert(partition.inputSchema, json);
+            } else {
+                map = JsonToMapConverter.convert(new Gson().fromJson(json, JsonElement.class));
+            }
+
+            return MElement.of(map, timestamp);
+        }
+
+        private MElement parseAvro(
+                final Partition partition,
+                final PubsubMessage message,
+                final Instant timestamp) throws IOException {
+
+            final byte[] bytes = message.getPayload();
+            partition.decoder = DecoderFactory.get().binaryDecoder(bytes, partition.decoder);
+            final GenericRecord record = new GenericData.Record(partition.inputSchema.getAvroSchema());
+            final GenericRecord output = partition.datumReader.read(record, partition.decoder);
+            return MElement.of(output, timestamp);
+        }
+
+        private MElement parseProtobuf(
+                final Partition partition,
+                final PubsubMessage message,
+                final Instant timestamp) {
+
+            final byte[] bytes = message.getPayload();
+            final String messageName = partition.inputSchema.getProtobuf().getMessageName();
+            final Descriptors.Descriptor descriptor = Optional
+                    .ofNullable(descriptors.get(messageName))
+                    .orElseGet(() -> getOrLoadDescriptor(descriptors, printers, messageName, partition.inputSchema.getProtobuf().getDescriptorFile()));
+            final JsonFormat.Printer printer = printers.get(messageName);
+
+            final Map<String, Object> values = ProtoToElementConverter.convert(partition.inputSchema, descriptor, bytes, printer);
+
+            if(partition.messageFields != null) {
+                if(partition.messageFields.topic != null) {
+                    values.put(partition.messageFields.topic, message.getTopic());
+                }
+                if(partition.messageFields.id != null) {
+                    values.put(partition.messageFields.id, message.getMessageId());
+                }
+                if(partition.messageFields.timestamp != null) {
+                    values.put(partition.messageFields.timestamp, timestamp.getMillis() * 1000L);
+                }
+                if(partition.messageFields.orderingKey != null) {
+                    values.put(partition.messageFields.orderingKey, message.getOrderingKey());
+                }
+                if(!partition.messageFields.attributes.isEmpty()) {
+                    for(final Map.Entry<String, String> entry : partition.messageFields.attributes.entrySet()) {
+                        values.put(entry.getValue(), message.getAttribute(entry.getKey()));
+                    }
+                }
+            }
+
+            return MElement.of(values, timestamp.getMillis());
+        }
+
+    }
+
 
     private static Schema createMessageSchema() {
         return Schema.builder()
@@ -451,7 +751,7 @@ public class PubSubSource extends Source {
             final Map<String, Descriptors.Descriptor> descriptors,
             final Map<String, JsonFormat.Printer> printers,
             final String messageName,
-            final String path) {
+            final String descriptorPath) {
 
         if(descriptors.containsKey(messageName)) {
             final Descriptors.Descriptor descriptor = descriptors.get(messageName);
@@ -461,7 +761,7 @@ public class PubSubSource extends Source {
                 descriptors.remove(messageName);
             }
         }
-        loadDescriptor(descriptors, printers, messageName, path);
+        loadDescriptor(descriptors, printers, messageName, descriptorPath);
         return descriptors.get(messageName);
     }
 

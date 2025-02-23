@@ -71,20 +71,29 @@ public class ProtoSchemaUtil {
         }
     }
 
-    public static Map<String, Descriptors.Descriptor> getDescriptors(final byte[] bytes) {
+    public static DescriptorProtos.FileDescriptorSet getFileDescriptorSet(final byte[] bytes) {
         try {
-            final DescriptorProtos.FileDescriptorSet set = DescriptorProtos.FileDescriptorSet
+            return DescriptorProtos.FileDescriptorSet
                     .parseFrom(bytes);
-            return getDescriptors(set);
         } catch (InvalidProtocolBufferException e) {
             throw new IllegalStateException(e);
         }
     }
 
-    public static DescriptorProtos.FileDescriptorSet getFileDescriptorSet(final byte[] bytes) {
+    public static DescriptorProtos.FileDescriptorSet getFileDescriptorSet(final InputStream is) {
         try {
             return DescriptorProtos.FileDescriptorSet
+                    .parseFrom(is);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    public static Map<String, Descriptors.Descriptor> getDescriptors(final byte[] bytes) {
+        try {
+            final DescriptorProtos.FileDescriptorSet set = DescriptorProtos.FileDescriptorSet
                     .parseFrom(bytes);
+            return getDescriptors(set);
         } catch (InvalidProtocolBufferException e) {
             throw new IllegalStateException(e);
         }

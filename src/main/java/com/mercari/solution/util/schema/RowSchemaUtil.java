@@ -1099,107 +1099,57 @@ public class RowSchemaUtil {
             return null;
         }
         return switch (fieldType.getTypeName()) {
-            case INT16 -> ((Integer) primitiveValue).shortValue();
-            case INT32 -> {
-                if(primitiveValue instanceof Integer) {
-                    yield primitiveValue;
-                } else if(primitiveValue instanceof String) {
-                    yield Integer.valueOf((String)primitiveValue);
-                } else if(primitiveValue instanceof Long) {
-                    yield ((Long) primitiveValue).intValue();
-                } else if(primitiveValue instanceof Float) {
-                    yield ((Float) primitiveValue).intValue();
-                } else if(primitiveValue instanceof Double) {
-                    yield ((Double) primitiveValue).intValue();
-                } else {
-                    throw new IllegalArgumentException();
-                }
-            }
-            case INT64 -> {
-                if(primitiveValue instanceof Long) {
-                    yield primitiveValue;
-                } else if(primitiveValue instanceof String) {
-                    yield Long.valueOf((String)primitiveValue);
-                } else if(primitiveValue instanceof Integer) {
-                    yield ((Integer) primitiveValue).longValue();
-                } else if(primitiveValue instanceof Float) {
-                    yield ((Float) primitiveValue).longValue();
-                } else if(primitiveValue instanceof Double) {
-                    yield ((Double) primitiveValue).longValue();
-                } else {
-                    throw new IllegalArgumentException();
-                }
-            }
-            case FLOAT -> {
-                if(primitiveValue instanceof Float) {
-                    yield primitiveValue;
-                } else if(primitiveValue instanceof String) {
-                    yield Float.valueOf((String)primitiveValue);
-                } else if(primitiveValue instanceof Integer) {
-                    yield ((Integer) primitiveValue).floatValue();
-                } else if(primitiveValue instanceof Long) {
-                    yield ((Long) primitiveValue).floatValue();
-                } else if(primitiveValue instanceof Double) {
-                    yield ((Double) primitiveValue).floatValue();
-                } else {
-                    throw new IllegalArgumentException();
-                }
-            }
-            case DOUBLE -> {
-                if(primitiveValue instanceof Double) {
-                    yield primitiveValue;
-                } else if(primitiveValue instanceof String) {
-                    yield Double.valueOf((String)primitiveValue);
-                } else if(primitiveValue instanceof Integer) {
-                    yield ((Integer) primitiveValue).doubleValue();
-                } else if(primitiveValue instanceof Long) {
-                    yield ((Long) primitiveValue).doubleValue();
-                } else if(primitiveValue instanceof Float) {
-                    yield ((Float) primitiveValue).doubleValue();
-                } else {
-                    throw new IllegalArgumentException();
-                }
-            }
-            case STRING -> {
-                if(primitiveValue instanceof String) {
-                    yield primitiveValue;
-                } else {
-                    yield primitiveValue.toString();
-                }
-            }
-            case BYTES -> {
-                if(primitiveValue instanceof byte[]) {
-                    yield primitiveValue;
-                } else if(primitiveValue instanceof String) {
-                    yield Base64.getDecoder().decode((String) primitiveValue);
-                } else {
-                    yield Base64.getDecoder().decode(primitiveValue.toString());
-                }
-            }
-            case BOOLEAN -> {
-                if(primitiveValue instanceof Boolean) {
-                    yield primitiveValue;
-                } else if(primitiveValue instanceof String) {
-                    yield Boolean.valueOf((String)primitiveValue);
-                } else if(primitiveValue instanceof Integer) {
-                    yield ((Integer) primitiveValue) > 0;
-                } else if(primitiveValue instanceof Long) {
-                    yield ((Long) primitiveValue) > 0;
-                } else if(primitiveValue instanceof Float) {
-                    yield ((Float) primitiveValue) > 0;
-                } else {
-                    throw new IllegalArgumentException();
-                }
-            }
-            case DATETIME -> {
-                if(primitiveValue instanceof Instant) {
-                    yield primitiveValue;
-                } else if(primitiveValue instanceof Long) {
-                    yield Instant.ofEpochMilli(((Long) primitiveValue) / 1000L);
-                } else {
-                    throw new IllegalStateException();
-                }
-            }
+            case INT16 -> switch (primitiveValue) {
+                case Short s -> s;
+                case String string -> Short.valueOf(string);
+                case Number n -> n.shortValue();
+                default -> throw new IllegalArgumentException();
+            };
+            case INT32 -> switch (primitiveValue) {
+                case Integer i -> i;
+                case String string -> Integer.valueOf(string);
+                case Number n -> n.intValue();
+                default -> throw new IllegalArgumentException();
+            };
+            case INT64 -> switch (primitiveValue) {
+                case Long l -> l;
+                case String string -> Long.valueOf(string);
+                case Number n -> n.longValue();
+                default -> throw new IllegalArgumentException();
+            };
+            case FLOAT -> switch (primitiveValue) {
+                case Float f -> f;
+                case String string -> Float.valueOf(string);
+                case Number n -> n.floatValue();
+                default -> throw new IllegalArgumentException();
+            };
+            case DOUBLE -> switch (primitiveValue) {
+                case Double d -> d;
+                case String string -> Double.valueOf(string);
+                case Number n -> n.doubleValue();
+                default -> throw new IllegalArgumentException();
+            };
+            case STRING -> switch (primitiveValue) {
+                case String s -> s;
+                default -> primitiveValue.toString();
+            };
+            case BYTES -> switch (primitiveValue) {
+                case byte[] bytes -> bytes;
+                case String s -> s.getBytes(StandardCharsets.UTF_8);
+                default -> primitiveValue.toString().getBytes(StandardCharsets.UTF_8);
+            };
+            case BOOLEAN -> switch (primitiveValue) {
+                case Boolean b -> b;
+                case String s -> Boolean.parseBoolean(s);
+                case Number n -> n.doubleValue() > 0;
+                default -> throw new IllegalArgumentException();
+            };
+            case DATETIME -> switch (primitiveValue) {
+                case Instant i -> i;
+                case Long l -> Instant.ofEpochMilli(l / 1000L);
+                case Number n -> Instant.ofEpochMilli(n.longValue() / 1000L);
+                default -> throw new IllegalArgumentException();
+            };
             case LOGICAL_TYPE -> {
                 if (RowSchemaUtil.isLogicalTypeDate(fieldType)) {
                     yield LocalDate.ofEpochDay((Integer) primitiveValue);
@@ -1371,78 +1321,63 @@ public class RowSchemaUtil {
     }
 
     private static Object convertDefaultValue(final Schema.FieldType fieldType, final String defaultValue) {
-        switch (fieldType.getTypeName()) {
-            case STRING:
-                return defaultValue;
-            case BOOLEAN:
-                return Boolean.valueOf(defaultValue);
-            case BYTE:
-                return Byte.valueOf(defaultValue);
-            case INT16:
-                return Short.valueOf(defaultValue);
-            case INT32:
-                return Integer.valueOf(defaultValue);
-            case INT64:
-                return Long.valueOf(defaultValue);
-            case FLOAT:
-                return Float.valueOf(defaultValue);
-            case DOUBLE:
-                return Double.valueOf(defaultValue);
-            case DECIMAL:
-                return new BigDecimal(defaultValue);
-            case BYTES:
-                return Base64.getDecoder().decode(defaultValue);
-            case DATETIME:
-                return DateTimeUtil.toJodaInstant(defaultValue);
-            case LOGICAL_TYPE: {
+        return switch (fieldType.getTypeName()) {
+            case STRING -> defaultValue;
+            case BOOLEAN -> Boolean.valueOf(defaultValue);
+            case BYTE -> Byte.valueOf(defaultValue);
+            case INT16 -> Short.valueOf(defaultValue);
+            case INT32 -> Integer.valueOf(defaultValue);
+            case INT64 -> Long.valueOf(defaultValue);
+            case FLOAT -> Float.valueOf(defaultValue);
+            case DOUBLE -> Double.valueOf(defaultValue);
+            case DECIMAL -> new BigDecimal(defaultValue);
+            case BYTES -> Base64.getDecoder().decode(defaultValue);
+            case DATETIME -> DateTimeUtil.toJodaInstant(defaultValue);
+            case LOGICAL_TYPE -> {
                 final JsonElement element = new Gson().fromJson(defaultValue, JsonElement.class);
                 if(!element.isJsonPrimitive()) {
-                    return null;
+                    yield null;
                 }
                 final JsonPrimitive primitive = element.getAsJsonPrimitive();
                 if(RowSchemaUtil.isLogicalTypeDate(fieldType)) {
                     if(primitive.isString()) {
-                        return DateTimeUtil.toLocalDate(primitive.getAsString());
+                        yield DateTimeUtil.toLocalDate(primitive.getAsString());
                     } else if(primitive.isNumber()) {
-                        return LocalDate.ofEpochDay(primitive.getAsLong());
+                        yield LocalDate.ofEpochDay(primitive.getAsLong());
                     } else {
                         throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + primitive + " could not be convert to date");
                     }
                 } else if(RowSchemaUtil.isLogicalTypeTime(fieldType)) {
                     if(primitive.isString()) {
-                        return DateTimeUtil.toLocalTime(primitive.getAsString());
+                        yield DateTimeUtil.toLocalTime(primitive.getAsString());
                     } else if(primitive.isNumber()) {
-                        return LocalTime.ofSecondOfDay(primitive.getAsLong());
+                        yield LocalTime.ofSecondOfDay(primitive.getAsLong());
                     } else {
                         throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + primitive + " could not be convert to time");
                     }
                 } else if(RowSchemaUtil.isLogicalTypeTimestamp(fieldType)) {
                     if(primitive.isString()) {
-                        return DateTimeUtil.toJodaInstant(primitive.getAsString());
+                        yield DateTimeUtil.toJodaInstant(primitive.getAsString());
                     } else if(primitive.isNumber()) {
-                        return DateTimeUtil.toJodaInstant(primitive.getAsLong());
+                        yield DateTimeUtil.toJodaInstant(primitive.getAsLong());
                     } else {
                         final String message = "json fieldType: " + fieldType.getTypeName() + ", value: " + primitive + " could not be convert to timestamp";
                         throw new IllegalStateException(message);
                     }
                 } else if(RowSchemaUtil.isLogicalTypeEnum(fieldType)) {
                     final String enumString = primitive.getAsString();
-                    return RowSchemaUtil.toEnumerationTypeValue(fieldType, enumString);
+                    yield RowSchemaUtil.toEnumerationTypeValue(fieldType, enumString);
                 } else {
                     throw new IllegalArgumentException(
                             "Unsupported Beam logical type: " + fieldType.getLogicalType().getIdentifier());
                 }
             }
-            case ROW: {
+            case ROW -> {
                 final JsonElement element = new Gson().fromJson(defaultValue, JsonElement.class);
-                return JsonToRowConverter.convert(fieldType.getRowSchema(), element);
+                yield JsonToRowConverter.convert(fieldType.getRowSchema(), element);
             }
-            case MAP:
-            case ARRAY:
-            case ITERABLE:
-            default:
-                throw new IllegalStateException("Not supported default value type: " + fieldType.getTypeName());
-        }
+            default -> throw new IllegalStateException("Not supported default value type: " + fieldType.getTypeName());
+        };
     }
 
 }

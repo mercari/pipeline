@@ -56,12 +56,16 @@ public class PubSubUtil {
     public static Schema getSchemaFromTopic(final Pubsub pubsub, final String topicResource) {
         try {
             final Topic topic = pubsub.projects().topics().get(topicResource).execute();
+            if(topic.getSchemaSettings() == null || topic.getSchemaSettings().getSchema() == null) {
+                throw new IllegalArgumentException("Unable to get schema from topic: " + topicResource);
+            }
             final String schemaResource = topic.getSchemaSettings().getSchema();
             final com.google.api.services.pubsub.model.Schema topicSchema = pubsub.projects().schemas().get(schemaResource).execute();
-            if(!"AVRO".equals(topicSchema.getType())) {
-                throw new IllegalArgumentException();
-            }
-            return AvroSchemaUtil.convertSchema(topicSchema.getDefinition());
+            return switch (topicSchema.getType().toLowerCase()) {
+                case "avro" -> AvroSchemaUtil.convertSchema(topicSchema.getDefinition());
+                case "protocol-buffer" -> throw new IllegalArgumentException("Not supported protobuf yet");
+                default -> throw new IllegalArgumentException("Not supported topic schema type: " + topicSchema.getType());
+            };
         } catch (IOException e) {
             throw new IllegalArgumentException("Failed to get schema for topic: " + topicResource, e);
         }

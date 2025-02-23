@@ -107,18 +107,22 @@ public class Union {
             }
             return builder.build();
         } else {
-            final Set<String> fieldNames = new HashSet<>();
-            final Schema.Builder builder = Schema.builder();
-            for(final Schema schema : inputs.getAllSchema()) {
-                for(final Schema.Field field : schema.getFields()) {
-                    if(!fieldNames.contains(field.getName())) {
-                        builder.withField(field);
-                        fieldNames.add(field.getName());
-                    }
+            return createUnionSchema(inputs.getAllSchema());
+        }
+    }
+
+    public static Schema createUnionSchema(final Iterable<Schema> schemas) {
+        final Set<String> fieldNames = new HashSet<>();
+        final Schema.Builder builder = Schema.builder();
+        for (final Schema schema : schemas) {
+            for (final Schema.Field field : schema.getFields()) {
+                if (!fieldNames.contains(field.getName())) {
+                    builder.withField(field);
+                    fieldNames.add(field.getName());
                 }
             }
-            return builder.build();
         }
+        return builder.build();
     }
 
     public static UnionFlatten flatten() {

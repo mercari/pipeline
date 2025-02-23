@@ -3,6 +3,7 @@ package com.mercari.solution.module.sink;
 import com.google.api.services.bigquery.model.*;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.mercari.solution.MPipeline;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.coder.ElementCoder;
@@ -18,6 +19,7 @@ import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
 import org.apache.beam.sdk.io.gcp.bigquery.*;
 import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
+import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.values.*;
 import org.apache.beam.sdk.values.Row;
@@ -46,6 +48,7 @@ public class BigQuerySink extends Sink {
         private BigQueryIO.Write.CreateDisposition createDisposition;
         private BigQueryIO.Write.Method method;
         private RowMutationInformation.MutationType mutationType;
+        private Boolean outputResult;
 
         // for table creation
         private String partitioning;
@@ -71,6 +74,8 @@ public class BigQuerySink extends Sink {
         private Boolean withoutValidation;
         private BigQueryUtil.WriteFormat writeFormat;
 
+        private String customGcsTempLocation;
+
         @Deprecated
         private String clustering;
 
@@ -87,7 +92,7 @@ public class BigQuerySink extends Sink {
             }
         }
 
-        private void setDefaults(final PInput input) {
+        private void setDefaults(final PInput input, final MPipeline.Runner runner) {
             if(this.datasetId == null) {
                 final String str;
                 if(this.table.contains(":")) {
@@ -167,8 +172,17 @@ public class BigQuerySink extends Sink {
             if(this.autoSharding == null) {
                 this.autoSharding = false;
             }
+            if(customGcsTempLocation == null) {
+                if(MPipeline.Runner.direct.equals(runner)) {
+                    customGcsTempLocation = input.getPipeline().getOptions().getTempLocation();
+                }
+            }
             if(this.withoutValidation == null) {
                 this.withoutValidation = false;
+            }
+
+            if(outputResult == null) {
+                outputResult = !OptionUtil.isStreaming(input);
             }
 
         }
@@ -187,7 +201,7 @@ public class BigQuerySink extends Sink {
         }
         final BigQuerySinkParameters parameters = getParameters(BigQuerySinkParameters.class);
         parameters.validate(inputs);
-        parameters.setDefaults(inputs);
+        parameters.setDefaults(inputs, getRunner());
 
         final PCollection<MElement> elements = inputs
                 .apply("Union", Union.flatten()
@@ -266,30 +280,62 @@ public class BigQuerySink extends Sink {
                 BigQueryIO.Write.Method.STORAGE_WRITE_API.equals(parameters.method)
                         || BigQueryIO.Write.Method.STORAGE_API_AT_LEAST_ONCE.equals(parameters.method);
 
-        final PCollection<MElement> outputs;
+        final PCollection<MElement> result;
+        final PCollection<MElement> failure;
+        final Schema resultSchema;
         if(isStreamingInsert) {
+            if(parameters.outputResult) {
+                result = writeResult.getSuccessfulInserts()
+                        .apply("ConvertSuccessfulInserts", ParDo.of(new SuccessfullInsertDoFn()));
+                resultSchema = inputSchema;
+            } else {
+                result = null;
+                resultSchema = null;
+            }
             if(parameters.withExtendedErrorInfo) {
-                outputs = writeResult.getFailedInsertsWithErr()
+                failure = writeResult.getFailedInsertsWithErr()
                         .apply("ConvertFailureRecordWithError", ParDo.of(new FailedRecordWithErrorDoFn(getJobName(), getName())))
                         .setCoder(ElementCoder.of(MFailure.schema()));
             } else {
-                outputs = writeResult.getFailedInserts()
+                failure = writeResult.getFailedInserts()
                         .apply("ConvertFailureRecordInsert", ParDo.of(new FailedRecordDoFn(getJobName(), getName())))
                         .setCoder(ElementCoder.of(MFailure.schema()));
             }
         } else if(isStorageApiInsert) {
-            outputs = writeResult.getFailedStorageApiInserts()
+            if(parameters.outputResult) {
+                result = writeResult.getSuccessfulStorageApiInserts()
+                        .apply("ConvertSuccessfulApiInsert", ParDo.of(new SuccessfullInsertDoFn()));
+                resultSchema = inputSchema;
+            } else {
+                result = null;
+                resultSchema = null;
+            }
+            failure = writeResult.getFailedStorageApiInserts()
                     .apply("ConvertFailureRecordStorage", ParDo.of(new FailedStorageApiRecordDoFn(getJobName(), getName())))
                     .setCoder(ElementCoder.of(MFailure.schema()));
         } else {
-            outputs = writeResult.getFailedInserts()
+            if(parameters.outputResult) {
+                result = writeResult.getSuccessfulTableLoads()
+                        .apply("ConvertSuccessfulTableLoads", ParDo.of(new SuccessfulTableLoadsDoFn()));
+                resultSchema = BigQueryUtil.getTableDefinitionSchema();
+            } else {
+                result = null;
+                resultSchema = null;
+            }
+            failure = writeResult.getFailedInserts()
                     .apply("ConvertFailureRecordInsert", ParDo.of(new FailedRecordDoFn(getJobName(), getName())))
                     .setCoder(ElementCoder.of(MFailure.schema()));
         }
 
-        return MCollectionTuple
-                .done(PDone.in(inputs.getPipeline()))
-                .failure(outputs);
+        if(result == null) {
+            return MCollectionTuple
+                    .done(PDone.in(inputs.getPipeline()))
+                    .failure(failure);
+        } else {
+            return MCollectionTuple
+                    .of(result, resultSchema)
+                    .failure(failure);
+        }
     }
 
     private static class ToRowDoFn extends DoFn<MElement, Row> {
@@ -523,6 +569,10 @@ public class BigQuerySink extends Sink {
             }
         }
 
+        if(parameters.customGcsTempLocation != null) {
+            write = write.withCustomGcsTempLocation(ValueProvider.StaticValueProvider.of(parameters.customGcsTempLocation));
+        }
+
         if(parameters.withoutValidation != null && parameters.withoutValidation) {
             write = write.withoutValidation();
         }
@@ -580,6 +630,39 @@ public class BigQuerySink extends Sink {
         }
 
         return write;
+    }
+
+    private static class SuccessfulTableLoadsDoFn extends DoFn<TableDestination, MElement> {
+
+        SuccessfulTableLoadsDoFn() {
+
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final TableDestination tableDestination = c.element();
+            if(tableDestination == null) {
+                return;
+            }
+            final MElement output = BigQueryUtil.convertToElement(tableDestination);
+            c.output(output);
+        }
+
+    }
+
+    private static class SuccessfullInsertDoFn extends DoFn<TableRow, MElement> {
+
+        SuccessfullInsertDoFn() {
+
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final TableRow tableRow = c.element();
+            // TODO
+            LOG.info("tableRow: " + tableRow);
+        }
+
     }
 
     private static class FailedRecordDoFn extends DoFn<TableRow, MElement> {

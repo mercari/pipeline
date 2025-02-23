@@ -267,13 +267,26 @@ public class DateTimeUtil {
         return org.joda.time.Instant.ofEpochMilli(epochMicroSecond / 1000L);
     }
 
+    public static com.google.protobuf.Timestamp toProtoTimestamp(final Instant instant) {
+        if(instant == null) {
+            return null;
+        }
+        return com.google.protobuf.Timestamp.newBuilder()
+                .setSeconds(instant.getEpochSecond())
+                .setNanos(instant.getNano())
+                .build();
+    }
+
     public static com.google.protobuf.Timestamp toProtoTimestamp(final org.joda.time.Instant instant) {
         if(instant == null) {
             return null;
         }
         long second = instant.getMillis() / 1000L;
         long nano   = instant.getMillis() % 1000L * 1000_000L;
-        return com.google.protobuf.Timestamp.newBuilder().setSeconds(second).setNanos(Math.toIntExact(nano)).build();
+        return com.google.protobuf.Timestamp.newBuilder()
+                .setSeconds(second)
+                .setNanos(Math.toIntExact(nano))
+                .build();
     }
 
     public static com.google.protobuf.Timestamp toProtoTimestamp(final Long epocMicros) {
@@ -282,7 +295,18 @@ public class DateTimeUtil {
         }
         long second = epocMicros / 1000_000L;
         long nano   = epocMicros % 1000_000L * 1000L;
-        return com.google.protobuf.Timestamp.newBuilder().setSeconds(second).setNanos(Math.toIntExact(nano)).build();
+        return com.google.protobuf.Timestamp.newBuilder()
+                .setSeconds(second)
+                .setNanos(Math.toIntExact(nano))
+                .build();
+    }
+
+    public static com.google.protobuf.Timestamp toProtoTimestamp(final String text) {
+        if(text == null) {
+            return null;
+        }
+        final Instant instant = toInstant(text);
+        return toProtoTimestamp(instant);
     }
 
     public static Integer toEpochDay(final Date date) {

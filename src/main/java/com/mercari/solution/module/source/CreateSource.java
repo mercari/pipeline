@@ -209,7 +209,7 @@ public class CreateSource extends Source {
             selected = tuple
                     .get(selectTransform.outputTag)
                     .setCoder(ElementCoder.of(outputSchema));
-            failures = failures.and(tuple.get(selectTransform.failuresTag));
+            //failures = failures.and(tuple.get(selectTransform.failuresTag));
         }
 
         outputSchema.withType(outputType);

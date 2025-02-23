@@ -4,7 +4,6 @@ import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -20,7 +19,7 @@ public class MessageSchemaUtil {
             case "messageid" -> message.getMessageId();
             case "orderingkey" -> message.getOrderingKey();
             case "topic" -> message.getTopic();
-            case "payload" -> Base64.getEncoder().encodeToString(message.getPayload());
+            case "payload" -> new String(message.getPayload(), StandardCharsets.UTF_8);
             default -> null;
         };
     }
@@ -44,7 +43,7 @@ public class MessageSchemaUtil {
         };
         return Optional
                 .ofNullable(str)
-                .map(s -> Base64.getDecoder().decode(s))
+                .map(String::getBytes)
                 .map(ByteBuffer::wrap)
                 .orElse(null);
     }

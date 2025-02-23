@@ -17,7 +17,9 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
+
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.config.Lex;
+import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.RelNode;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.RelRoot;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.RelWriter;
@@ -25,7 +27,6 @@ import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.externalize
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.schema.SchemaPlus;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.SqlExplainLevel;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.SqlNode;
-import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.dialect.BigQuerySqlDialect;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.parser.SqlParseException;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.parser.SqlParser;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.tools.*;
@@ -34,10 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.PrintWriter;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -184,9 +182,6 @@ public class Query {
     public static PreparedStatement createStatement(final Planner planner, String sql) throws SqlParseException, ValidationException, RelConversionException {
         final SqlNode sqlNode = planner.parse(sql);
 
-        // Print it
-        System.out.println(sqlNode.toSqlString(BigQuerySqlDialect.DEFAULT));
-
         // Validate the tree
         final SqlNode sqlNodeValidated = planner.validate(sqlNode);
         final RelRoot relRoot = planner.rel(sqlNodeValidated);
@@ -194,7 +189,18 @@ public class Query {
 
         final RelWriter relWriter = new RelWriterImpl(new PrintWriter(System.out), SqlExplainLevel.EXPPLAN_ATTRIBUTES, false);
         relNode.explain(relWriter);
-        return RelRunners.run(relNode);
+
+        try {
+            Connection connection = DriverManager.getConnection("jdbc:beam-vendor-calcite:");
+            //Connection connection = DriverManager.getConnection("jdbc:calcite:");
+            CalciteConnection c = connection.unwrap(CalciteConnection.class);
+            RelRunner runner = c.unwrap(RelRunner.class);
+            return runner.prepareStatement(relNode);
+        } catch (Throwable e) {
+            //RelRunners.run(relNode)
+            throw new RuntimeException("Failed to parse sql: ", e);
+        }
+        //return RelRunners.run(relNode);
     }
 
     public static Transform of(
@@ -331,6 +337,7 @@ public class Query {
                 final int index = element.getIndex();
                 this.elementsList.get(index).clear();
                 this.elementsList.get(index).add(element);
+                final String source = inputNames.get(index);
 
                 try(final ResultSet resultSet = statement.executeQuery()) {
                     final List<Map<String, Object>> results = CalciteSchemaUtil.convert(resultSet);
@@ -347,7 +354,7 @@ public class Query {
                     }
                 } catch (final Throwable e) {
                     String errorMessage = MFailure.convertThrowableMessage(e);
-                    LOG.error("SQL query error: {}, {} for input: {}", e, errorMessage, element);
+                    LOG.error("SQL query error: {}, {} for input: {} from: {}", e, errorMessage, element, source);
                     if(failFast) {
                         throw new IllegalStateException(errorMessage, e);
                     }

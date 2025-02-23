@@ -95,6 +95,8 @@ public interface SelectFunction extends Serializable {
                 } else  {
                     throw new IllegalArgumentException("selectField value requires type parameter");
                 }
+            } else if(jsonObject.has("type") && jsonObject.size() == 2) {
+                func = Func.cast;
             } else if(jsonObject.has("expression")) {
                 func = Func.expression;
             } else if(jsonObject.has("text")) {
