@@ -622,7 +622,7 @@ public class Schema implements Serializable {
                 }
             }
 
-            final String defaultValue = jsonObject.has("default") ? jsonObject.get("default").getAsString() : null;
+            final String defaultValue = jsonObject.has("defaultValue") ? jsonObject.get("defaultValue").getAsString() : null;
 
             return switch (mode) {
                 case repeated -> FieldType.array(fieldType).withDefaultValue(defaultValue);
