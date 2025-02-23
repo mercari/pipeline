@@ -2,6 +2,8 @@ package com.mercari.solution;
 
 import com.mercari.solution.config.*;
 import com.mercari.solution.module.*;
+import com.mercari.solution.util.gcp.ArtifactRegistryUtil;
+import com.mercari.solution.util.gcp.ParameterManagerUtil;
 import com.mercari.solution.util.gcp.PubSubUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.pipeline.OptionUtil;
@@ -133,6 +135,14 @@ public class MPipeline {
         if(configParam.startsWith("gs://")) {
             LOG.info("config parameter is GCS path: {}", configParam);
             content = StorageUtil.readString(configParam);
+        } else if(configParam.startsWith("ar://")) {
+            LOG.info("config parameter is GAR path: {}", configParam);
+            final byte[] bytes = ArtifactRegistryUtil.download(configParam);
+            content = new String(bytes, StandardCharsets.UTF_8);
+        } else if(ParameterManagerUtil.isParameterVersionResource(configParam)) {
+            LOG.info("config parameter is Parameter Manager resource: {}", configParam);
+            final ParameterManagerUtil.Version version = ParameterManagerUtil.getParameterVersion(configParam);
+            content = new String(version.payload, StandardCharsets.UTF_8);
         } else if(configParam.startsWith("data:")) {
             LOG.info("config parameter is base64 encoded");
             content = new String(Base64.getDecoder().decode(configParam), StandardCharsets.UTF_8);
@@ -364,7 +374,12 @@ public class MPipeline {
                     .collect(Collectors.toList());
 
             try {
-                final MCollectionTuple input = MCollectionTuple.mergeCollection(inputs);
+                final MCollectionTuple input;
+                if("action".equalsIgnoreCase(sinkConfig.getModule())) {
+                    input = MCollectionTuple.empty(pipeline);
+                } else {
+                    input = MCollectionTuple.mergeCollection(inputs);
+                }
                 final Sink sink = Sink.create(sinkConfig, pipeline.getOptions(), waits);
                 final MCollectionTuple output = input
                         .apply(sinkConfig.getName(), sink)
