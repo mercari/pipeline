@@ -51,11 +51,13 @@ public class ProtoToAvroConverter {
             final Descriptors.Descriptor messageType,
             final Set<String> messageNames) {
 
+        /*
         if(messageNames.contains(messageType.getFullName())) {
             return SchemaBuilder
                     .record(messageType.getFullName())
                     .fields();
         }
+         */
         messageNames.add(messageType.getFullName());
 
         final String namespace = messageType
