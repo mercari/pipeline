@@ -14,7 +14,8 @@ public interface Action extends Serializable {
 
     enum Service {
         dataflow,
-        bigquery;
+        bigquery,
+        vertexai_gemini
     }
 
 }

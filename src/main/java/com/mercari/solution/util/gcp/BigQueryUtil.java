@@ -24,12 +24,14 @@ import com.google.cloud.bigquery.storage.v1.DataFormat;
 import com.google.cloud.bigquery.storage.v1.ReadSession;
 import com.google.cloud.hadoop.util.ChainingHttpRequestInitializer;
 import com.google.common.collect.ImmutableList;
+import com.mercari.solution.module.MElement;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.converter.TableRecordToRowConverter;
 import org.apache.beam.sdk.extensions.gcp.util.RetryHttpRequestInitializer;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
+import org.apache.beam.sdk.io.gcp.bigquery.TableDestination;
 import org.apache.beam.sdk.schemas.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,6 +70,45 @@ public class BigQueryUtil {
         row,
         avro,
         avrofile
+    }
+
+    public static com.mercari.solution.module.Schema getTableDefinitionSchema() {
+        return com.mercari.solution.module.Schema.builder()
+                .withField("tableSpec", com.mercari.solution.module.Schema.FieldType.STRING)
+                .withField("tableDescription", com.mercari.solution.module.Schema.FieldType.STRING)
+                .withField("jsonClustering", com.mercari.solution.module.Schema.FieldType.STRING)
+                .withField("jsonTimePartitioning", com.mercari.solution.module.Schema.FieldType.STRING)
+                .withField("shortTableUrn", com.mercari.solution.module.Schema.FieldType.STRING)
+                .withField("tableReference", com.mercari.solution.module.Schema.FieldType.element(com.mercari.solution.module.Schema.builder()
+                        .withField("projectId", com.mercari.solution.module.Schema.FieldType.STRING)
+                        .withField("datasetId", com.mercari.solution.module.Schema.FieldType.STRING)
+                        .withField("tableId", com.mercari.solution.module.Schema.FieldType.STRING)
+                        .build()))
+                .withField("clustering", com.mercari.solution.module.Schema.FieldType.element(com.mercari.solution.module.Schema.builder()
+                        .withField("fields", com.mercari.solution.module.Schema.FieldType.array(com.mercari.solution.module.Schema.FieldType.STRING))
+                        .build()))
+                .withField("timePartitioning", com.mercari.solution.module.Schema.FieldType.element(com.mercari.solution.module.Schema.builder()
+                        .withField("type", com.mercari.solution.module.Schema.FieldType.STRING)
+                        .withField("field", com.mercari.solution.module.Schema.FieldType.STRING)
+                        .withField("expirationMs", com.mercari.solution.module.Schema.FieldType.INT64)
+                        .withField("requirePartitionFilter", com.mercari.solution.module.Schema.FieldType.BOOLEAN)
+                        .build()))
+                .build();
+    }
+
+    public static MElement convertToElement(final TableDestination tableDestination) {
+        return MElement.builder()
+                .withString("tableSpec", tableDestination.getTableSpec())
+                .withString("tableDescription", tableDestination.getTableDescription())
+                .withString("jsonClustering", tableDestination.getJsonClustering())
+                .withString("jsonTimePartitioning", tableDestination.getJsonTimePartitioning())
+                .withString("shortTableUrn", tableDestination.getShortTableUrn())
+                .withElement("tableReference", MElement.builder()
+                        .withString("projectId", tableDestination.getTableReference().getProjectId())
+                        .withString("datasetId", tableDestination.getTableReference().getDatasetId())
+                        .withString("tableId", tableDestination.getTableReference().getTableId())
+                        .build())
+                .build();
     }
 
     public static TableReference getTableReference(final String tableName, final String defaultProjectId) {
