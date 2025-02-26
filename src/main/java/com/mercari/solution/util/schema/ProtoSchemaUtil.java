@@ -78,7 +78,7 @@ public class ProtoSchemaUtil {
         }
         if(resource.startsWith("gs://")) {
             return StorageUtil.readBytes(resource);
-        } else if(resource.startsWith("ar://") || ArtifactRegistryUtil.isArtifactRegistryResource(resource)) {
+        } else if(ArtifactRegistryUtil.isArtifactRegistryResource(resource)) {
             return ArtifactRegistryUtil.download(resource);
         } else {
             throw new IllegalArgumentException("illegal fileDescriptorSet resource");
