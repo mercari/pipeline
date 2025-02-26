@@ -21,6 +21,9 @@ public class ArtifactRegistryUtil {
         if(text == null) {
             return false;
         }
+        if(text.startsWith("ar://")) {
+            return true;
+        }
         if(!text.startsWith("projects/")) {
             return false;
         }

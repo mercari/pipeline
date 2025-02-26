@@ -12,15 +12,14 @@ import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.pipeline.Union;
+import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.CalciteSchemaUtil;
 import com.mercari.solution.util.schema.ProtoSchemaUtil;
 import com.mercari.solution.util.schema.converter.*;
-import com.mercari.solution.util.sql.calcite.MemorySchema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.io.BinaryDecoder;
-import org.apache.avro.io.DatumReader;
 import org.apache.avro.io.DecoderFactory;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
@@ -227,51 +226,92 @@ public class PubSubSource extends Source {
     private static class Partition implements Serializable {
 
         private String filterString;
-        private Schema inputSchema;
+
+        private List<Schema.Field> fields;
         private Format format;
         private AdditionalFieldsParameters messageFields;
         private String sql;
 
-        private transient Filter.ConditionNode filter;
-
-        private transient DatumReader<GenericRecord> datumReader;
+        // for avro format
+        // https://beam.apache.org/documentation/programming-guide/#user-code-thread-compatibility
+        private final String avroSchemaJson;
+        private transient GenericDatumReader<GenericRecord> datumReader;
         private transient BinaryDecoder decoder = null;
 
+        // for protobuf format
+        private final String descriptorFile;
+        private final String messageName;
+        private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();
+        private static final Map<String, JsonFormat.Printer> printers = new HashMap<>();
+
+        // filter
+        private transient Filter.ConditionNode filter;
+        // sql
         private transient List<MElement> elements;
         private transient Planner planner;
         private transient PreparedStatement statement;
 
 
         Partition(final PartitionParameters partitionParameters) {
+
             this.filterString = partitionParameters.filter.toString();
-            this.inputSchema = Schema.parse(partitionParameters.schema);
-            this.format = partitionParameters.format;
+            this.fields = Schema.parse(partitionParameters.schema).getFields();
             this.messageFields = partitionParameters.additionalFields;
+
+            final Schema schema = Schema.parse(partitionParameters.schema);
+            switch (format) {
+                case protobuf -> {
+                    this.fields = new ArrayList<>();
+                    this.descriptorFile = schema.getProtobuf().getDescriptorFile();
+                    this.messageName = schema.getProtobuf().getMessageName();
+                    this.avroSchemaJson = null;
+                }
+                case avro -> {
+                    this.fields = new ArrayList<>();
+                    this.descriptorFile = null;
+                    this.messageName = null;
+                    this.avroSchemaJson = schema.getAvro().getJson();
+                }
+                case message -> {
+                    this.fields = new ArrayList<>();
+                    this.descriptorFile = null;
+                    this.messageName = null;
+                    this.avroSchemaJson = null;
+                }
+                default -> {
+                    this.fields = schema.getFields();
+                    this.descriptorFile = null;
+                    this.messageName = null;
+                    this.avroSchemaJson = null;
+                }
+            }
         }
 
         public void setup(
                 final Map<String, Descriptors.Descriptor> descriptors,
                 final Map<String, JsonFormat.Printer> printers) {
 
-            this.filter = Filter.parse(filterString);
             switch (format) {
                 case avro -> {
-                    this.inputSchema.setup(DataType.AVRO);
-                    this.datumReader = new GenericDatumReader<>(inputSchema.getAvroSchema());
+                    this.datumReader = new GenericDatumReader<>(AvroSchemaUtil.convertSchema(avroSchemaJson));
                 }
                 case protobuf -> {
+                    LOG.info("Start setup PubSub source Output DoFn thread id: {}", Thread.currentThread().getId());
+                    long start = java.time.Instant.now().toEpochMilli();
                     final Descriptors.Descriptor descriptor = getOrLoadDescriptor(
-                            descriptors,
-                            printers,
-                            inputSchema.getProtobuf().getMessageName(),
-                            inputSchema.getProtobuf().getDescriptorFile());
-                }
-                default -> {
-                    this.inputSchema.setup();
+                            descriptors, printers, messageName, descriptorFile);
+                    long end = java.time.Instant.now().toEpochMilli();
+                    LOG.info("Finished setup PubSub source Output DoFn {} ms, thread id: {}, with descriptor: {}",
+                            (end - start),
+                            Thread.currentThread().getId(),
+                            descriptor.getFullName());
                 }
             }
 
+            this.filter = Filter.parse(filterString);
+
             this.elements = new ArrayList<>();
+            /*
             if(sql != null) {
                 final MemorySchema memorySchema = MemorySchema.create("schema", List.of(
                         MemorySchema.createTable("INPUT", inputSchema, elements)
@@ -283,6 +323,7 @@ public class PubSubSource extends Source {
                     throw new RuntimeException(e);
                 }
             }
+             */
         }
 
         public boolean filter(final Map<String, ?> standardValues) {
@@ -435,19 +476,24 @@ public class PubSubSource extends Source {
         private final String jobName;
         private final String moduleName;
 
-        private final Schema schema;
         private final Format format;
         private final AdditionalFieldsParameters messageFields;
         private final boolean failFast;
         private final boolean outputFailure;
         private final TupleTag<MElement> failuresTag;
 
+        // for non format
+        private final List<Schema.Field> fields;
+
         // for avro format
         // https://beam.apache.org/documentation/programming-guide/#user-code-thread-compatibility
-        private transient DatumReader<GenericRecord> datumReader;
+        private final String avroSchemaJson;
+        private transient GenericDatumReader<GenericRecord> datumReader;
         private transient BinaryDecoder decoder = null;
 
         // for protobuf format
+        private final String descriptorFile;
+        private final String messageName;
         private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();
         private static final Map<String, JsonFormat.Printer> printers = new HashMap<>();
 
@@ -463,36 +509,56 @@ public class PubSubSource extends Source {
 
             this.jobName = jobName;
             this.moduleName = moduleName;
-            this.schema = schema;
             this.format = format;
             this.messageFields = messageFields;
             this.failFast = failFast;
             this.outputFailure = outputFailure;
             this.failuresTag = failuresTag;
+
+            switch (format) {
+                case protobuf -> {
+                    this.fields = new ArrayList<>();
+                    this.descriptorFile = schema.getProtobuf().getDescriptorFile();
+                    this.messageName = schema.getProtobuf().getMessageName();
+                    this.avroSchemaJson = null;
+                }
+                case avro -> {
+                    this.fields = new ArrayList<>();
+                    this.descriptorFile = null;
+                    this.messageName = null;
+                    this.avroSchemaJson = schema.getAvro().getJson();
+                }
+                case message -> {
+                    this.fields = new ArrayList<>();
+                    this.descriptorFile = null;
+                    this.messageName = null;
+                    this.avroSchemaJson = null;
+                }
+                default -> {
+                    this.fields = schema.getFields();
+                    this.descriptorFile = null;
+                    this.messageName = null;
+                    this.avroSchemaJson = null;
+                }
+            }
         }
 
         @Setup
         public void setup() {
-            if(this.schema != null) {
-                this.schema.setup();
-            }
-
             switch (format) {
                 case avro -> {
-                    if(this.schema == null) {
-                        throw new IllegalArgumentException("schema must not be null");
-                    }
-                    this.datumReader = new GenericDatumReader<>(schema.getAvro().getSchema());
+                    this.datumReader = new GenericDatumReader<>(AvroSchemaUtil.convertSchema(avroSchemaJson));
                 }
                 case protobuf -> {
-                    if(this.schema == null) {
-                        throw new IllegalArgumentException("schema must not be null");
-                    }
                     LOG.info("Start setup PubSub source Output DoFn thread id: {}", Thread.currentThread().getId());
                     long start = java.time.Instant.now().toEpochMilli();
-                    final Descriptors.Descriptor descriptor = getOrLoadDescriptor(descriptors, printers, schema.getProtobuf().getMessageName(), schema.getProtobuf().getDescriptorFile());
+                    final Descriptors.Descriptor descriptor = getOrLoadDescriptor(
+                            descriptors, printers, messageName, descriptorFile);
                     long end = java.time.Instant.now().toEpochMilli();
-                    LOG.info("Finished setup PubSub source Output DoFn {} ms, thread id: {}, with descriptor: {}", (end - start), Thread.currentThread().getId(), descriptor.getFullName());
+                    LOG.info("Finished setup PubSub source Output DoFn {} ms, thread id: {}, with descriptor: {}",
+                            (end - start),
+                            Thread.currentThread().getId(),
+                            descriptor.getFullName());
                 }
             }
         }
@@ -535,20 +601,19 @@ public class PubSubSource extends Source {
         private MElement parseAvro(final PubsubMessage message, Instant timestamp) throws IOException {
             final byte[] bytes = message.getPayload();
             decoder = DecoderFactory.get().binaryDecoder(bytes, decoder);
-            final GenericRecord record = new GenericData.Record(schema.getAvro().getSchema());
+            final GenericRecord record = new GenericData.Record(datumReader.getSchema());
             final GenericRecord output = datumReader.read(record, decoder);
             return MElement.of(output, timestamp);
         }
 
         private MElement parseProtobuf(final PubsubMessage message, Instant timestamp) {
             final byte[] bytes = message.getPayload();
-            final String messageName = schema.getProtobuf().getMessageName();
             final Descriptors.Descriptor descriptor = Optional
-                    .ofNullable(descriptors.get(schema.getProtobuf().getMessageName()))
-                    .orElseGet(() -> getOrLoadDescriptor(descriptors, printers, messageName, schema.getProtobuf().getDescriptorFile()));
+                    .ofNullable(descriptors.get(messageName))
+                    .orElseGet(() -> getOrLoadDescriptor(descriptors, printers, messageName, descriptorFile));
             final JsonFormat.Printer printer = printers.get(messageName);
 
-            final Map<String, Object> values = ProtoToElementConverter.convert(schema, descriptor, bytes, printer);
+            final Map<String, Object> values = ProtoToElementConverter.convert(fields, descriptor, bytes, printer);
 
             if(messageFields != null) {
                 if(messageFields.topic != null) {
@@ -674,8 +739,8 @@ public class PubSubSource extends Source {
             final byte[] content = message.getPayload();
             final String json = new String(content, StandardCharsets.UTF_8);
             final Map<String, Object> map;
-            if(partition.inputSchema != null) {
-                map = JsonToElementConverter.convert(partition.inputSchema, json);
+            if(partition.fields != null && !partition.fields.isEmpty()) {
+                map = JsonToElementConverter.convert(Schema.of(partition.fields), json);
             } else {
                 map = JsonToMapConverter.convert(new Gson().fromJson(json, JsonElement.class));
             }
@@ -690,7 +755,7 @@ public class PubSubSource extends Source {
 
             final byte[] bytes = message.getPayload();
             partition.decoder = DecoderFactory.get().binaryDecoder(bytes, partition.decoder);
-            final GenericRecord record = new GenericData.Record(partition.inputSchema.getAvroSchema());
+            final GenericRecord record = new GenericData.Record(partition.datumReader.getSchema());
             final GenericRecord output = partition.datumReader.read(record, partition.decoder);
             return MElement.of(output, timestamp);
         }
@@ -701,13 +766,12 @@ public class PubSubSource extends Source {
                 final Instant timestamp) {
 
             final byte[] bytes = message.getPayload();
-            final String messageName = partition.inputSchema.getProtobuf().getMessageName();
             final Descriptors.Descriptor descriptor = Optional
-                    .ofNullable(descriptors.get(messageName))
-                    .orElseGet(() -> getOrLoadDescriptor(descriptors, printers, messageName, partition.inputSchema.getProtobuf().getDescriptorFile()));
-            final JsonFormat.Printer printer = printers.get(messageName);
+                    .ofNullable(descriptors.get(partition.messageName))
+                    .orElseGet(() -> getOrLoadDescriptor(descriptors, printers, partition.messageName, partition.descriptorFile));
+            final JsonFormat.Printer printer = printers.get(partition.messageName);
 
-            final Map<String, Object> values = ProtoToElementConverter.convert(partition.inputSchema, descriptor, bytes, printer);
+            final Map<String, Object> values = ProtoToElementConverter.convert(partition.fields, descriptor, bytes, printer);
 
             if(partition.messageFields != null) {
                 if(partition.messageFields.topic != null) {

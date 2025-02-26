@@ -6,6 +6,10 @@ import com.google.protobuf.Duration;
 import com.google.protobuf.util.JsonFormat;
 import com.google.protobuf.util.Timestamps;
 import com.google.type.*;
+import com.google.type.Date;
+import com.google.type.TimeZone;
+import com.mercari.solution.util.gcp.ArtifactRegistryUtil;
+import com.mercari.solution.util.gcp.StorageUtil;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,10 +22,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.*;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class ProtoSchemaUtil {
@@ -68,6 +69,29 @@ public class ProtoSchemaUtil {
 
         ProtoType(final String className) {
             this.className = className;
+        }
+    }
+
+    public static byte[] getFileDescriptorSetBytes(final String resource) {
+        if(resource == null) {
+            throw new IllegalArgumentException("fileDescriptorSet resource must not be null");
+        }
+        if(resource.startsWith("gs://")) {
+            return StorageUtil.readBytes(resource);
+        } else if(resource.startsWith("ar://") || ArtifactRegistryUtil.isArtifactRegistryResource(resource)) {
+            return ArtifactRegistryUtil.download(resource);
+        } else {
+            throw new IllegalArgumentException("illegal fileDescriptorSet resource");
+        }
+    }
+
+    public static DescriptorProtos.FileDescriptorSet getFileDescriptorSet(final String resource) {
+        final byte[] bytes = getFileDescriptorSetBytes(resource);
+        try {
+            return DescriptorProtos.FileDescriptorSet
+                    .parseFrom(bytes);
+        } catch (InvalidProtocolBufferException e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -561,6 +585,41 @@ public class ProtoSchemaUtil {
         }
 
         return descriptors;
+    }
+
+    public static DescriptorProtos.FileDescriptorSet deserializeFileDescriptorSet(final byte[] bytes) {
+        try {
+            return DescriptorProtos.FileDescriptorSet.parseFrom(bytes);
+        } catch (InvalidProtocolBufferException e) {
+            throw new RuntimeException("Failed to deserializeFileDescriptorSet", e);
+        }
+    }
+
+    public static byte[] serializeFileDescriptorSet(final Descriptors.Descriptor descriptor) {
+        final Descriptors.FileDescriptor fileDescriptor = descriptor.getFile();
+        final Set<Descriptors.FileDescriptor> visited = new HashSet<>();
+        final List<DescriptorProtos.FileDescriptorProto> fileDescriptorProtos = new ArrayList<>();
+        collectDependencies(fileDescriptor, visited, fileDescriptorProtos);
+        final DescriptorProtos.FileDescriptorSet.Builder fileDescriptorSetBuilder = DescriptorProtos.FileDescriptorSet.newBuilder();
+        for (final DescriptorProtos.FileDescriptorProto fileDescriptorProto : fileDescriptorProtos) {
+            fileDescriptorSetBuilder.addFile(fileDescriptorProto);
+        }
+        return fileDescriptorSetBuilder.build().toByteArray();
+    }
+
+    private static void collectDependencies(
+            final Descriptors.FileDescriptor fileDescriptor,
+            final Set<Descriptors.FileDescriptor> visited,
+            final List<DescriptorProtos.FileDescriptorProto> fileDescriptorProtos) {
+
+        if (visited.contains(fileDescriptor)) {
+            return;
+        }
+        visited.add(fileDescriptor);
+        fileDescriptorProtos.add(fileDescriptor.toProto());
+        for (final Descriptors.FileDescriptor dependency : fileDescriptor.getDependencies()) {
+            collectDependencies(dependency, visited, fileDescriptorProtos);
+        }
     }
 
     public static Map<String, Descriptors.Descriptor> executeProtoc(

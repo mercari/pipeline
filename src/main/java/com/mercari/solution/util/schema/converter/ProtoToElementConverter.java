@@ -33,8 +33,16 @@ public class ProtoToElementConverter {
         return fields;
     }
 
+    public static List<Schema.Field> convertFields(final List<Descriptors.FieldDescriptor> fieldDescriptors) {
+        final List<Schema.Field> fields = new ArrayList<>();
+        for(final Descriptors.FieldDescriptor field : fieldDescriptors) {
+            fields.add(Schema.Field.of(field.getName(), convertSchema(field)));
+        }
+        return fields;
+    }
+
     public static Map<String, Object> convert(
-            final Schema schema,
+            final List<Schema.Field> fields,
             final Descriptors.Descriptor messageDescriptor,
             final byte[] bytes,
             final JsonFormat.Printer printer) {
@@ -44,14 +52,14 @@ public class ProtoToElementConverter {
                     .newBuilder(messageDescriptor)
                     .mergeFrom(bytes)
                     .build();
-            return convert(schema, messageDescriptor, message, printer);
+            return convert(fields, messageDescriptor, message, printer);
         } catch (InvalidProtocolBufferException e) {
             throw new RuntimeException(e);
         }
     }
 
     public static Map<String, Object> convert(
-            final Schema schema,
+            final List<Schema.Field> fields,
             final Descriptors.Descriptor messageDescriptor,
             final DynamicMessage message,
             final JsonFormat.Printer printer) {
@@ -61,7 +69,7 @@ public class ProtoToElementConverter {
         }
 
         final Map<String, Object> values = new HashMap<>();
-        for(final Schema.Field field : schema.getFields()) {
+        for(final Schema.Field field : fields) {
             final Descriptors.FieldDescriptor fieldDescriptor = messageDescriptor.findFieldByName(field.getName());
             if(fieldDescriptor == null) {
                 continue;
@@ -286,7 +294,7 @@ public class ProtoToElementConverter {
                     }
                     case CUSTOM -> {
                         final Schema schema = convertSchema(field.getMessageType());
-                        yield convert(schema, field.getMessageType(), (DynamicMessage) value, printer);
+                        yield convert(schema.getFields(), field.getMessageType(), (DynamicMessage) value, printer);
                     }
                     case EMPTY, NULL_VALUE -> null;
                 };
