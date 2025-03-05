@@ -123,157 +123,175 @@ public class JsonToRowConverter {
             }
             return RowSchemaUtil.getDefaultValue(fieldType, fieldOptions);
         }
-        switch (fieldType.getTypeName()) {
-            case STRING:
-                return jsonElement.isJsonPrimitive() ? jsonElement.getAsString() : jsonElement.toString();
-            case BYTES:
-                return jsonElement.isJsonPrimitive() ? Base64.getUrlDecoder().decode(jsonElement.getAsString()) : null;
-            case INT16:
-                return jsonElement.isJsonPrimitive() ? jsonElement.getAsShort() : null;
-            case INT32:
-                return jsonElement.isJsonPrimitive() ? Integer.valueOf(jsonElement.getAsString()) : null;
-            case INT64:
-                return jsonElement.isJsonPrimitive() ? jsonElement.getAsLong() : null;
-            case FLOAT:
-                return jsonElement.isJsonPrimitive() ? Float.valueOf(jsonElement.getAsString()) : null;
-            case DOUBLE:
-                return jsonElement.isJsonPrimitive() ? jsonElement.getAsDouble() : null;
-            case BOOLEAN:
-                return jsonElement.isJsonPrimitive() ? jsonElement.getAsBoolean() : null;
-            case DATETIME: {
+        return switch (fieldType.getTypeName()) {
+            case STRING -> jsonElement.isJsonPrimitive() ? jsonElement.getAsString() : jsonElement.toString();
+            case BYTES -> jsonElement.isJsonPrimitive() ? Base64.getUrlDecoder().decode(jsonElement.getAsString()) : null;
+            case BYTE -> jsonElement.isJsonPrimitive() ? jsonElement.getAsByte() : null;
+            case INT16 -> jsonElement.isJsonPrimitive() ? jsonElement.getAsShort() : null;
+            case INT32 -> jsonElement.isJsonPrimitive() ? Integer.valueOf(jsonElement.getAsString()) : null;
+            case INT64 -> jsonElement.isJsonPrimitive() ? jsonElement.getAsLong() : null;
+            case FLOAT -> jsonElement.isJsonPrimitive() ? Float.valueOf(jsonElement.getAsString()) : null;
+            case DOUBLE -> jsonElement.isJsonPrimitive() ? jsonElement.getAsDouble() : null;
+            case BOOLEAN -> jsonElement.isJsonPrimitive() ? jsonElement.getAsBoolean() : null;
+            case DATETIME -> {
                 if(jsonElement.isJsonPrimitive()) {
                     final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
                     if(primitive.isString()) {
-                        return DateTimeUtil.toJodaInstant(jsonElement.getAsString());
+                        yield DateTimeUtil.toJodaInstant(jsonElement.getAsString());
                     } else if(primitive.isNumber()) {
                         if(primitive.getAsString().contains(".")) {
-                            return DateTimeUtil.toJodaInstant(primitive.getAsDouble());
+                            yield DateTimeUtil.toJodaInstant(primitive.getAsDouble());
                         } else {
-                            return DateTimeUtil.toJodaInstant(primitive.getAsLong());
+                            yield DateTimeUtil.toJodaInstant(primitive.getAsLong());
                         }
                     } else {
-                        final String message = "json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to timestamp";
-                        LOG.warn(message);
-                        throw new IllegalStateException(message);
+                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to timestamp");
+                    }
+                } else if(jsonElement.isJsonObject()) {
+                    final JsonObject jsonObject = jsonElement.getAsJsonObject();
+                    if(jsonObject.has("seconds") && jsonObject.has("nanos")) {
+                        try {
+                            final Long seconds = jsonObject.get("seconds").getAsLong();
+                            final Integer nanos = jsonObject.get("nanos").getAsInt();
+                            yield DateTimeUtil.toJodaInstant(seconds, nanos);
+                        } catch (Throwable e) {
+                            throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to timestamp", e);
+                        }
+                    } else {
+                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to timestamp");
                     }
                 } else {
-                    final String message = "json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to timestamp";
-                    LOG.warn(message);
-                    throw new IllegalStateException(message);
+                    throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to timestamp");
                 }
             }
-            case DECIMAL: {
+            case DECIMAL -> {
                 if(!jsonElement.isJsonPrimitive()) {
-                    final String message = "json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to decimal";
-                    LOG.warn(message);
-                    throw new IllegalStateException(message);
+                    throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to decimal");
                 }
                 final JsonPrimitive jsonPrimitive = jsonElement.getAsJsonPrimitive();
                 if(jsonPrimitive.isString()) {
-                    return new BigDecimal(jsonPrimitive.getAsString());
+                    yield new BigDecimal(jsonPrimitive.getAsString());
                 } else if(jsonPrimitive.isNumber()) {
-                    return new BigDecimal(jsonPrimitive.getAsString());
+                    yield new BigDecimal(jsonPrimitive.getAsString());
                 } else {
                     throw new IllegalStateException("Can not convert Decimal type from jsonElement: " + jsonElement.toString());
                 }
             }
-            case LOGICAL_TYPE: {
-                if(!jsonElement.isJsonPrimitive()) {
-                    final String message = "json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to logicalType";
-                    LOG.warn(message);
-                    throw new IllegalStateException(message);
-                }
-                final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
+            case LOGICAL_TYPE -> {
                 if(RowSchemaUtil.isLogicalTypeDate(fieldType)) {
-                    if(primitive.isString()) {
-                        return DateTimeUtil.toLocalDate(primitive.getAsString());
-                    } else if(primitive.isNumber()) {
-                        return LocalDate.ofEpochDay(primitive.getAsLong());
+                    if(jsonElement.isJsonPrimitive()) {
+                        final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
+                        if(primitive.isString()) {
+                            yield DateTimeUtil.toLocalDate(primitive.getAsString());
+                        } else if(primitive.isNumber()) {
+                            yield LocalDate.ofEpochDay(primitive.getAsLong());
+                        } else {
+                            throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to date");
+                        }
+                    } else if(jsonElement.isJsonObject()) {
+                        final JsonObject object = jsonElement.getAsJsonObject();
+                        if(object.has("year") && object.has("month") && object.has("day")) {
+                            int year = object.get("year").getAsInt();
+                            int month = object.get("month").getAsInt();
+                            int day = object.get("day").getAsInt();
+                            yield LocalDate.of(year, month, day);
+                        } else {
+                            throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to date");
+                        }
                     } else {
                         throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to date");
                     }
                 } else if(RowSchemaUtil.isLogicalTypeTime(fieldType)) {
+                    if(!jsonElement.isJsonPrimitive()) {
+                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to logicalType time");
+                    }
+                    final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
                     if(primitive.isString()) {
-                        return DateTimeUtil.toLocalTime(primitive.getAsString());
+                        yield DateTimeUtil.toLocalTime(primitive.getAsString());
                     } else if(primitive.isNumber()) {
-                        return LocalTime.ofSecondOfDay(primitive.getAsLong());
+                        yield LocalTime.ofSecondOfDay(primitive.getAsLong());
                     } else {
-                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to time");
+                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to logicalType time");
                     }
                 } else if(RowSchemaUtil.isLogicalTypeTimestamp(fieldType)) {
+                    if(!jsonElement.isJsonPrimitive()) {
+                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to logicalType timestamp");
+                    }
+                    final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
                     if(primitive.isString()) {
-                        return DateTimeUtil.toJodaInstant(jsonElement.getAsString());
+                        yield DateTimeUtil.toJodaInstant(jsonElement.getAsString());
                     } else if(primitive.isNumber()) {
-                        return DateTimeUtil.toJodaInstant(primitive.getAsLong());
+                        yield DateTimeUtil.toJodaInstant(primitive.getAsLong());
                     } else {
-                        final String message = "json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to timestamp";
-                        LOG.warn(message);
-                        throw new IllegalStateException(message);
+                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to logicalType timestamp");
                     }
                 } else if(RowSchemaUtil.isLogicalTypeEnum(fieldType)) {
+                    if(!jsonElement.isJsonPrimitive()) {
+                        throw new IllegalStateException("json fieldType: " + fieldType.getTypeName() + ", value: " + jsonElement + " could not be convert to logicalType enum");
+                    }
+                    final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
                     final String enumString = primitive.getAsString();
-                    return RowSchemaUtil.toEnumerationTypeValue(fieldType, enumString);
+                    yield RowSchemaUtil.toEnumerationTypeValue(fieldType, enumString);
                 } else {
                     throw new IllegalArgumentException(
                             "Unsupported Beam logical type: " + fieldType.getLogicalType().getIdentifier());
                 }
             }
-            case ROW:
-                if(!jsonElement.isJsonObject() && !jsonElement.isJsonArray()) {
+            case ROW -> {
+                if (!jsonElement.isJsonObject() && !jsonElement.isJsonArray()) {
                     throw new IllegalStateException(String.format("FieldType: %s's type is record, but jsonElement is %s",
                             fieldType.getTypeName(), jsonElement.toString()));
                 }
-                return convert(fieldType.getRowSchema(), jsonElement);
-            case MAP: {
+                yield convert(fieldType.getRowSchema(), jsonElement);
+            }
+            case MAP -> {
                 if(!jsonElement.isJsonObject()) {
                     throw new IllegalStateException(String.format("FieldType: %s's type is map, but jsonElement is %s",
                             fieldType.getTypeName(), jsonElement.toString()));
                 }
-                return jsonElement.getAsJsonObject().entrySet().stream()
+                yield jsonElement.getAsJsonObject().entrySet().stream()
                         .collect(Collectors.toMap(
                                 e -> convertValue(fieldType.getMapKeyType(), fieldOptions, new JsonPrimitive(e.getKey())),
                                 e -> convertValue(fieldType.getMapValueType(), fieldOptions, e.getValue())));
             }
-            case ITERABLE:
-            case ARRAY:
-                if(!jsonElement.isJsonArray()) {
+            case ITERABLE, ARRAY -> {
+                if (!jsonElement.isJsonArray()) {
                     throw new IllegalStateException(String.format("FieldType: %s's type is array, but jsonElement is %s",
                             fieldType.getTypeName(), jsonElement.toString()));
                 }
                 // for maprecord
-                if(fieldType.getCollectionElementType().getTypeName().equals(Schema.TypeName.ROW)) {
+                if (fieldType.getCollectionElementType().getTypeName().equals(Schema.TypeName.ROW)) {
                     final Schema.FieldType elementFieldType = fieldType.getCollectionElementType();
                     final Schema.Options options = elementFieldType.getRowSchema().getOptions();
-                    if(options.hasOption("extension") && options.getValue("extension").equals("maprecord")) {
+                    if (options.hasOption("extension") && options.getValue("extension").equals("maprecord")) {
                         final Schema schema = Schema.builder()
                                 .addField("key", elementFieldType.getMapKeyType())
                                 .addField("value", elementFieldType.getMapValueType())
                                 .build();
-                        return jsonElement.getAsJsonObject().entrySet().stream()
+                        yield jsonElement.getAsJsonObject().entrySet().stream()
                                 .map(e -> Row.withSchema(schema)
-                                            .withFieldValue("key", convertValue(elementFieldType.getMapKeyType(), fieldOptions, new JsonPrimitive(e.getKey())))
-                                            .withFieldValue("value", convertValue(elementFieldType.getMapValueType(), fieldOptions, e.getValue()))
-                                            .build())
+                                        .withFieldValue("key", convertValue(elementFieldType.getMapKeyType(), fieldOptions, new JsonPrimitive(e.getKey())))
+                                        .withFieldValue("value", convertValue(elementFieldType.getMapValueType(), fieldOptions, e.getValue()))
+                                        .build())
                                 .collect(Collectors.toList());
                     }
                 }
 
                 final List<Object> childValues = new ArrayList<>();
-                for(final JsonElement childJsonElement : jsonElement.getAsJsonArray()) {
-                    if(!Schema.TypeName.ROW.equals(fieldType.getCollectionElementType().getTypeName())
+                for (final JsonElement childJsonElement : jsonElement.getAsJsonArray()) {
+                    if (!Schema.TypeName.ROW.equals(fieldType.getCollectionElementType().getTypeName())
                             && childJsonElement.isJsonArray()) {
                         throw new IllegalArgumentException("Not supported Array in Array field");
                     }
                     final Object arrayValue = convertValue(fieldType.getCollectionElementType(), fieldOptions, childJsonElement);
-                    if(arrayValue != null) {
+                    if (arrayValue != null) {
                         childValues.add(arrayValue);
                     }
                 }
-                return childValues;
-            case BYTE:
-            default:
-                return null;
-        }
+                yield childValues;
+            }
+            default -> null;
+        };
     }
 
 }

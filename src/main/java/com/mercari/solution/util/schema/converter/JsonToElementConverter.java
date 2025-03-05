@@ -5,6 +5,7 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -63,6 +64,7 @@ public class JsonToElementConverter {
         return switch (fieldType.getType()) {
             case string, json -> jsonElement.isJsonPrimitive() ? jsonElement.getAsString() : jsonElement.toString();
             case bytes -> jsonElement.isJsonPrimitive() ? Base64.getUrlDecoder().decode(jsonElement.getAsString()) : null;
+            case int8 -> jsonElement.isJsonPrimitive() ? jsonElement.getAsByte() : null;
             case int16 -> jsonElement.isJsonPrimitive() ? jsonElement.getAsShort() : null;
             case int32 -> jsonElement.isJsonPrimitive() ? Integer.valueOf(jsonElement.getAsString()) : null;
             case int64 -> jsonElement.isJsonPrimitive() ? jsonElement.getAsLong() : null;
@@ -79,6 +81,21 @@ public class JsonToElementConverter {
                             yield DateTimeUtil.toEpochMicroSecond(primitive.getAsDouble());
                         } else {
                             yield primitive.getAsLong();
+                        }
+                    } else {
+                        final String message = "json fieldType: " + fieldType.getType() + ", value: " + jsonElement + " could not be convert to timestamp";
+                        throw new IllegalStateException(message);
+                    }
+                } else if(jsonElement.isJsonObject()) {
+                    final JsonObject jsonObject = jsonElement.getAsJsonObject();
+                    if(jsonObject.has("seconds") && jsonObject.has("nanos")) {
+                        try {
+                            final Long seconds = jsonObject.get("seconds").getAsLong();
+                            final Integer nanos = jsonObject.get("nanos").getAsInt();
+                            yield DateTimeUtil.toEpochMicroSecond(seconds, nanos);
+                        } catch (Throwable e) {
+                            final String message = "json fieldType: " + fieldType.getType() + ", value: " + jsonElement + " could not be convert to timestamp";
+                            throw new IllegalStateException(message, e);
                         }
                     } else {
                         final String message = "json fieldType: " + fieldType.getType() + ", value: " + jsonElement + " could not be convert to timestamp";
@@ -104,11 +121,25 @@ public class JsonToElementConverter {
                 }
             }
             case date -> {
-                final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
-                if(primitive.isString()) {
-                    yield DateTimeUtil.toEpochDay(primitive.getAsString());
-                } else if(primitive.isNumber()) {
-                    yield primitive.getAsInt();
+                if(jsonElement.isJsonPrimitive()) {
+                    final JsonPrimitive primitive = jsonElement.getAsJsonPrimitive();
+                    if(primitive.isString()) {
+                        yield DateTimeUtil.toEpochDay(primitive.getAsString());
+                    } else if(primitive.isNumber()) {
+                        yield primitive.getAsInt();
+                    } else {
+                        throw new IllegalStateException("json fieldType: " + fieldType.getType() + ", value: " + jsonElement + " could not be convert to date");
+                    }
+                } else if(jsonElement.isJsonObject()) {
+                    final JsonObject object = jsonElement.getAsJsonObject();
+                    if(object.has("year") && object.has("month") && object.has("day")) {
+                        int year = object.get("year").getAsInt();
+                        int month = object.get("month").getAsInt();
+                        int day = object.get("day").getAsInt();
+                        yield Long.valueOf(LocalDate.of(year, month, day).toEpochDay()).intValue();
+                    } else {
+                        throw new IllegalStateException("json fieldType: " + fieldType.getType() + ", value: " + jsonElement + " could not be convert to date");
+                    }
                 } else {
                     throw new IllegalStateException("json fieldType: " + fieldType.getType() + ", value: " + jsonElement + " could not be convert to date");
                 }

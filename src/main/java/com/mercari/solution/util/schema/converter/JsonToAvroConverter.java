@@ -126,64 +126,73 @@ public class JsonToAvroConverter {
             return AvroSchemaUtil.convertDefaultValue(AvroSchemaUtil.unnestUnion(schema), AvroSchemaUtil.unnestUnion(schema).getProp("default"));
         }
         try {
-            switch (schema.getType()) {
-                case ENUM: {
+            return switch (schema.getType()) {
+                case ENUM -> {
                     final String str = jsonElement.isJsonPrimitive() ? jsonElement.getAsString() : jsonElement.toString();
-                    return new GenericData.EnumSymbol(schema, str);
+                    yield new GenericData.EnumSymbol(schema, str);
                 }
-                case STRING:
-                    return jsonElement.isJsonPrimitive() ? jsonElement.getAsString() : jsonElement.toString();
-                case FIXED:
-                case BYTES:
-                    if(AvroSchemaUtil.isLogicalTypeDecimal(schema)) {
+                case STRING -> jsonElement.isJsonPrimitive() ? jsonElement.getAsString() : jsonElement.toString();
+                case FIXED, BYTES -> {
+                    if (AvroSchemaUtil.isLogicalTypeDecimal(schema)) {
                         final LogicalTypes.Decimal decimalType = AvroSchemaUtil.getLogicalTypeDecimal(schema);
-                        if(jsonElement.isJsonPrimitive()) {
+                        if (jsonElement.isJsonPrimitive()) {
                             final JsonPrimitive jsonPrimitive = jsonElement.getAsJsonPrimitive();
-                            if(jsonPrimitive.isString()) {
+                            if (jsonPrimitive.isString()) {
                                 final BigDecimal decimal = new BigDecimal(jsonPrimitive.getAsString(), new MathContext(decimalType.getPrecision()));
-                                return ByteBuffer.wrap(decimal.unscaledValue().toByteArray());
-                            } else if(jsonPrimitive.isNumber()) {
+                                yield ByteBuffer.wrap(decimal.unscaledValue().toByteArray());
+                            } else if (jsonPrimitive.isNumber()) {
                                 final BigDecimal decimal = jsonPrimitive.getAsBigDecimal();
-                                return ByteBuffer.wrap(decimal.unscaledValue().toByteArray());
+                                yield ByteBuffer.wrap(decimal.unscaledValue().toByteArray());
                             } else {
                                 throw new IllegalStateException();
                             }
                         }
                     }
-                    return ByteBuffer.wrap(jsonElement.isJsonPrimitive() ? jsonElement.getAsString().getBytes() : jsonElement.toString().getBytes());
-                case INT: {
+                    yield ByteBuffer.wrap(jsonElement.isJsonPrimitive() ? jsonElement.getAsString().getBytes() : jsonElement.toString().getBytes());
+                }
+                case INT -> {
                     if (LogicalTypes.date().equals(schema.getLogicalType())) {
                         if (jsonElement.isJsonPrimitive()) {
                             final JsonPrimitive jsonPrimitive = jsonElement.getAsJsonPrimitive();
                             if (jsonPrimitive.isString()) {
                                 final LocalDate localDate = DateTimeUtil.toLocalDate(jsonPrimitive.getAsString());
-                                return localDate != null ? Long.valueOf(localDate.toEpochDay()).intValue() : null;
+                                yield localDate != null ? Long.valueOf(localDate.toEpochDay()).intValue() : null;
                             } else if (jsonPrimitive.isNumber()) {
-                                return jsonPrimitive.getAsInt();
+                                yield jsonPrimitive.getAsInt();
                             } else {
-                                return null;
+                                yield null;
+                            }
+                        } else if(jsonElement.isJsonObject()) {
+                            final JsonObject jsonObject = jsonElement.getAsJsonObject();
+                            if(jsonObject.has("year") && jsonObject.has("month") && jsonObject.has("day")) {
+                                int year = jsonObject.get("year").getAsInt();
+                                int month = jsonObject.get("month").getAsInt();
+                                int day = jsonObject.get("day").getAsInt();
+                                yield Long.valueOf(LocalDate.of(year, month, day).toEpochDay()).intValue();
+                            } else {
+                                throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to date");
                             }
                         } else {
-                            return null;
+                            throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to date");
                         }
                     } else if (LogicalTypes.timeMillis().equals(schema.getLogicalType())) {
                         if (jsonElement.isJsonPrimitive()) {
                             final JsonPrimitive jsonPrimitive = jsonElement.getAsJsonPrimitive();
                             if (jsonPrimitive.isString()) {
                                 final LocalTime localTime = DateTimeUtil.toLocalTime(jsonPrimitive.getAsString());
-                                return DateTimeUtil.toMilliOfDay(localTime);
+                                yield DateTimeUtil.toMilliOfDay(localTime);
                             } else if (jsonPrimitive.isNumber()) {
-                                return jsonPrimitive.getAsInt();
+                                yield jsonPrimitive.getAsInt();
                             } else {
-                                return null;
+                                throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to time");
                             }
                         } else {
-                            return null;
+                            throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to time");
                         }
                     }
-                    return jsonElement.isJsonPrimitive() ? Integer.valueOf(jsonElement.getAsString()) : null;
+                    yield jsonElement.isJsonPrimitive() ? Integer.valueOf(jsonElement.getAsString()) : null;
                 }
-                case LONG: {
+                case LONG -> {
                     if (LogicalTypes.timestampMillis().equals(schema.getLogicalType())
                             || LogicalTypes.timestampMicros().equals(schema.getLogicalType())) {
                         if (jsonElement.isJsonPrimitive()) {
@@ -197,49 +206,63 @@ public class JsonToAvroConverter {
                                     instant = DateTimeUtil.toJodaInstant(jsonPrimitive.getAsString());
                                 }
                                 if (LogicalTypes.timestampMillis().equals(schema.getLogicalType())) {
-                                    return instant.getMillis();
+                                    yield instant.getMillis();
                                 } else {
-                                    return instant.getMillis() * 1000;
+                                    yield instant.getMillis() * 1000;
                                 }
                             } else if (jsonPrimitive.isNumber()) {
-                                return DateTimeUtil.assumeEpochMilliSecond(jsonPrimitive.getAsLong());
+                                yield DateTimeUtil.assumeEpochMilliSecond(jsonPrimitive.getAsLong());
                             } else {
-                                return null;
+                                throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to timestamp millis");
+                            }
+                        } else if(jsonElement.isJsonObject()) {
+                            final JsonObject jsonObject = jsonElement.getAsJsonObject();
+                            if(jsonObject.has("seconds") && jsonObject.has("nanos")) {
+                                try {
+                                    final Long seconds = jsonObject.get("seconds").getAsLong();
+                                    final Integer nanos = jsonObject.get("nanos").getAsInt();
+                                    if (LogicalTypes.timestampMillis().equals(schema.getLogicalType())) {
+                                        yield DateTimeUtil.toEpochMicroSecond(seconds, nanos) / 1000L;
+                                    } else {
+                                        yield DateTimeUtil.toEpochMicroSecond(seconds, nanos);
+                                    }
+                                } catch (Throwable e) {
+                                    throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to timestamp millis", e);
+                                }
+                            } else {
+                                throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to timestamp millis");
                             }
                         } else {
-                            return null;
+                            throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to timestamp millis");
                         }
                     } else if (LogicalTypes.timeMicros().equals(schema.getLogicalType())) {
                         if (jsonElement.isJsonPrimitive()) {
                             final JsonPrimitive jsonPrimitive = jsonElement.getAsJsonPrimitive();
                             if (jsonPrimitive.isString()) {
                                 final LocalTime localTime = DateTimeUtil.toLocalTime(jsonPrimitive.getAsString());
-                                return DateTimeUtil.toMicroOfDay(localTime);
+                                yield DateTimeUtil.toMicroOfDay(localTime);
                             } else if (jsonPrimitive.isNumber()) {
-                                return DateTimeUtil.assumeEpochMicroSecond(jsonPrimitive.getAsLong());
+                                yield DateTimeUtil.assumeEpochMicroSecond(jsonPrimitive.getAsLong());
                             } else {
-                                return null;
+                                throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to timestamp micros");
                             }
                         } else {
-                            return null;
+                            throw new IllegalStateException("json fieldType: " + schema.getType() + ", value: " + jsonElement + " could not be convert to timestamp micros");
                         }
                     }
-                    return jsonElement.isJsonPrimitive() ? jsonElement.getAsLong() : null;
+                    yield jsonElement.isJsonPrimitive() ? jsonElement.getAsLong() : null;
                 }
-                case FLOAT:
-                    return jsonElement.isJsonPrimitive() ? jsonElement.getAsFloat() : null;
-                case DOUBLE:
-                    return jsonElement.isJsonPrimitive() ? jsonElement.getAsDouble() : null;
-                case BOOLEAN:
-                    return jsonElement.isJsonPrimitive() ? jsonElement.getAsBoolean() : null;
-                case RECORD: {
+                case FLOAT -> jsonElement.isJsonPrimitive() ? jsonElement.getAsFloat() : null;
+                case DOUBLE -> jsonElement.isJsonPrimitive() ? jsonElement.getAsDouble() : null;
+                case BOOLEAN -> jsonElement.isJsonPrimitive() ? jsonElement.getAsBoolean() : null;
+                case RECORD -> {
                     if (!jsonElement.isJsonObject()) {
                         throw new IllegalStateException(String.format("FieldType: %s's type is record, but jsonElement is %s",
                                 schema.getType(), jsonElement));
                     }
-                    return convert(schema, jsonElement.getAsJsonObject());
+                    yield convert(schema, jsonElement.getAsJsonObject());
                 }
-                case ARRAY: {
+                case ARRAY -> {
                     if (!jsonElement.isJsonArray()) {
                         throw new IllegalStateException(String.format("FieldType: %s's type is array, but jsonElement is %s",
                                 schema.getType(), jsonElement));
@@ -254,18 +277,15 @@ public class JsonToAvroConverter {
                             childValues.add(arrayValue);
                         }
                     }
-                    return childValues;
+                    yield childValues;
                 }
-                case UNION: {
+                case UNION -> {
                     final Schema childSchema = AvroSchemaUtil.unnestUnion(schema);
-                    return convertValue(childSchema, jsonElement);
+                    yield convertValue(childSchema, jsonElement);
                 }
-                case MAP:
-                case NULL:
-                default:
-                    return null;
-            }
-        } catch (Exception e) {
+                default -> null;
+            };
+        } catch (final Exception e) {
             return null;
         }
     }

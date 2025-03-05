@@ -267,6 +267,14 @@ public class DateTimeUtil {
         return org.joda.time.Instant.ofEpochMilli(epochMicroSecond / 1000L);
     }
 
+    public static org.joda.time.Instant toJodaInstant(final Long seconds, final Integer nanos) {
+        if(seconds == null || nanos == null) {
+            return null;
+        }
+        final long epochMicros = toEpochMicroSecond(seconds, nanos);
+        return org.joda.time.Instant.ofEpochMilli(epochMicros / 1000L);
+    }
+
     public static com.google.protobuf.Timestamp toProtoTimestamp(final Instant instant) {
         if(instant == null) {
             return null;
