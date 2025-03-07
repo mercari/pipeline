@@ -58,6 +58,7 @@ public class PubSubSource extends Source {
 
         private Format format;
         private AdditionalFieldsParameters additionalFields;
+        private Boolean outputOriginal;
 
         private List<PartitionParameters> partitions;
 
@@ -76,6 +77,10 @@ public class PubSubSource extends Source {
             } else if(subscription != null) {
                 if(!PubSubUtil.isSubscriptionResource(subscription)) {
                     errorMessages.add("parameters.subscription is illegal format: " + subscription);
+                }
+            } else {
+                if(!PubSubUtil.isTopicResource(topic)) {
+                    errorMessages.add("parameters.topic is illegal format: " + topic);
                 }
             }
             if(format != null) {
@@ -129,6 +134,9 @@ public class PubSubSource extends Source {
             if(additionalFields != null) {
                 additionalFields.setDefaults();
             }
+            if(outputOriginal == null) {
+                outputOriginal = false;
+            }
             if(partitions == null) {
                 partitions = new ArrayList<>();
             } else {
@@ -149,6 +157,10 @@ public class PubSubSource extends Source {
             final List<String> errorMessages = new ArrayList<>();
             if(time == null && snapshot == null) {
                 errorMessages.add("parameters.seek requires time or snapshot");
+            } else if(snapshot != null) {
+                if(!PubSubUtil.isSnapshotResource(snapshot)) {
+                    errorMessages.add("parameters.seek.snapshot is illegal: " + snapshot);
+                }
             }
             return errorMessages;
         }
@@ -365,6 +377,16 @@ public class PubSubSource extends Source {
         parameters.validate(begin, getSchema());
         parameters.setDefaults();
 
+        /*
+        if(parameters.topic != null && parameters.subscription != null) {
+            final Pubsub pubsub = PubSubUtil.pubsub();
+            if(PubSubUtil.existsSubscription(pubsub, parameters.subscription)) {
+                PubSubUtil.deleteSubscription(pubsub, parameters.subscription);
+            }
+            PubSubUtil.createSubscription(pubsub, parameters.topic, parameters.subscription);
+        }
+         */
+
         if(parameters.seek != null) {
             try {
                 final SeekResponse seekResponse = PubSubUtil.seek(parameters.subscription, parameters.seek.time, parameters.seek.snapshot);
@@ -383,25 +405,32 @@ public class PubSubSource extends Source {
 
         final TupleTag<MElement> outputTag = new TupleTag<>() {};
         final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+        final TupleTag<MElement> originalTag;
         if(parameters.partitions.isEmpty()) {
             final Schema outputSchema = createOutputSchema(parameters, getSchema());
-            if(!getOutputFailure() || getFailFast()) {
-                final PCollection<MElement> output = pubsubMessages
-                        .apply("Format", ParDo
-                                .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
-                                        getFailFast(), getOutputFailure(), failuresTag)));
-                return MCollectionTuple
-                        .of(output, outputSchema);
+            final List<TupleTag<?>> outputTags = new ArrayList<>();
+            outputTags.add(failuresTag);
+            if(parameters.outputOriginal) {
+                originalTag = new TupleTag<>() {};
+                outputTags.add(originalTag);
             } else {
-                final PCollectionTuple outputs = pubsubMessages
-                        .apply("Format", ParDo
-                                .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
-                                        getFailFast(), getOutputFailure(), failuresTag))
-                                .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+                originalTag = null;
+            }
 
-                return MCollectionTuple
-                        .of(outputs.get(outputTag), outputSchema)
-                        .failure(outputs.get(failuresTag));
+            final PCollectionTuple outputs = pubsubMessages
+                    .apply("Format", ParDo
+                            .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
+                                    getFailFast(), getOutputFailure(), failuresTag, originalTag))
+                            .withOutputTags(outputTag, TupleTagList.of(outputTags)));
+            final MCollectionTuple outputTuple = MCollectionTuple
+                    .of(outputs.get(outputTag), outputSchema)
+                    .failure(outputs.get(failuresTag));
+
+            if(originalTag == null) {
+                return outputTuple;
+            } else {
+                final Schema originalSchema = createMessageSchema().withType(DataType.MESSAGE);
+                return outputTuple.and("original", outputs.get(originalTag), originalSchema);
             }
         } else {
             final List<Schema> inputSchemas = new ArrayList<>();
@@ -481,6 +510,7 @@ public class PubSubSource extends Source {
         private final boolean failFast;
         private final boolean outputFailure;
         private final TupleTag<MElement> failuresTag;
+        private final TupleTag<MElement> originalTag;
 
         // for non format
         private final List<Schema.Field> fields;
@@ -505,7 +535,8 @@ public class PubSubSource extends Source {
                 final AdditionalFieldsParameters messageFields,
                 final boolean failFast,
                 final boolean outputFailure,
-                final TupleTag<MElement> failuresTag) {
+                final TupleTag<MElement> failuresTag,
+                final TupleTag<MElement> originalTag) {
 
             this.jobName = jobName;
             this.moduleName = moduleName;
@@ -514,16 +545,17 @@ public class PubSubSource extends Source {
             this.failFast = failFast;
             this.outputFailure = outputFailure;
             this.failuresTag = failuresTag;
+            this.originalTag = originalTag;
 
             switch (format) {
                 case protobuf -> {
-                    this.fields = new ArrayList<>();
+                    this.fields = schema.getFields();
                     this.descriptorFile = schema.getProtobuf().getDescriptorFile();
                     this.messageName = schema.getProtobuf().getMessageName();
                     this.avroSchemaJson = null;
                 }
                 case avro -> {
-                    this.fields = new ArrayList<>();
+                    this.fields = schema.getFields();
                     this.descriptorFile = null;
                     this.messageName = null;
                     this.avroSchemaJson = schema.getAvro().getJson();
@@ -550,7 +582,6 @@ public class PubSubSource extends Source {
                     this.datumReader = new GenericDatumReader<>(AvroSchemaUtil.convertSchema(avroSchemaJson));
                 }
                 case protobuf -> {
-                    LOG.info("Start setup PubSub source Output DoFn thread id: {}", Thread.currentThread().getId());
                     long start = java.time.Instant.now().toEpochMilli();
                     final Descriptors.Descriptor descriptor = getOrLoadDescriptor(
                             descriptors, printers, messageName, descriptorFile);
@@ -570,6 +601,10 @@ public class PubSubSource extends Source {
                 return;
             }
             try {
+                if(originalTag != null) {
+                    final MElement element = MElement.of(message, c.timestamp());
+                    c.output(originalTag, element);
+                }
                 final MElement element = switch (format) {
                     case message -> MElement.of(message, c.timestamp());
                     case json -> parseJson(message, c.timestamp());
@@ -579,12 +614,12 @@ public class PubSubSource extends Source {
                 c.output(element);
             } catch (final Throwable e) {
                 ERROR_COUNTER.inc();
-                final MFailure failureElement = createFailureElement(c, message, e);
                 String errorMessage = MFailure.convertThrowableMessage(e);
                 LOG.error("pubsub source parse error: {}, {} for message: {}", e, errorMessage, message);
                 if(failFast) {
                     throw new IllegalStateException(errorMessage, e);
                 }
+                final MFailure failureElement = createFailureElement(c, message, e);
                 if(outputFailure) {
                     c.output(failuresTag, failureElement.toElement(c.timestamp()));
                 }

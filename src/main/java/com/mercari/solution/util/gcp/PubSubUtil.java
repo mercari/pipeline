@@ -29,7 +29,8 @@ public class PubSubUtil {
 
     private static final Logger LOG = LoggerFactory.getLogger(PubSubUtil.class);
 
-    private static final Pattern PATTERN_SUBSCRIPTION = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/subscriptions\\/[a-zA-Z0-9_-]+$");
+    private static final Pattern PATTERN_TOPIC = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/topics\\/[a-zA-Z0-9_-]+$");
+    private static final Pattern PATTERN_SUBSCRIPTION = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/subscriptions\\/[.a-zA-Z0-9_-]+$");
     private static final Pattern PATTERN_SNAPSHOT = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/snapshots\\/[a-zA-Z0-9_-]+$");
 
     public static Pubsub pubsub() {
@@ -114,8 +115,16 @@ public class PubSubUtil {
         }
     }
 
+    public static boolean isTopicResource(final String name) {
+        return PATTERN_TOPIC.matcher(name).find();
+    }
+
     public static boolean isSubscriptionResource(final String name) {
         return PATTERN_SUBSCRIPTION.matcher(name).find();
+    }
+
+    public static boolean isSnapshotResource(final String name) {
+        return PATTERN_SNAPSHOT.matcher(name).find();
     }
 
     public static List<String> publish(
@@ -176,13 +185,19 @@ public class PubSubUtil {
             final String time,
             final String snapshot) throws IOException {
 
-        final SeekRequest seekRequest;
-        if(time != null) {
-            seekRequest = new SeekRequest().setTime(time);
-        } else if(snapshot != null) {
-            seekRequest = new SeekRequest().setSnapshot(snapshot);
-        } else {
+        if(time == null && snapshot == null) {
             throw new IllegalArgumentException("seek operation requires time or snapshot. both are null");
+        }
+
+        final SeekRequest seekRequest = new SeekRequest();
+        if(time != null) {
+            seekRequest.setTime(time);
+        }
+        if(snapshot != null) {
+            if(!isSnapshotResource(snapshot)) {
+                throw new IllegalArgumentException("seek.snapshot resource name is illegal: " + snapshot);
+            }
+            seekRequest.setSnapshot(snapshot);
         }
 
         return pubsub
@@ -190,6 +205,105 @@ public class PubSubUtil {
                 .subscriptions()
                 .seek(subscription, seekRequest)
                 .execute();
+    }
+
+    public static boolean existsSubscription(final String subscription) {
+        return existsSubscription(pubsub(), subscription);
+    }
+
+    public static boolean existsSubscription(
+            final Pubsub pubsub,
+            final String subscription) {
+
+        if(!isSubscriptionResource(subscription)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + subscription);
+        }
+        try {
+            final Subscription s = pubsub.projects().subscriptions().get(subscription).execute();
+            return true;
+        } catch (GoogleJsonResponseException e) {
+            if(e.getStatusCode() == 404) {
+                return false;
+            }
+            throw new IllegalStateException(e);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    public static Subscription createSubscription(
+            final String topic,
+            final String name) {
+
+        return createSubscription(pubsub(), topic, name);
+    }
+
+    public static Subscription createSubscription(
+            final Pubsub pubsub,
+            final String topic,
+            final String name) {
+
+        if(!isTopicResource(topic)) {
+            throw new IllegalArgumentException("topic resource name is illegal: " + topic);
+        }
+        if(!isSubscriptionResource(name)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + name);
+        }
+
+        final Subscription content = new Subscription();
+        content.setTopic(topic);
+        try {
+            return pubsub
+                    .projects()
+                    .subscriptions()
+                    .create(name, content)
+                    .execute();
+        } catch (final IOException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    public static Snapshot createSnapshot(
+            final Pubsub pubsub,
+            final String subscription,
+            final String name) {
+
+        if(!isSubscriptionResource(subscription)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + subscription);
+        }
+        if(!isSnapshotResource(name)) {
+            throw new IllegalArgumentException("snapshot resource name is illegal: " + name);
+        }
+
+        final CreateSnapshotRequest request = new CreateSnapshotRequest();
+        request.setSubscription(subscription);
+        try {
+            return pubsub
+                    .projects()
+                    .snapshots()
+                    .create(name, request)
+                    .execute();
+        } catch (final IOException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    public static void deleteSubscription(final String subscription) {
+        deleteSubscription(pubsub(), subscription);
+    }
+
+    public static void deleteSubscription(
+            final Pubsub pubsub,
+            final String subscription) {
+
+        if(!isSubscriptionResource(subscription)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + subscription);
+        }
+        try {
+            pubsub.projects().subscriptions().delete(subscription).execute();
+        } catch (final IOException e) {
+            throw new IllegalArgumentException(e);
+        }
     }
 
     public static String getTextMessage(final String subscription) throws IOException {

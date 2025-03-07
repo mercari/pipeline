@@ -5,6 +5,7 @@ import com.google.protobuf.Descriptors;
 import com.google.protobuf.DynamicMessage;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
+import com.mercari.solution.util.gcp.PubSubUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
@@ -13,6 +14,7 @@ import com.mercari.solution.util.schema.converter.ElementToAvroConverter;
 import com.mercari.solution.util.schema.converter.ElementToJsonConverter;
 import com.mercari.solution.util.schema.converter.ElementToProtoConverter;
 import freemarker.template.Template;
+import org.apache.avro.generic.GenericDatumWriter;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.io.BinaryEncoder;
 import org.apache.avro.io.DatumWriter;
@@ -60,6 +62,8 @@ public class PubSubSink extends Sink {
         private Integer maxBatchSize;
         private Integer maxBatchBytesSize;
 
+        private Boolean useDestinationSchema;
+
         private void validate(final Schema schema) {
             // check required parameters filled
             final List<String> errorMessages = new ArrayList<>();
@@ -69,12 +73,14 @@ public class PubSubSink extends Sink {
             if(this.format == null) {
                 errorMessages.add("parameters.format must not be null");
             } else {
-                if(this.format.equals(Format.protobuf)) {
-                    if(schema.getProtobuf() == null) {
-                        errorMessages.add("parameters.protobufDescriptor must not be null when set format `protobuf`");
-                    }
-                    if(schema.getProtobuf().getDescriptorFile() == null) {
-                        errorMessages.add("parameters.protobufMessageName must not be null when set format `protobuf`");
+                switch (format) {
+                    case protobuf -> {
+                        if(schema.getProtobuf() == null) {
+                            errorMessages.add("parameters.protobufDescriptor must not be null when set format `protobuf`");
+                        }
+                        if(schema.getProtobuf().getDescriptorFile() == null) {
+                            errorMessages.add("parameters.protobufMessageName must not be null when set format `protobuf`");
+                        }
                     }
                 }
             }
@@ -97,6 +103,9 @@ public class PubSubSink extends Sink {
                 LOG.warn("pubsub sink module maxBatchSize must be 1 when using orderingKeyFields. ref: https://issues.apache.org/jira/browse/BEAM-13148");
                 this.maxBatchSize = 1;
             }
+            if(useDestinationSchema == null) {
+                useDestinationSchema = false;
+            }
         }
     }
 
@@ -110,12 +119,19 @@ public class PubSubSink extends Sink {
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
 
-        final Schema inputSchema = Union.createUnionSchema(inputs);
-        final Schema outputSchema = Optional
-                .ofNullable(getSchema())
-                .orElse(inputSchema);
-
         final PubSubSinkParameters parameters = getParameters(PubSubSinkParameters.class);
+
+        final Schema inputSchema = Union.createUnionSchema(inputs);
+        final Schema outputSchema;
+        if(getSchema() != null) {
+            outputSchema = getSchema();
+        } else if(Optional.ofNullable(parameters.useDestinationSchema).orElse(false)) {
+            final org.apache.avro.Schema topicSchema = PubSubUtil.getSchemaFromTopic(parameters.topic);
+            outputSchema = Schema.of(topicSchema);
+        } else {
+            outputSchema = inputSchema;
+        }
+
         parameters.validate(outputSchema);
         parameters.setDefaults();
 
@@ -138,8 +154,8 @@ public class PubSubSink extends Sink {
                                 .withOutputTags(outputTag, TupleTagList.of(failureTag)));
                 final PubsubIO.Write<PubsubMessage> write = createWrite(parameters);
                 final PCollection<MElement> failure = messages.get(failureTag);
+                messages.get(outputTag).apply("Publish_" + inputName, write);
                 failures.add(failure);
-                final PDone done = messages.get(outputTag).apply("Publish_" + inputName, write);
             }
 
             return MCollectionTuple
@@ -175,6 +191,7 @@ public class PubSubSink extends Sink {
         // for protobuf
         private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();// Collections.synchronizedMap(new HashMap<>());
         private static final Map<String, org.apache.avro.Schema> avroSchemas = new HashMap<>();
+        private static final Map<String, DatumWriter<GenericRecord>> writers = new HashMap<>();
 
         private final String jobName;
         private final String name;
@@ -242,10 +259,15 @@ public class PubSubSink extends Sink {
                     if(this.outputSchema.getAvro() == null) {
                         throw new IllegalArgumentException("schema.avro must not be null");
                     }
+                    LOG.warn("outputSchema: " + this.outputSchema.getAvroSchema().toString());
+                    this.writer = new GenericDatumWriter<>(this.outputSchema.getAvroSchema());
+                    /*
                     long start = java.time.Instant.now().toEpochMilli();
-                    final org.apache.avro.Schema avroSchema = getOrLoadAvroSchema(avroSchemas, outputSchema.getAvro());
+                    final org.apache.avro.Schema avroSchema = getOrLoadAvroSchema(avroSchemas, writers, outputSchema.getAvro());
                     long end = java.time.Instant.now().toEpochMilli();
                     LOG.info("Finished setup PubSub sink Output DoFn took {} ms with avro schema: {}", (end - start), avroSchema);
+
+                     */
                 }
                 case protobuf -> {
                     if(this.outputSchema.getProtobuf() == null) {
@@ -290,7 +312,7 @@ public class PubSubSink extends Sink {
                     case avro -> {
                         final org.apache.avro.Schema avroSchema = Optional
                                 .ofNullable(avroSchemas.get(outputSchema.getAvro().getFile()))
-                                .orElseGet(() -> getOrLoadAvroSchema(avroSchemas, outputSchema.getAvro()));
+                                .orElseGet(() -> getOrLoadAvroSchema(avroSchemas, writers, outputSchema.getAvro()));
                         final GenericRecord record = ElementToAvroConverter.convert(avroSchema, element);
                         try(final ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
                             encoder = EncoderFactory.get().binaryEncoder(byteArrayOutputStream, encoder);
@@ -467,6 +489,7 @@ public class PubSubSink extends Sink {
 
     private synchronized static org.apache.avro.Schema getOrLoadAvroSchema(
             final Map<String, org.apache.avro.Schema> avroSchemas,
+            final Map<String, DatumWriter<GenericRecord>> writers,
             final Schema.AvroSchema avroSchema) {
 
         if(avroSchema.getSchema() != null) {
@@ -479,17 +502,20 @@ public class PubSubSink extends Sink {
                 return schema;
             } else {
                 avroSchemas.remove(avroSchema.getFile());
+                writers.remove(avroSchema.getFile());
             }
         }
         if(avroSchema.getJson() != null) {
             final org.apache.avro.Schema schema = AvroSchemaUtil.convertSchema(avroSchema.getJson());
             avroSchemas.put(avroSchema.getFile(), schema);
+            writers.put(avroSchema.getFile(), new GenericDatumWriter<>(schema));
             return schema;
         }
 
         final String schemaJson = StorageUtil.readString(avroSchema.getFile());
         final org.apache.avro.Schema schema = AvroSchemaUtil.convertSchema(schemaJson);
         avroSchemas.put(avroSchema.getFile(), schema);
+        writers.put(avroSchema.getFile(), new GenericDatumWriter<>(schema));
         return schema;
     }
 
