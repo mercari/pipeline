@@ -192,9 +192,18 @@ public class BigtableSource extends Source {
                         output = rows
                                 .apply("ConvertRow", ParDo.of(new RowToRowElementDoFn(
                                         parameters, getTimestampAttribute())));
-                        outputSchema = BigtableSchemaUtil.createSchema(parameters.columns);
                         if(parameters.withRowKey) {
-                            outputSchema = Schema.builder(outputSchema).withField(parameters.rowKeyField, Schema.FieldType.STRING).build();
+                            if(parameters.columns.isEmpty()) {
+                                outputSchema = Schema.builder()
+                                        .withField(parameters.rowKeyField, Schema.FieldType.STRING)
+                                        .build();
+                            } else {
+                                outputSchema = Schema.builder(BigtableSchemaUtil.createSchema(parameters.columns))
+                                        .withField(parameters.rowKeyField, Schema.FieldType.STRING)
+                                        .build();
+                            }
+                        } else {
+                            outputSchema = BigtableSchemaUtil.createSchema(parameters.columns);
                         }
                         if(parameters.withFirstTimestamp) {
                             outputSchema = Schema.builder(outputSchema).withField(parameters.firstTimestampField, Schema.FieldType.TIMESTAMP).build();

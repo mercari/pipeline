@@ -93,6 +93,7 @@ public class BigtableSchemaUtil {
             setDefaults(defaultFormat, null, null, cellType);
         }
 
+        // for write cell
         public void setDefaults(
                 final Format defaultFormat,
                 final MutationOp defaultOp,
@@ -101,6 +102,7 @@ public class BigtableSchemaUtil {
             setDefaults(defaultFormat, defaultOp, defaultTimestampType, null);
         }
 
+        // for read cell
         private void setDefaults(
                 final Format defaultFormat,
                 final MutationOp defaultOp,
@@ -135,6 +137,9 @@ public class BigtableSchemaUtil {
             final List<String> valueArgs = new ArrayList<>();
             for(final ColumnQualifierProperties qualifier : qualifiers) {
                 valueArgs.add(qualifier.field);
+                if(qualifier.timestampField != null) {
+                    valueArgs.add(qualifier.timestampField);
+                }
             }
             return valueArgs;
         }
@@ -169,7 +174,7 @@ public class BigtableSchemaUtil {
             final String cf = TemplateUtil.executeStrictTemplate(templateFamily, standardValues);
             final List<Mutation> mutations = new ArrayList<>();
             if(MutationOp.DELETE_FROM_FAMILY.equals(mutationOp)) {
-                Mutation mutation = Mutation.newBuilder()
+                final Mutation mutation = Mutation.newBuilder()
                         .setDeleteFromFamily(Mutation.DeleteFromFamily.newBuilder()
                                 .setFamilyName(cf)
                                 .build())
@@ -178,6 +183,9 @@ public class BigtableSchemaUtil {
             } else {
                 for(final ColumnQualifierProperties qualifier : qualifiers) {
                     final Mutation mutation = qualifier.toMutation(cf, primitiveValues, standardValues, timestamp);
+                    if(mutation == null) {
+                        continue;
+                    }
                     mutations.add(mutation);
                 }
             }
@@ -356,10 +364,15 @@ public class BigtableSchemaUtil {
                 final Map<String, Object> standardValues,
                 final Instant timestamp) {
 
+            final Object primitiveValue = primitiveValues.get(field);
+            if(primitiveValue == null) {
+                return null;
+            }
+
             final String cq = TemplateUtil.executeStrictTemplate(templateQualifier, standardValues);
             return switch (mutationOp) {
                 case SET_CELL -> {
-                    final ByteString fieldValue = toByteString(format, primitiveValues.get(field));
+                    final ByteString fieldValue = toByteString(format, primitiveValue);
                     final long timestampMicros = switch (timestampType) {
                         case server -> -1L;
                         case event -> timestamp.getMillis() * 1000L;
@@ -388,7 +401,7 @@ public class BigtableSchemaUtil {
                     final Mutation.AddToCell cell = Mutation.AddToCell.newBuilder()
                             .setFamilyName(cf)
                             .setColumnQualifier(Value.newBuilder().setBytesValue(ByteString.copyFrom(cq, StandardCharsets.UTF_8)))
-                            .setInput(toValue(primitiveValues.get(field)))
+                            .setInput(toValue(primitiveValue))
                             .setTimestamp(Value.newBuilder().setTimestampValue(DateTimeUtil.toProtoTimestamp(timestampMicros)))
                             .build();
                     yield Mutation.newBuilder().setAddToCell(cell).build();
@@ -397,7 +410,7 @@ public class BigtableSchemaUtil {
                     final Mutation.MergeToCell cell = Mutation.MergeToCell.newBuilder()
                             .setFamilyName(cf)
                             .setColumnQualifier(Value.newBuilder().setBytesValue(ByteString.copyFrom(cq, StandardCharsets.UTF_8)))
-                            .setInput(toValue(primitiveValues.get(field)))
+                            .setInput(toValue(primitiveValue))
                             .setTimestamp(Value.newBuilder().setTimestampValue(DateTimeUtil.toProtoTimestamp(1L)))
                             .build();
                     yield Mutation.newBuilder().setMergeToCell(cell).build();
