@@ -122,6 +122,47 @@ public class Filter implements Serializable {
             return variables;
         }
 
+        public List<String> validate(final List<Schema.Field> fields) {
+            final List<String> errorMessages = new ArrayList<>();
+            final Set<String> fieldNames = fields.stream()
+                    .flatMap(f -> getFieldNames(null, f).stream())
+                    .collect(Collectors.toSet());
+            final Set<String> requiredVariables = getRequiredVariables();
+            if(fieldNames.containsAll(requiredVariables)) {
+                return errorMessages;
+            }
+            for(final String requiredVariable : requiredVariables) {
+                if(!fieldNames.contains(requiredVariable)) {
+                    errorMessages.add("filter variable: " + requiredVariable + " not found in input schema: " + fieldNames);
+                }
+            }
+
+            return errorMessages;
+        }
+
+        public static Set<String> getFieldNames(String parent, final Schema.Field field) {
+            final Set<String> fieldNames = new HashSet<>();
+            final String fieldName;
+            if(parent == null) {
+                fieldName = field.getName();
+            } else {
+                fieldName = parent + "." + field.getName();
+            }
+            switch (field.getFieldType().getType()) {
+                case element -> {
+                    fieldNames.add(fieldName);
+                    for(final Schema.Field childField : field.getFieldType().getElementSchema().getFields()) {
+                        final Set<String> childFieldNames = getFieldNames(fieldName, childField);
+                        fieldNames.addAll(childFieldNames);
+                    }
+                }
+                default -> {
+                    fieldNames.add(fieldName);
+                }
+            }
+            return fieldNames;
+        }
+
         @Override
         public String toString() {
             return String.format("{ Type: %s, Conditions: [ %s ], Children: [ %s ] }",
@@ -334,6 +375,10 @@ public class Filter implements Serializable {
     }
 
     public static boolean filter(final ConditionNode condition, final Map<String, ?> standardValues) {
+        if(condition == null) {
+            return true;
+        }
+
         final List<Boolean> bits = new ArrayList<>();
 
         if(condition.getLeaves() != null && !condition.getLeaves().isEmpty()) {

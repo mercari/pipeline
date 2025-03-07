@@ -780,4 +780,35 @@ public class FilterTest {
 
     }
 
+    @Test
+    public void testValidate() {
+        final String schemaString = """
+                {
+                  "fields": [
+                    { "name": "field1", "type": "string" },
+                    { "name": "field2", "type": "struct", "fields": [
+                      { "name": "field2A", "type": "struct", "fields": [
+                        { "name": "field2A1", "type": "string" },
+                        { "name": "field2A2", "type": "string" }
+                      ] }
+                    ] },
+                    { "name": "field3", "type": "int64" },
+                    { "name": "field4", "type": "timestamp" }
+                  ]
+                }
+                """;
+
+        final String filterString = """
+                    [
+                      { "key": "field1", "op": "=", "value": "a" },
+                      { "key": "field2.field2A.field2A2", "op": "=", "value": "okok" }
+                    ]
+                    """;
+
+        final Schema schema = Schema.parse(schemaString);
+        final Filter.ConditionNode node = Filter.parse(filterString);
+        var r = node.validate(schema.getFields());
+        Assert.assertTrue(r.isEmpty());
+    }
+
 }

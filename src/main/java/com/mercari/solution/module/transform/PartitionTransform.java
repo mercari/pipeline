@@ -39,10 +39,16 @@ public class PartitionTransform extends Transform {
             private JsonElement filter;
             private JsonArray select;
 
-            private List<String> validate(int index) {
+            private List<String> validate(int index, Schema schema) {
                 final List<String> errorMessages = new ArrayList<>();
                 if(this.name == null) {
                     errorMessages.add("parameters.partitions[" + index + "].output must not be null");
+                }
+                if(filter != null && !filter.isJsonNull() && !filter.isJsonPrimitive()) {
+                    final Filter.ConditionNode node = Filter.parse(filter);
+                    for(final String m : node.validate(schema.getFields())) {
+                        errorMessages.add("parameters.partitions[" + index + "].filter is illegal: " + m);
+                    }
                 }
                 return errorMessages;
             }
@@ -53,13 +59,13 @@ public class PartitionTransform extends Transform {
 
         }
 
-        private void validate() {
+        private void validate(final Schema schema) {
             final List<String> errorMessages = new ArrayList<>();
             if(this.partitions == null || this.partitions.isEmpty()) {
                 errorMessages.add("parameters.partitions must not be null");
             } else {
                 for(int index=0; index<this.partitions.size(); index++) {
-                    errorMessages.addAll(partitions.get(index).validate(index));
+                    errorMessages.addAll(partitions.get(index).validate(index, schema));
                 }
             }
 
@@ -117,14 +123,14 @@ public class PartitionTransform extends Transform {
     public MCollectionTuple expand(MCollectionTuple inputs) {
 
         final PartitionTransformParameters parameters = getParameters(PartitionTransformParameters.class);
-        parameters.validate();
+        final Schema inputSchema = Union.createUnionSchema(inputs);
+        parameters.validate(inputSchema);
         parameters.setDefaults();
 
         final PCollection<MElement> input = inputs
                 .apply("Union", Union.flatten()
                         .withWaits(getWaits())
                         .withStrategy(getStrategy()));
-        final Schema inputSchema = Union.createUnionSchema(inputs);
 
         final List<TupleTag<?>> outputTags = new ArrayList<>();
         final List<PartitionSetting> settings = new ArrayList<>();
@@ -148,38 +154,32 @@ public class PartitionTransform extends Transform {
             outputSchemas.add(outputSchema);
         }
 
+        final Schema outputSchema = Union.createUnionSchema(outputSchemas);
+
         final TupleTag<MElement> defaultOutputTag = new TupleTag<>() {};
         final TupleTag<MElement> failureTag = new TupleTag<>() {};
+        final TupleTag<MElement> excludedTag = new TupleTag<>() {};
 
         outputTags.add(failureTag);
+        outputTags.add(excludedTag);
 
-        MCollectionTuple tuple;
-        final PCollectionTuple outputs;
-        if(!getOutputFailure() && parameters.union) {
-            final PCollection<MElement> output = input
-                    .apply("Partition", ParDo
-                            .of(new PartitionDoFn(getJobName(), getName(), parameters, settings, inputSchema, failureTag, getFailFast())));
-            if(parameters.union) {
-                outputs = null;
-            } else {
-                outputs = PCollectionTuple.of(defaultOutputTag, output);
-            }
-            tuple = MCollectionTuple
-                    .of(output, outputSchemas.getFirst());
-        } else {
-            outputs = input
-                    .apply("Partition", ParDo
-                            .of(new PartitionDoFn(getJobName(), getName(), parameters, settings, inputSchema, failureTag, getFailFast()))
-                            .withOutputTags(defaultOutputTag, TupleTagList.of(outputTags)));
-            final PCollection<MElement> defaultOutput = outputs.get(defaultOutputTag);
-            tuple = MCollectionTuple
-                    .of(defaultOutput, inputSchema)
-                    .failure(outputs.get(failureTag));
-        }
+        final PCollectionTuple outputs = input
+                .apply("Partition", ParDo
+                        .of(new PartitionDoFn(getJobName(), getName(), parameters, settings, inputSchema, failureTag, excludedTag, getFailFast()))
+                        .withOutputTags(defaultOutputTag, TupleTagList.of(outputTags)));
+
+        final PCollection<MElement> defaultOutput = outputs.get(defaultOutputTag);
+        final PCollection<MElement> excludedOutput = outputs.get(excludedTag);
+        MCollectionTuple tuple = MCollectionTuple
+                .of(defaultOutput, outputSchema)
+                .and("excluded", excludedOutput, inputSchema)
+                .failure(outputs.get(failureTag));;
 
         if (!parameters.union) {
             for (final PartitionSetting setting : settings) {
-                final PCollection<MElement> output = outputs.get(setting.tag).setCoder(ElementCoder.of(setting.schema));
+                final PCollection<MElement> output = outputs
+                        .get(setting.tag)
+                        .setCoder(ElementCoder.of(setting.schema));
                 tuple = tuple.and(setting.name, output, setting.schema);
             }
         }
@@ -195,6 +195,7 @@ public class PartitionTransform extends Transform {
         private final List<PartitionSetting> settings;
         private final Schema inputSchema;
         private final TupleTag<MElement> failureTag;
+        private final TupleTag<MElement> excludedTag;
         private final boolean failFast;
 
         private final Counter errorCounter;
@@ -206,6 +207,7 @@ public class PartitionTransform extends Transform {
                 final List<PartitionSetting> settings,
                 final Schema inputSchema,
                 final TupleTag<MElement> failureTag,
+                final TupleTag<MElement> excludedTag,
                 final boolean failFast) {
 
             this.jobName = jobName;
@@ -215,6 +217,7 @@ public class PartitionTransform extends Transform {
             this.settings = settings;
             this.inputSchema = inputSchema;
             this.failureTag = failureTag;
+            this.excludedTag = excludedTag;
             this.failFast = failFast;
 
             this.errorCounter = Metrics.counter(name, "partition_error");
@@ -234,8 +237,9 @@ public class PartitionTransform extends Transform {
             if(element == null) {
                 return;
             }
-            boolean outputed = false;
+
             try {
+                boolean outputed = false;
                 for (final PartitionSetting setting : settings) {
                     if (setting.conditionNode == null) {
                         continue;
@@ -261,17 +265,14 @@ public class PartitionTransform extends Transform {
                 }
                 if(!outputed) {
                     final MElement output = MElement.of(inputSchema, element.asPrimitiveMap(), c.timestamp());
-                    if(!union) {
-                        c.output(output);
-                    }
+                    c.output(excludedTag, output);
                 }
             } catch (final Throwable e) {
                 errorCounter.inc();
-                final MFailure failure = MFailure.of(jobName, name, element.toString(), e, c.timestamp());
                 if(failFast) {
                     throw new RuntimeException("partition module " + name + " failed to execute partition for element: " + element, e);
                 }
-
+                final MFailure failure = MFailure.of(jobName, name, element.toString(), e, c.timestamp());
                 c.output(failureTag, failure.toElement(c.timestamp()));
                 LOG.error("Failed to execute partition for element: {}, cause: {}", element, failure.getError());
             }
