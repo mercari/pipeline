@@ -27,6 +27,9 @@ public class FilterTransform extends Transform {
         private String flattenField;
         private DataType outputType;
 
+        // deprecated
+        private JsonElement filters;
+
         public boolean useFilter() {
             return filter != null && (filter.isJsonObject() || filter.isJsonArray());
         }
@@ -51,6 +54,11 @@ public class FilterTransform extends Transform {
         private void setDefaults() {
             if(outputType == null) {
                 outputType = DataType.ELEMENT;
+            }
+            if(filter == null || filter.isJsonNull()) {
+                if(filters != null && !filters.isJsonNull()) {
+                    this.filter = this.filters;
+                }
             }
         }
     }
@@ -88,10 +96,9 @@ public class FilterTransform extends Transform {
             failure = filteredTuple.has(filteringTransform.failuresTag) ? filteredTuple.get(filteringTransform.failuresTag) : null;
         }
 
-        final MCollectionTuple tuple = MCollectionTuple
+        return MCollectionTuple
                 .of(output, outputSchema)
                 .failure(failure);
-        return tuple.failure(failure);
     }
 
 }

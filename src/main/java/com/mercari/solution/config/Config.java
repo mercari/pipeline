@@ -42,9 +42,11 @@ public class Config implements Serializable {
     private List<SourceConfig> sources;
     private List<TransformConfig> transforms;
     private List<SinkConfig> sinks;
+    private List<FailureConfig> failures;
+
+    private List<Import> imports;
 
     // deprecated
-    private List<Import> imports;
     private Options settings;
 
     private Boolean empty;
@@ -80,7 +82,9 @@ public class Config implements Serializable {
     }
 
     public Options getOptions() {
-        return options;
+        return Optional
+                .ofNullable(options)
+                .orElse(settings);
     }
 
     public Options getSettings() {
@@ -113,6 +117,14 @@ public class Config implements Serializable {
 
     public void setSinks(List<SinkConfig> sinks) {
         this.sinks = sinks;
+    }
+
+    public List<FailureConfig> getFailures() {
+        return failures;
+    }
+
+    public void setFailures(List<FailureConfig> failures) {
+        this.failures = failures;
     }
 
     public Boolean getEmpty() {
@@ -148,7 +160,7 @@ public class Config implements Serializable {
         }
     }
 
-    public class Import implements Serializable {
+    public static class Import implements Serializable {
 
         private String name;
         private String base;
@@ -249,8 +261,13 @@ public class Config implements Serializable {
         }
     }
 
-    public static Config parse(final String configJson, final String[] args, final Boolean useConfigTemplate) throws Exception {
+    public static Config parse(final String configJson, final String[] args, Boolean useConfigTemplate) throws Exception {
         final Map<String, Map<String, String>> argsParameters = filterConfigArgs(args);
+        if(argsParameters.containsKey("template") && !argsParameters.get("template").isEmpty()) {
+            if(!useConfigTemplate) {
+                useConfigTemplate = true;
+            }
+        }
         final String templatedConfigJson;
         if(useConfigTemplate) {
             templatedConfigJson = executeTemplate(
