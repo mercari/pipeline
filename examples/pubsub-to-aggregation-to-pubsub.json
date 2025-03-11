@@ -43,10 +43,12 @@
       ],
       "parameters": {
         "groupFields": ["UserID"],
-        "window": {
-          "type": "fixed",
-          "unit": "second",
-          "size": 60
+        "strategy": {
+          "window": {
+            "type": "fixed",
+            "unit": "second",
+            "size": 60
+          }
         },
         "aggregations": [
           {
@@ -79,7 +81,7 @@
     {
       "name": "PubSubOutputAggregation",
       "module": "pubsub",
-      "input": "Aggregation",
+      "inputs": ["Aggregation"],
       "parameters": {
         "topic": "projects/myproject/topics/mytopic",
         "format": "json"

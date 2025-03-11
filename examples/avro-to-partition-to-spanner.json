@@ -19,13 +19,13 @@
         "partitions": [
           {
             "output": "outputA",
-            "filters": [
+            "filter": [
               { "key": "field1", "op": "=", "value": "A" }
             ]
           },
           {
             "output": "outputB",
-            "filters": {
+            "filter": {
               "or": [
                 { "key": "field1", "op": "=", "value": "B" },
                 { "key": "field2", "op": ">", "value": 100 },
@@ -44,7 +44,7 @@
     {
       "name": "spannerA",
       "module": "spanner",
-      "input": "partition.outputA",
+      "inputs": ["partition.outputA"],
       "parameters": {
         "projectId": "myproject",
         "instanceId": "myinstance",
@@ -55,7 +55,7 @@
     {
       "name": "spannerB",
       "module": "spanner",
-      "input": "partition.outputB",
+      "inputs": ["partition.outputB"],
       "parameters": {
         "projectId": "myproject",
         "instanceId": "myinstance",
@@ -66,7 +66,7 @@
     {
       "name": "spannerDefault",
       "module": "spanner",
-      "input": "partition.defaults",
+      "inputs": ["partition.defaults"],
       "parameters": {
         "projectId": "myproject",
         "instanceId": "myinstance",

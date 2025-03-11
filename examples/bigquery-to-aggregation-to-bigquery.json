@@ -26,13 +26,15 @@
         "BigQueryInputTableA",
         "BigQueryInputTableB"
       ],
-      "parameters": {
-        "groupFields": ["UserID"],
+      "strategy": {
         "window": {
           "type": "fixed",
           "unit": "second",
           "size": 60
-        },
+        }
+      },
+      "parameters": {
+        "groupFields": ["UserID"],
         "aggregations": [
           {
             "input": "BigQueryInputTableA",
@@ -64,7 +66,7 @@
     {
       "name": "BigQueryOutputAggregation",
       "module": "bigquery",
-      "input": "Aggregation",
+      "inputs": ["Aggregation"],
       "parameters": {
         "table": "myproject:mydataset.aggregation_result",
         "createDisposition": "CREATE_IF_NEEDED",
