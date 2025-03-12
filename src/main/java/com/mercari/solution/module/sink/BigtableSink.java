@@ -11,6 +11,7 @@ import freemarker.template.Template;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableIO;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableWriteResult;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
@@ -52,6 +53,7 @@ public class BigtableSink extends Sink {
         private Long maxElementsPerBatch;
         private Long maxOutstandingBytes;
         private Long maxOutstandingElements;
+        private Boolean batching;
 
         private Integer operationTimeoutSecond;
         private Integer attemptTimeoutSecond;
@@ -138,6 +140,9 @@ public class BigtableSink extends Sink {
             if(flowControl == null) {
                 flowControl = false;
             }
+            if(batching == null) {
+                batching = false;
+            }
         }
 
     }
@@ -154,14 +159,22 @@ public class BigtableSink extends Sink {
                         .withWaits(getWaits())
                         .withStrategy(getStrategy()));
 
-        final PCollection<KV<ByteString, Iterable<Mutation>>> mutation = input
+        PCollection<KV<ByteString, Iterable<Mutation>>> mutation = input
                 .apply("ToMutation", ParDo.of(new MutationDoFn(parameters, inputSchema)));
-        final BigtableIO.Write write = createWrite(parameters);
 
+        if(parameters.batching) {
+            mutation = mutation
+                    .apply("GroupByKey", GroupByKey.create())
+                    .apply("Batching", ParDo.of(new GroupByKeyDoFn()));
+        }
+
+        final BigtableIO.Write write = createWrite(parameters);
         if(parameters.withWriteResults) {
             final PCollection<BigtableWriteResult> writeResults = mutation
                     .apply("WriteWithResult", write.withWriteResults());
-            return null;
+            // TODO output writeResult
+            final PDone done = PDone.in(inputs.getPipeline());
+            return MCollectionTuple.done(done);
         } else {
             final PDone done = mutation
                     .apply("Write", write);
@@ -274,6 +287,44 @@ public class BigtableSink extends Sink {
             final List<Mutation> mutations = BigtableSchemaUtil.toMutations(columns, primitiveValues, templateVariables, c.timestamp());
             final KV<ByteString, Iterable<Mutation>> output = KV.of(rowKey, mutations);
             c.output(output);
+        }
+
+    }
+
+    private static class GroupByKeyDoFn extends DoFn<KV<ByteString, Iterable<Iterable<Mutation>>>, KV<ByteString, Iterable<Mutation>>> {
+
+        @Setup
+        public void setup() {
+        }
+
+        @ProcessElement
+        public void processElement(final ProcessContext c) {
+
+            final KV<ByteString, Iterable<Iterable<Mutation>>> inputs = c.element();
+            if(inputs == null || inputs.getValue() == null) {
+                return;
+            }
+
+            int count = 0;
+            long size = 0;
+
+            final ByteString key = inputs.getKey();
+            final List<Mutation> mutations = new ArrayList<>();
+            for(final Iterable<Mutation> values : inputs.getValue()) {
+                for(final Mutation mutation : values) {
+                    mutations.add(mutation);
+                    count++;
+                    if(count > 1000) {
+                        c.output(KV.of(key, new ArrayList<>(mutations)));
+                        count = 0;
+                        mutations.clear();
+                    }
+                }
+            }
+
+            if(!mutations.isEmpty()) {
+                c.output(KV.of(key, mutations));
+            }
         }
 
     }

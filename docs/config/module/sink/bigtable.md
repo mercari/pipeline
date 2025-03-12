@@ -29,6 +29,7 @@ Sink module to write(or delete) inputs data to a specified Cloud Bigtable table.
 | maxElementsPerBatch    | optional | Integer        | Specify max elements a batch can have                                                                                                                                                                                                  |
 | maxOutstandingBytes    | optional | Integer        | Specify max number of outstanding bytes allowed before enforcing flow control                                                                                                                                                          |
 | maxOutstandingElements | optional | Integer        | Specify max number of outstanding elements allowed before enforcing flow control                                                                                                                                                       |
+| batching               | optional | Boolean        | Enabling this function reduces the IO load on Bigtable by aggregating mutations by key. Consider using this function when the mutation contains a large number of columns. (The default is false)                                      |
 
 ## Column parameters
 
