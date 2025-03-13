@@ -1,5 +1,6 @@
 package com.mercari.solution.module;
 
+import com.google.gson.JsonObject;
 import com.mercari.solution.util.DateTimeUtil;
 import org.apache.beam.sdk.transforms.windowing.*;
 import org.joda.time.DateTimeZone;
@@ -9,6 +10,7 @@ import java.io.Serializable;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 public class Strategy implements Serializable {
 
@@ -34,6 +36,18 @@ public class Strategy implements Serializable {
         if(trigger != null) {
             trigger.setDefaults();
         }
+    }
+
+    public static Strategy of(
+            final WindowStrategy window,
+            final TriggerStrategy trigger,
+            final AccumulationMode mode) {
+
+        final Strategy strategy = new Strategy();
+        strategy.window = window;
+        strategy.trigger = trigger;
+        strategy.mode = mode;
+        return strategy;
     }
 
     public boolean isDefault() {
@@ -202,6 +216,17 @@ public class Strategy implements Serializable {
                 default -> throw new IllegalArgumentException("Not supported window type: " + windowStrategy.type);
             };
         }
+
+        @Override
+        public String toString() {
+            return toJsonObject().toString();
+        }
+
+        public JsonObject toJsonObject() {
+            final JsonObject jsonObject = new JsonObject();
+            jsonObject.addProperty("type", Optional.ofNullable(type).map(WindowType::name).orElse(null));
+            return jsonObject;
+        }
     }
 
     public static class TriggerStrategy implements Serializable {
@@ -317,12 +342,32 @@ public class Strategy implements Serializable {
             return trigger;
         }
 
+        @Override
+        public String toString() {
+            return toJsonObject().toString();
+        }
+
+        public JsonObject toJsonObject() {
+            final JsonObject jsonObject = new JsonObject();
+            jsonObject.addProperty("type", Optional.ofNullable(type).map(TriggerType::name).orElse(null));
+            return jsonObject;
+        }
+
     }
 
     public enum AccumulationMode {
         discarding,
         accumulating,
         retracting
+    }
+
+    @Override
+    public String toString() {
+        final JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("mode", Optional.ofNullable(mode).map(AccumulationMode::name).orElse(null));
+        jsonObject.add("window", Optional.ofNullable(window).map(WindowStrategy::toJsonObject).orElse(null));
+        jsonObject.add("trigger", Optional.ofNullable(trigger).map(TriggerStrategy::toJsonObject).orElse(null));
+        return jsonObject.toString();
     }
 
 }

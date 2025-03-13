@@ -264,18 +264,27 @@ public class Union {
 
             final SerializableFunction<MElement, String> groupKeysFunction = SchemaUtil.createGroupKeysFunction(MElement::getAsString, commonFields);
             PCollection<KV<String, MElement>> outputs;
-            if(inputs.size() == 1) {
-                outputs = inputs.getSinglePCollection()
-                        .apply("WithKey", ParDo.of(new UnionDoFn(0, groupKeysFunction)))
-                        .setCoder(KvCoder.of(StringUtf8Coder.of(), ElementCoder.of(inputs.getSingleSchema())));
-            } else if(strategy == null || strategy.isDefault()) {
-                try {
-                    outputs = merge(inputs, groupKeysFunction, null);
-                } catch (final IllegalStateException e) {
-                    outputs = merge(inputs, groupKeysFunction, strategy);
+            if(strategy == null || strategy.isDefault()) {
+                if(inputs.size() == 1) {
+                    outputs = inputs.getSinglePCollection()
+                            .apply("WithKey", ParDo.of(new UnionDoFn(0, groupKeysFunction)))
+                            .setCoder(KvCoder.of(StringUtf8Coder.of(), ElementCoder.of(inputs.getSingleSchema())));
+                } else {
+                    try {
+                        outputs = merge(inputs, groupKeysFunction, null);
+                    } catch (final IllegalStateException e) {
+                        outputs = merge(inputs, groupKeysFunction, strategy);
+                    }
                 }
             } else {
-                outputs = merge(inputs, groupKeysFunction, strategy);
+                if(inputs.size() == 1) {
+                    outputs = inputs.getSinglePCollection()
+                            .apply("WithKey", ParDo.of(new UnionDoFn(0, groupKeysFunction)))
+                            .apply("WithWindow", strategy.createWindow())
+                            .setCoder(KvCoder.of(StringUtf8Coder.of(), ElementCoder.of(inputs.getSingleSchema())));
+                } else {
+                    outputs = merge(inputs, groupKeysFunction, strategy);
+                }
             }
 
             if(waits == null || waits.isEmpty()) {

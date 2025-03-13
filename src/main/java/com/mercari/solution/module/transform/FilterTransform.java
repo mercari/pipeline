@@ -43,7 +43,9 @@ public class FilterTransform extends Transform {
             if((this.filter == null || this.filter.isJsonNull())
                     && (this.select == null || !this.select.isJsonArray())) {
 
-                errorMessages.add("Filter transform module parameters must contain filter or select parameter.");
+                if(this.filters == null || this.filters.isJsonNull()) {
+                    errorMessages.add("Filter transform module parameters must contain filter or select parameter.");
+                }
             }
 
             if(!errorMessages.isEmpty()) {

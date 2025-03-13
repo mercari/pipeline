@@ -38,6 +38,11 @@ public class AggregationTransform extends Transform {
         private Boolean outputEmpty;
         private Boolean outputPaneInfo;
 
+        // deprecated. for compatibility. use strategy
+        private Strategy.WindowStrategy window;
+        private Strategy.TriggerStrategy trigger;
+        private Strategy.AccumulationMode accumulationMode;
+
         public boolean useFilter() {
             return filter != null && (filter.isJsonObject() || filter.isJsonArray());
         }
@@ -47,10 +52,7 @@ public class AggregationTransform extends Transform {
         }
 
 
-        public void validate(
-                Map<String, Schema> inputSchemas,
-                Strategy strategy) {
-
+        public void validate(Map<String, Schema> inputSchemas) {
             final List<String> errorMessages = new ArrayList<>();
             if(groupFields != null && !groupFields.isEmpty()) {
                 for(final Map.Entry<String, Schema> entry : inputSchemas.entrySet()) {
@@ -68,12 +70,6 @@ public class AggregationTransform extends Transform {
                     final AggregationDefinition definition = this.aggregations.get(index);
                     errorMessages.addAll(definition.validate(inputSchemas, index));
                 }
-            }
-
-            if(strategy == null) {
-                errorMessages.add("requires strategy.");
-            } else {
-                errorMessages.addAll(strategy.validate());
             }
 
             if(this.select != null && !this.select.isJsonArray()) {
@@ -128,10 +124,15 @@ public class AggregationTransform extends Transform {
 
         final Map<String, Schema> inputSchemas = inputs.getAllSchemaAsMap();
         final AggregateTransformParameters parameters = getParameters(AggregateTransformParameters.class);
-        final Strategy strategy = getStrategy();
-        parameters.validate(inputSchemas, getStrategy());
-        parameters.setDefaults();
+
+        Strategy strategy = getStrategy();
+        if(strategy.isDefault() && (parameters.window != null || parameters.trigger != null)) {
+            strategy = Strategy.of(parameters.window, parameters.trigger, parameters.accumulationMode);
+        }
         strategy.setDefaults();
+
+        parameters.validate(inputSchemas);
+        parameters.setDefaults();
 
         final List<Aggregators> aggregatorsList = new ArrayList<>();
         for(final AggregationDefinition definition : parameters.aggregations) {
