@@ -1,10 +1,8 @@
 # Windowing Strategy
 
-Window module specifies the time frame and execution timing for aggregate processing of data.
+The Strategy parameter defines the [window strategy]([Beam's official documentation](https://beam.apache.org/documentation/programming-guide/#windowing) ) for the specified module.
 
-Refer to [Beam's official documentation](https://beam.apache.org/documentation/programming-guide/#windowing) for window specifications.
-
-## Strategy parameters
+## Parameters
 
 | parameter        | optional | type    | description                                                                                                                                                                                  |
 |------------------|----------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
