@@ -45,5 +45,4 @@
 | [bigtable](sink/bigtable.md)             | ○     | ○         | Inserting Data into Cloud Bigtable table                   |
 | [pubsub](sink/pubsub.md)                 | ○     | ○         | Publish data to specified PubSub topic                     |
 | [copyfile](sink/copyfile.md)             | ○     | ○(TODO)   | Copy files between storage services                        |
-| [localSolr](sink/localsolr.md)           | ○     | -         | Create solr index file to Cloud Storage                    |
 | [debug](sink/debug.md)                   | ○     | ○         | Outputting data to the log                                 |
