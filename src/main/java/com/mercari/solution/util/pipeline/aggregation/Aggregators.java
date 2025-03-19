@@ -83,7 +83,7 @@ public class Aggregators implements Serializable {
             accumulator.put(commonField, primitiveValue);
         }
         for(final Aggregator aggregator : this.aggregators) {
-            if(aggregator.getIgnore()) {
+            if(aggregator.ignore()) {
                 continue;
             }
             if(!aggregator.filter(input)) {
@@ -108,7 +108,7 @@ public class Aggregators implements Serializable {
                 done = true;
             }
             for(final Aggregator aggregator : aggregators) {
-                if(aggregator.getIgnore()) {
+                if(aggregator.ignore()) {
                     continue;
                 }
                 base = aggregator.mergeAccumulator(base, accum);
@@ -120,7 +120,8 @@ public class Aggregators implements Serializable {
 
     public Map<String, Object> extractOutput(final Accumulator accumulator, Map<String, Object> values) {
         for(final Aggregator aggregator : this.aggregators) {
-            values = aggregator.extractOutput(accumulator, values);
+            final Object output = aggregator.extractOutput(accumulator, values);
+            values.put(aggregator.getName(), output);
         }
         return values;
     }

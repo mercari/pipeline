@@ -6,23 +6,22 @@ import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
-import com.mercari.solution.util.pipeline.ParameterUtil;
-import org.apache.beam.sdk.values.KV;
+import org.joda.time.Instant;
 
 import java.io.Serializable;
 import java.util.*;
 
 public class ArrayAgg implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
+
     private String name;
     private Order order;
-    private Boolean flatten;
+    private List<String> fields;
     private String condition;
     private Boolean ignore;
-    private Boolean isSingleField;
-
-    private List<Schema.Field> inputFields;
+    private Boolean expandOutputName;
 
     private transient Filter.ConditionNode conditionNode;
 
@@ -32,25 +31,38 @@ public class ArrayAgg implements Aggregator {
         none
     }
 
-    public static ArrayAgg of(final String name,
-                              final Schema inputSchema,
-                              final String condition,
-                              final Boolean ignore,
-                              final JsonObject params) {
+    public static ArrayAgg of(
+            final String name,
+            final Schema inputSchema,
+            final String condition,
+            final Boolean ignore,
+            final JsonObject params) {
 
         final ArrayAgg arrayAgg = new ArrayAgg();
         arrayAgg.name = name;
+        arrayAgg.fields = new ArrayList<>();
+        arrayAgg.inputFields = new ArrayList<>();
         arrayAgg.condition = condition;
         arrayAgg.ignore = ignore;
 
-        final List<String> fields;
-        if(params.has("field") || params.has("fields")) {
-            final KV<List<String>,Boolean> fieldsAndIsSingle = ParameterUtil
-                    .getSingleMultiAttribute(params, "field", "fields");
-            fields = fieldsAndIsSingle.getKey();
-            arrayAgg.isSingleField = fieldsAndIsSingle.getValue();
-        } else {
-            throw new IllegalArgumentException("");
+        if(params.has("fields") && params.get("fields").isJsonArray()) {
+            final List<Schema.Field> fs = new ArrayList<>();
+            for(JsonElement element : params.get("fields").getAsJsonArray()) {
+                final String fieldName = element.getAsString();
+                final Schema.Field inputField = inputSchema.getField(fieldName);
+                arrayAgg.inputFields.add(inputField);
+                arrayAgg.fields.add(fieldName);
+                fs.add(Schema.Field.of(inputField.getName(), inputField.getFieldType()));
+            }
+            arrayAgg.expandOutputName = true;
+            arrayAgg.outputFieldType = Schema.FieldType.array(Schema.FieldType.element(fs).withNullable(true));
+        } else if(params.has("field")) {
+            final String fieldName = params.get("field").getAsString();
+            final Schema.Field inputField = inputSchema.getField(fieldName);
+            arrayAgg.inputFields.add(inputField);
+            arrayAgg.fields.add(fieldName);
+            arrayAgg.expandOutputName = false;
+            arrayAgg.outputFieldType = Schema.FieldType.array(inputField.getFieldType().withNullable(true));
         }
 
         if(params.has("order")) {
@@ -59,48 +71,17 @@ public class ArrayAgg implements Aggregator {
             arrayAgg.order = Order.none;
         }
 
-        if(params.has("flatten")) {
-            arrayAgg.flatten = params.get("flatten").getAsBoolean();
-        } else {
-            arrayAgg.flatten = false;
-        }
-
-        arrayAgg.inputFields = new ArrayList<>();
-        for(final String field : fields) {
-            final Schema.Field inputField = inputSchema.getField(field);
-            final Schema.Field outputField = Schema.Field.of(field, inputField.getFieldType().withNullable(true));
-            arrayAgg.inputFields.add(outputField);
-        }
-
-        arrayAgg.outputFields = new ArrayList<>();
-        if(arrayAgg.isSingleField) {
-            final Schema.Field inputField = inputSchema.getField(fields.get(0));
-            final Schema.Field outputField = Schema.Field.of(name, Schema.FieldType.array(inputField.getFieldType().withNullable(true)));
-            arrayAgg.outputFields.add(outputField);
-        } else {
-            if(arrayAgg.flatten) {
-                for(final String field : fields) {
-                    final Schema.Field inputField = inputSchema.getField(field);
-                    final Schema.Field outputField = Schema.Field.of(name + "_" + field, Schema.FieldType.array(inputField.getFieldType().withNullable(true)));
-                    arrayAgg.outputFields.add(outputField);
-                }
-            } else {
-                Schema.Builder builder = Schema.builder();
-                for(final String field : fields) {
-                    final Schema.Field inputField = inputSchema.getField(field);
-                    builder = builder.withField(field, inputField.getFieldType().withNullable(true));
-                }
-                final Schema.Field outputField = Schema.Field.of(name, Schema.FieldType.array(Schema.FieldType.element(builder.build()).withNullable(true)));
-                arrayAgg.outputFields.add(outputField);
-            }
-        }
-
         return arrayAgg;
     }
 
     @Override
-    public Boolean getIgnore() {
-        return ignore;
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -122,70 +103,70 @@ public class ArrayAgg implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
     public Accumulator addInput(final Accumulator accumulator, final MElement input) {
         for(final Schema.Field inputField : inputFields) {
-            final String key = this.name + "." + inputField.getName();
+            final String key = outputKeyName(inputField.getName());
             final Object value = input.getPrimitiveValue(inputField.getName());
-            accumulator.add(key, value);
+            accumulator.append(key, value);
         }
-
         return accumulator;
     }
 
     @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
         for(final Schema.Field inputField : inputFields) {
-            final String key = this.name + "." + inputField.getName();
+            final String key = outputKeyName(inputField.getName());
             final List<Object> baseList = Optional.ofNullable(base.getList(key)).orElseGet(ArrayList::new);
             final List<Object> inputList = Optional.ofNullable(input.getList(key)).orElseGet(ArrayList::new);
-            for(Object value : inputList) {
-                baseList.add(value);
-            }
-            base.put(name + "." + inputField.getName(), baseList);
+            baseList.addAll(inputList);
+            base.put(key, baseList);
         }
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(
+    public Object extractOutput(
             final Accumulator accumulator,
             final Map<String, Object> values) {
 
-        if(isSingleField) {
-            final Schema.Field inputField = inputFields.getFirst();
-            final String key = this.name + "." + inputField.getName();
-            final List<Object> list = accumulator.getList(key);
-            values.put(name, list);
-        } else {
-            if(flatten) {
-                for(final Schema.Field inputField : inputFields) {
-                    final String key = this.name + "." + inputField.getName();
-                    final List<Object> list = accumulator.getList(key);
-                    values.put(name + "_" + inputField.getName(), list);
+        if(expandOutputName) {
+            final String key_ = outputKeyName(fields.getFirst());
+            final int size = accumulator.getList(key_).size();
+            final List<Object> output = new ArrayList<>();
+            for(int i=0; i<size; i++) {
+                final Map<String, Object> rowValues = new HashMap<>();
+                for(final String field : fields) {
+                    final String key = outputKeyName(field);
+                    final List<?> list = accumulator.getList(key);
+                    final Object primitiveValue = list.get(i);
+                    rowValues.put(field, primitiveValue);
                 }
-            } else {
-                final int size = accumulator.getList(this.name + "." + inputFields.getFirst().getName()).size();
-                final List<Object> output = new ArrayList<>();
-                for(int i=0; i<size; i++) {
-                    final Map<String, Object> rowValues = new HashMap<>();
-                    for(final Schema.Field inputField : inputFields) {
-                        final String key = this.name + "." + inputField.getName();
-                        final List<?> list = accumulator.getList(key);
-                        final Object primitiveValue = list.get(i);
-                        rowValues.put(inputField.getName(), primitiveValue);
-                    }
-                    output.add(rowValues);
-                }
-                values.put(name, output);
+                output.add(rowValues);
             }
+            return output;
+        } else {
+            final String key = outputKeyName(fields.getFirst());
+            return accumulator.getList(key);
         }
+    }
 
-        return values;
+    private String outputKeyName(String field) {
+        return String.format("%s.%s", name, field);
     }
 
 }

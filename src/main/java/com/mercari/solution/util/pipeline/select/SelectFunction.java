@@ -16,17 +16,17 @@ import java.util.Map;
 public interface SelectFunction extends Serializable {
 
     String getName();
-    Object apply(Map<String, Object> input, Instant timestamp);
     void setup();
+    Object apply(Map<String, Object> input, Instant timestamp);
     List<Schema.Field> getInputFields();
     Schema.FieldType getOutputFieldType();
     boolean ignore();
 
     enum Func implements Serializable {
         pass,
-        constant,
-        rename,
         cast,
+        rename,
+        constant,
         expression,
         text,
         concat,
@@ -42,8 +42,8 @@ public interface SelectFunction extends Serializable {
         http,
         scrape,
         generate,
-        base64encode,
-        base64decode
+        base64_encode,
+        base64_decode
     }
 
     static List<SelectFunction> of(final JsonArray selects, final List<Schema.Field> inputFields) {
@@ -80,6 +80,8 @@ public interface SelectFunction extends Serializable {
         final Func func;
         if(jsonObject.has("func")) {
             func = Func.valueOf(jsonObject.get("func").getAsString());
+        } else if(jsonObject.has("op")) {
+            func = Func.valueOf(jsonObject.get("op").getAsString());
         } else {
             if(jsonObject.size() == 1) {
                 func = Func.pass;
@@ -101,8 +103,10 @@ public interface SelectFunction extends Serializable {
                 func = Func.expression;
             } else if(jsonObject.has("text")) {
                 func = Func.text;
+            } else if(jsonObject.has("fields")) {
+                func = Func.struct;
             } else {
-                throw new IllegalArgumentException("selectField requires func parameter");
+                throw new IllegalArgumentException("selectField requires func parameter: " + jsonObject);
             }
         }
 
@@ -124,7 +128,7 @@ public interface SelectFunction extends Serializable {
             case nullif -> Nullif.of(name, jsonObject, inputFields, ignore);
             case uuid -> Uuid.of(name, jsonObject, ignore);
             case hash -> Hash.of(name, jsonObject, inputFields, ignore);
-            case event_timestamp -> EventTimestamp.of(name, ignore);
+            case event_timestamp -> EventTimestamp.of(name, jsonObject, ignore);
             case current_timestamp -> CurrentTimestamp.of(name, ignore);
             case struct -> Struct.of(name, jsonObject, inputFields, ignore);
             case json -> Jsons.of(name, jsonObject, inputFields, ignore);
@@ -132,15 +136,15 @@ public interface SelectFunction extends Serializable {
             case http -> Http.of(name, jsonObject, inputFields, ignore);
             case scrape -> Scrape.of(name, jsonObject, inputFields, ignore);
             case generate -> Generate.of(name, jsonObject, inputFields, ignore);
-            case base64encode -> Base64Coder.of(name, jsonObject, inputFields, true, ignore);
-            case base64decode -> Base64Coder.of(name, jsonObject, inputFields, false, ignore);
+            case base64_encode -> Base64Coder.of(name, jsonObject, inputFields, true, ignore);
+            case base64_decode -> Base64Coder.of(name, jsonObject, inputFields, false, ignore);
             default -> throw new IllegalArgumentException();
         };
     }
 
     static Schema createSchema(final JsonArray select, List<Schema.Field> outputFields) {
         final List<SelectFunction> selectFunctions = SelectFunction.of(select, outputFields);
-        return SelectFunction.createSchema(selectFunctions, null);
+        return createSchema(selectFunctions, null);
     }
 
     static Schema createSchema(List<SelectFunction> selectFunctions) {

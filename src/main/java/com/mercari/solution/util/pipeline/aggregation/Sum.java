@@ -7,12 +7,14 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
+import org.joda.time.Instant;
 
 import java.util.*;
 
 public class Sum implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
 
     private String name;
     private String field;
@@ -25,24 +27,13 @@ public class Sum implements Aggregator {
     private transient Set<String> variables;
     private transient Filter.ConditionNode conditionNode;
 
-
-    @Override
-    public Boolean getIgnore() {
-        return this.ignore;
-    }
-
-    @Override
-    public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
-    }
-
-
-    public static Sum of(final String name,
-                         final Schema inputSchema,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore) {
+    public static Sum of(
+            final String name,
+            final Schema inputSchema,
+            final String field,
+            final String expression,
+            final String condition,
+            final Boolean ignore) {
 
         final Sum sum = new Sum();
         sum.name = name;
@@ -51,15 +42,34 @@ public class Sum implements Aggregator {
         sum.condition = condition;
         sum.ignore = ignore;
 
-        sum.outputFields = new ArrayList<>();
+        sum.inputFields = new ArrayList<>();
         if (field != null) {
             final Schema.Field inputField = inputSchema.getField(field);
-            sum.outputFields.add(Schema.Field.of(name, inputField.getFieldType()));
+            sum.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
+            sum.outputFieldType = inputField.getFieldType();
         } else {
-            sum.outputFields.add(Schema.Field.of(name, Schema.FieldType.FLOAT64));
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                sum.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
+            sum.outputFieldType = Schema.FieldType.FLOAT64;
         }
 
         return sum;
+    }
+
+    @Override
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
+    }
+
+    @Override
+    public Boolean filter(final MElement element) {
+        return Aggregator.filter(conditionNode, element);
     }
 
     @Override
@@ -84,8 +94,18 @@ public class Sum implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return this.outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
@@ -113,14 +133,13 @@ public class Sum implements Aggregator {
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+    public Object extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
         final Object sum = accumulator.get(name);
         if(sum == null) {
-            outputs.put(name, convertNumberValue(outputFields.get(0).getFieldType(), 0D));
+            return convertNumberValue(outputFieldType, 0D);
         } else {
-            outputs.put(name, sum);
+            return sum;
         }
-        return outputs;
     }
 
     public static Object convertNumberValue(Schema.FieldType fieldType, Double value) {

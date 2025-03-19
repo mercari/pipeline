@@ -8,12 +8,15 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
+import org.joda.time.Instant;
 
 import java.util.*;
 
 public class Avg implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
+
     private String name;
     private String field;
     private String expression;
@@ -35,12 +38,14 @@ public class Avg implements Aggregator {
     private transient Filter.ConditionNode conditionNode;
 
 
-    public static Avg of(final String name,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore,
-                         final JsonObject params) {
+    public static Avg of(
+            final String name,
+            final Schema inputSchema,
+            final String field,
+            final String expression,
+            final String condition,
+            final Boolean ignore,
+            final JsonObject params) {
 
         final Avg avg = new Avg();
         avg.name = name;
@@ -49,14 +54,28 @@ public class Avg implements Aggregator {
         avg.condition = condition;
         avg.ignore = ignore;
 
-        avg.outputFields = new ArrayList<>();
-        avg.outputFields.add(Schema.Field.of(name, Schema.FieldType.FLOAT64.withNullable(true)));
+        avg.inputFields = new ArrayList<>();
+        if (field != null) {
+            final Schema.Field inputField = inputSchema.getField(field);
+            avg.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
+        } else {
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                avg.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
+        }
 
         if(params.has("weightField")) {
             avg.weightField = params.get("weightField").getAsString();
+            final Schema.Field inputField = inputSchema.getField(avg.weightField);
+            avg.inputFields.add(Schema.Field.of(avg.weightField, inputField.getFieldType()));
         } else if(params.has("weightExpression")) {
             avg.weightExpression = params.get("weightExpression").getAsString();
+            for(final String variable : ExpressionUtil.estimateVariables(avg.weightExpression)) {
+                avg.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
         }
+
+        avg.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
 
         avg.weightKeyName = name + ".weight";
 
@@ -64,8 +83,13 @@ public class Avg implements Aggregator {
     }
 
     @Override
-    public Boolean getIgnore() {
-        return ignore;
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -97,8 +121,18 @@ public class Avg implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
@@ -144,12 +178,10 @@ public class Avg implements Aggregator {
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
+    public Object extractOutput(final Accumulator accumulator,
                                             final Map<String, Object> values) {
 
-        final Double avg = (Double) accumulator.get(name);
-        values.put(name, avg);
-        return values;
+        return accumulator.get(name);
     }
 
 }

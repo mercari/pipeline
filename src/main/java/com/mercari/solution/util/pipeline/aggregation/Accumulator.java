@@ -26,6 +26,13 @@ public class Accumulator {
         sets.get(name).add(value);
     }
 
+    public void append(String name, Object value) {
+        if(!map.containsKey(name)) {
+            map.put(name, new ArrayList<>());
+        }
+        ((List) map.get(name)).add(value);
+    }
+
     public Object get(String name) {
         return map.get(name);
     }
@@ -37,7 +44,7 @@ public class Accumulator {
     public List<Object> getList(String name) {
         return switch (map.get(name)) {
             case List n -> n;
-            default -> null;
+            case null, default -> new ArrayList<>();
         };
     }
 

@@ -4,7 +4,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.pipeline.select.SelectFunction;
 import net.objecthunter.exp4j.Expression;
 
 import java.io.Serializable;
@@ -12,15 +14,15 @@ import java.math.BigDecimal;
 import java.util.*;
 
 
-public interface Aggregator extends Serializable {
+public interface Aggregator extends SelectFunction {
 
-    String DEFAULT_SEPARATOR = "_";
+    class Range implements Serializable {
+        public Integer count;
+        public Integer duration;
+        public DateTimeUtil.TimeUnit durationUnit;
+    }
 
-    String FIELD_OPTION_ORIGINAL_FIELD = "originalField";
-    String FIELD_OPTION_ACCUMULATOR_KEY = "accumulatorKey";
-
-
-    enum Op implements Serializable {
+    enum Op {
         count,
         max,
         min,
@@ -36,20 +38,11 @@ public interface Aggregator extends Serializable {
         any
     }
 
-    Boolean getIgnore();
     Boolean filter(MElement input);
-
     List<String> validate(int parent, int index);
-
-    void setup();
-
-    List<Schema.Field> getOutputFields();
-
     Accumulator addInput(Accumulator accumulator, MElement input);
-
     Accumulator mergeAccumulator(Accumulator base, Accumulator input);
-
-    Map<String, Object> extractOutput(Accumulator accumulator, Map<String, Object> values);
+    Object extractOutput(Accumulator accumulator, Map<String, Object> values);
 
 
     static Aggregator of(final JsonElement element, final Schema inputSchema) {
@@ -58,8 +51,8 @@ public interface Aggregator extends Serializable {
         }
 
         final JsonObject params = element.getAsJsonObject();
-        if (!params.has("op")) {
-            throw new IllegalArgumentException("Aggregator requires op parameter");
+        if (!params.has("op") && !params.has("func")) {
+            throw new IllegalArgumentException("Aggregator requires func or op parameter");
         }
 
         final String name;
@@ -67,7 +60,6 @@ public interface Aggregator extends Serializable {
         final String expression;
         final String condition;
         final Boolean ignore;
-        final String separator;
 
         if(params.has("name")) {
             name = params.get("name").getAsString();
@@ -98,27 +90,27 @@ public interface Aggregator extends Serializable {
             ignore = false;
         }
 
-        if(params.has("separator")) {
-            separator = params.get("separator").getAsString();
+        final Op op;
+        if(params.has("op")) {
+            op = Op.valueOf(params.get("op").getAsString());
         } else {
-            separator = DEFAULT_SEPARATOR;
+            op = Op.valueOf(params.get("func").getAsString());
         }
 
-        final Op op = Op.valueOf(params.get("op").getAsString());
         return switch (op) {
             case count -> Count.of(name, condition, ignore);
             case sum -> Sum.of(name, inputSchema, field, expression, condition, ignore);
             case max -> Max.of(name, inputSchema, field, expression, condition, ignore, false);
             case min -> Max.of(name, inputSchema, field, expression, condition, ignore, true);
-            case last -> Last.of(name, inputSchema, condition, ignore, separator, params, false);
-            case first -> Last.of(name, inputSchema, condition, ignore, separator, params, true);
-            case argmax -> ArgMax.of(name, inputSchema, condition, ignore, separator, params);
-            case argmin -> ArgMax.of(name, inputSchema, condition, ignore, separator, params, true);
-            case avg -> Avg.of(name, field, expression, condition, ignore, params);
-            case std -> Std.of(name, field, expression, condition, ignore, separator, params);
-            case regression -> SimpleRegression.of(name, field, expression, condition, ignore, separator, params);
+            case last -> Last.of(name, inputSchema, condition, ignore, params, false);
+            case first -> Last.of(name, inputSchema, condition, ignore, params, true);
+            case argmax -> ArgMax.of(name, inputSchema, condition, ignore, params);
+            case argmin -> ArgMax.of(name, inputSchema, condition, ignore, params, true);
+            case avg -> Avg.of(name, inputSchema, field, expression, condition, ignore, params);
+            case std -> Std.of(name, inputSchema, field, expression, condition, ignore, params);
+            case regression -> SimpleRegression.of(name, inputSchema, field, expression, condition, ignore, params);
             case array_agg -> ArrayAgg.of(name, inputSchema, condition, ignore, params);
-            default -> throw new IllegalArgumentException("Not supported op: " + op);
+            default -> throw new IllegalArgumentException("Not supported aggregation op: " + op);
         };
     }
 
@@ -221,15 +213,6 @@ public interface Aggregator extends Serializable {
         }
 
         return (weight1 * avg1 + weight2 * avg2) / (weight1 + weight2);
-
-    }
-
-    static String getFieldOptionAccumulatorKey(final Schema.Field field) {
-        return field.getOptions().get(FIELD_OPTION_ACCUMULATOR_KEY);
-    }
-
-    static String getFieldOptionOriginalFieldKey(final Schema.Field field) {
-        return field.getOptions().get(FIELD_OPTION_ORIGINAL_FIELD);
     }
 
 }

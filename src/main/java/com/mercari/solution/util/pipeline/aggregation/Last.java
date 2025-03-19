@@ -6,14 +6,14 @@ import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
+import org.joda.time.Instant;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class Last implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
 
     private String name;
     private List<String> fields;
@@ -22,15 +22,19 @@ public class Last implements Aggregator {
     private Boolean opposite;
     private Boolean ignore;
 
-    private String separator;
     private String timestampKeyName;
     private Boolean expandOutputName;
 
     private transient Filter.ConditionNode conditionNode;
 
     @Override
-    public Boolean getIgnore() {
-        return this.ignore;
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -44,7 +48,6 @@ public class Last implements Aggregator {
             final Schema inputSchema,
             final String condition,
             final Boolean ignore,
-            final String separator,
             final JsonObject params,
             final Boolean opposite) {
 
@@ -53,20 +56,27 @@ public class Last implements Aggregator {
         last.condition = condition;
         last.ignore = ignore;
         last.opposite = opposite;
-        last.separator = separator;
         last.fields = new ArrayList<>();
+        last.inputFields = new ArrayList<>();
 
         if(params.has("fields") && params.get("fields").isJsonArray()) {
+            final List<Schema.Field> fs = new ArrayList<>();
             for(JsonElement element : params.get("fields").getAsJsonArray()) {
+                final Schema.Field inputField = inputSchema.getField(element.getAsString());
+                last.inputFields.add(inputField);
                 last.fields.add(element.getAsString());
+                fs.add(Schema.Field.of(inputField.getName(), inputField.getFieldType()));
             }
             last.expandOutputName = true;
+            last.outputFieldType = Schema.FieldType.element(fs);
         } else if(params.has("field")) {
+            final Schema.Field inputField = inputSchema.getField(params.get("field").getAsString());
+            last.inputFields.add(inputField);
             last.fields.add(params.get("field").getAsString());
             last.expandOutputName = false;
+            last.outputFieldType = inputField.getFieldType();
         }
 
-        last.outputFields = last.createOutputFields(inputSchema);
         last.timestampKeyName = name + ".timestamp";
 
         return last;
@@ -92,8 +102,18 @@ public class Last implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return this.outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
@@ -102,10 +122,9 @@ public class Last implements Aggregator {
         final Long prevMicros = (Long) accumulator.get(timestampKeyName);
 
         if(Aggregator.compare(currentMicros, prevMicros, opposite)) {
-            for(final Schema.Field field : this.outputFields) {
-                final String originalFieldName = Aggregator.getFieldOptionOriginalFieldKey(field);
-                final String accumulatorKeyName = Aggregator.getFieldOptionAccumulatorKey(field);
-                final Object fieldValue = input.getPrimitiveValue(originalFieldName);
+            for(final String field : this.fields) {
+                final String accumulatorKeyName = outputKeyName(field);
+                final Object fieldValue = input.getPrimitiveValue(field);
                 accumulator.put(accumulatorKeyName, fieldValue);
             }
             accumulator.put(timestampKeyName, currentMicros);
@@ -118,8 +137,8 @@ public class Last implements Aggregator {
         final Long timestamp = (Long) base.get(timestampKeyName);
         final Long timestampAccum = (Long) input.get(timestampKeyName);
         if(Aggregator.compare(timestampAccum, timestamp, opposite)) {
-            for(final Schema.Field field : outputFields) {
-                final String accumulatorKeyName = Aggregator.getFieldOptionAccumulatorKey(field);
+            for(final String field : fields) {
+                final String accumulatorKeyName = outputKeyName(field);
                 final Object fieldValue = input.get(accumulatorKeyName);
                 base.put(accumulatorKeyName, fieldValue);
             }
@@ -129,35 +148,19 @@ public class Last implements Aggregator {
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
-        for(final Schema.Field field : outputFields) {
-            final String accumulatorKeyName = Aggregator.getFieldOptionAccumulatorKey(field);
-            final Object fieldPrimitiveValue = accumulator.get(accumulatorKeyName);
-            outputs.put(field.getName(), fieldPrimitiveValue);
-        }
-        return outputs;
-    }
-
-    private List<Schema.Field> createOutputFields(final Schema inputSchema) {
-        final List<Schema.Field> outputFields = new ArrayList<>();
-        for(final String field : fields) {
-            if(!inputSchema.hasField(field)) {
-                throw new IllegalArgumentException("field: " + field + " is not found in source schema: " + inputSchema);
+    public Object extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+        if(expandOutputName) {
+            final Map<String, Object> output = new HashMap<>();
+            for(final String field : fields) {
+                final String accumulatorKeyName = outputKeyName(field);
+                final Object fieldPrimitiveValue = accumulator.get(accumulatorKeyName);
+                output.put(field, fieldPrimitiveValue);
             }
-            final String fieldName = expandOutputName ? outputFieldName(field) : name;
-            final String keyName = expandOutputName ? outputKeyName(field) : name;
-            final Schema.Field schemaField = inputSchema.getField(field);
-            outputFields.add(Schema.Field
-                    .of(fieldName, schemaField.getFieldType().withNullable(true))
-                    .withOptions(Map.of(
-                            FIELD_OPTION_ORIGINAL_FIELD, field,
-                            FIELD_OPTION_ACCUMULATOR_KEY, keyName)));
+            return output;
+        } else {
+            final String accumulatorKeyName = outputKeyName(fields.getFirst());
+            return accumulator.get(accumulatorKeyName);
         }
-        return outputFields;
-    }
-
-    private String outputFieldName(String field) {
-        return String.format("%s%s%s", name, separator, field);
     }
 
     private String outputKeyName(String field) {

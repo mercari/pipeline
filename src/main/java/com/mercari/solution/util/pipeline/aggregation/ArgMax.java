@@ -8,14 +8,17 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
+import org.joda.time.Instant;
 
 
 import java.util.*;
 
 public class ArgMax implements Aggregator {
 
-    private List<Schema.Field> outputFields;
-    private Schema.Field comparingValueField;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
+
+    private String comparingKeyName;
 
     private String name;
     private List<String> fields;
@@ -25,10 +28,7 @@ public class ArgMax implements Aggregator {
 
     private Boolean ignore;
 
-    private String separator;
-
     private Boolean expandOutputName;
-    private Boolean outputComparingValueField;
     private Boolean opposite;
 
 
@@ -36,13 +36,14 @@ public class ArgMax implements Aggregator {
     private transient Set<String> comparingVariables;
     private transient Filter.ConditionNode conditionNode;
 
-    public ArgMax() {
-
+    @Override
+    public String getName() {
+        return this.name;
     }
 
     @Override
-    public Boolean getIgnore() {
-        return this.ignore;
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -50,79 +51,71 @@ public class ArgMax implements Aggregator {
         return Aggregator.filter(conditionNode, element);
     }
 
-    public static ArgMax of(final String name,
-                            final Schema inputSchema,
-                            final String condition,
-                            final Boolean ignore,
-                            final String separator,
-                            final JsonObject params) {
+    public static ArgMax of(
+            final String name,
+            final Schema inputSchema,
+            final String condition,
+            final Boolean ignore,
+            final JsonObject params) {
 
-        return of(name, inputSchema, condition, ignore, separator, params, false);
+        return of(name, inputSchema, condition, ignore, params, false);
     }
 
-    public static ArgMax of(final String name,
-                            final Schema inputSchema,
-                            final String condition,
-                            final Boolean ignore,
-                            final String separator,
-                            final JsonObject params,
-                            final boolean opposite) {
+    public static ArgMax of(
+            final String name,
+            final Schema inputSchema,
+            final String condition,
+            final Boolean ignore,
+            final JsonObject params,
+            final boolean opposite) {
 
         final ArgMax argmax = new ArgMax();
         argmax.name = name;
         argmax.condition = condition;
         argmax.ignore = ignore;
-        argmax.separator = separator;
-
         argmax.fields = new ArrayList<>();
+
+        argmax.inputFields = new ArrayList<>();
+
         if(params.has("fields") && params.get("fields").isJsonArray()) {
             for(JsonElement element : params.get("fields").getAsJsonArray()) {
-                argmax.fields.add(element.getAsString());
+                final String f = element.getAsString();
+                if(argmax.fields.contains(f)) {
+                    continue;
+                }
+                argmax.fields.add(f);
+                final Schema.Field inputField = inputSchema.getField(f);
+                argmax.inputFields.add(Schema.Field.of(f, inputField.getFieldType()));
             }
             argmax.expandOutputName = true;
+            argmax.outputFieldType = Schema.FieldType.element(new ArrayList<>(argmax.inputFields));
         } else if(params.has("field")) {
-            argmax.fields.add(params.get("field").getAsString());
+            final String f = params.get("field").getAsString();
+            argmax.fields.add(f);
+            final Schema.FieldType inputFieldType = inputSchema.getField(f).getFieldType();
+            argmax.inputFields.add(Schema.Field.of(f, inputFieldType));
             argmax.expandOutputName = false;
-        }
-
-        final String comparingValueFieldName;
-        if(params.has("comparingValueField")) {
-            argmax.outputComparingValueField = true;
-            comparingValueFieldName = params.get("comparingValueField").getAsString();
-        } else {
-            argmax.outputComparingValueField = false;
-            comparingValueFieldName = argmax.outputKeyName("comparingValue");
+            argmax.outputFieldType = inputFieldType;
         }
 
         if(params.has("comparingField")) {
             argmax.comparingField = params.get("comparingField").getAsString();
+            final Schema.Field inputField = inputSchema.getField(argmax.comparingField);
+            argmax.inputFields.add(Schema.Field.of(argmax.comparingField, inputField.getFieldType()));
         } else {
             argmax.comparingField = null;
         }
         if(params.has("comparingExpression")) {
             argmax.comparingExpression = params.get("comparingExpression").getAsString();
+            for(final String variable : ExpressionUtil.estimateVariables(argmax.comparingExpression)) {
+                argmax.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
         } else {
             argmax.comparingExpression = null;
         }
 
         argmax.opposite = opposite;
-
-        final String comparingKeyName = name + "." + comparingValueFieldName;
-        if(argmax.comparingField != null) {
-            final Schema.Field inputField = inputSchema.getField(argmax.comparingField);
-            argmax.comparingValueField = Schema.Field
-                    .of(comparingValueFieldName, inputField.getFieldType().withNullable(true))
-                    .withOptions(Map.of(
-                            FIELD_OPTION_ORIGINAL_FIELD, comparingValueFieldName,
-                            FIELD_OPTION_ACCUMULATOR_KEY, comparingKeyName));
-        } else {
-            argmax.comparingValueField = Schema.Field
-                    .of(comparingValueFieldName, Schema.FieldType.FLOAT64.withNullable(true))
-                    .withOptions(Map.of(
-                            FIELD_OPTION_ACCUMULATOR_KEY, comparingKeyName));
-        }
-
-        argmax.outputFields = argmax.createOutputFields(inputSchema, argmax.outputComparingValueField, argmax.comparingValueField);
+        argmax.comparingKeyName = name + ".___comparingValue";
 
         return argmax;
     }
@@ -155,14 +148,24 @@ public class ArgMax implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        System.out.println(outputFieldType);
+        return outputFieldType;
     }
 
     @Override
     public Accumulator addInput(Accumulator accumulator, MElement element) {
-        final String accumulatorComparingKeyName = Aggregator.getFieldOptionAccumulatorKey(comparingValueField);
-        final Object prevComparingValue = accumulator.get(accumulatorComparingKeyName);
+        final Object prevComparingValue = accumulator.get(comparingKeyName);
         final Object inputComparingValue;
         if(comparingField != null) {
             inputComparingValue = element.getPrimitiveValue(comparingField);
@@ -171,82 +174,46 @@ public class ArgMax implements Aggregator {
         }
 
         if(Aggregator.compare(inputComparingValue, prevComparingValue, opposite)) {
-            for(final Schema.Field field : this.outputFields) {
-                if(field.getName().equals(comparingValueField.getName())) {
-                    continue;
-                }
-                final String originalFieldName = Aggregator.getFieldOptionOriginalFieldKey(field);
-                final Object fieldValue = element.getPrimitiveValue(originalFieldName);
-
-                final String accumulatorKeyName = Aggregator.getFieldOptionAccumulatorKey(field);
+            for(final String field : this.fields) {
+                final Object fieldValue = element.getPrimitiveValue(field);
+                final String accumulatorKeyName = outputKeyName(field);
                 accumulator.put(accumulatorKeyName, fieldValue);
             }
-
-            accumulator.put(accumulatorComparingKeyName, inputComparingValue);
+            accumulator.put(comparingKeyName, inputComparingValue);
         }
         return accumulator;
     }
 
     @Override
     public Accumulator mergeAccumulator(Accumulator base, Accumulator input) {
-        final String accumulatorComparingKeyName = Aggregator.getFieldOptionAccumulatorKey(comparingValueField);
-        final Object prevComparingValue = base.get(accumulatorComparingKeyName);
-        final Object inputComparingValue = input.get(accumulatorComparingKeyName);
+        final Object prevComparingValue = base.get(comparingKeyName);
+        final Object inputComparingValue = input.get(comparingKeyName);
 
         if(Aggregator.compare(inputComparingValue, prevComparingValue, opposite)) {
-            for(final Schema.Field field : outputFields) {
-                final String accumulatorFieldKeyName = Aggregator.getFieldOptionAccumulatorKey(field);
+            for(final String field : fields) {
+                final String accumulatorFieldKeyName = outputKeyName(field);
                 final Object fieldValue = input.get(accumulatorFieldKeyName);
                 base.put(accumulatorFieldKeyName, fieldValue);
             }
-            base.put(accumulatorComparingKeyName, inputComparingValue);
+            base.put(comparingKeyName, inputComparingValue);
         }
         return base;
     }
 
     @Override
-    public Map<String, Object> extractOutput(Accumulator accumulator, Map<String, Object> values) {
-        for(final Schema.Field field : outputFields) {
-            final String accumulatorFieldKeyName = Aggregator.getFieldOptionAccumulatorKey(field);
-            final Object fieldPrimitiveValue = accumulator.get(accumulatorFieldKeyName);
-            values.put(field.getName(), fieldPrimitiveValue);
-        }
-        if(outputComparingValueField) {
-            final String accumulatorComparingKeyName = Aggregator.getFieldOptionAccumulatorKey(comparingValueField);
-            final Object fieldPrimitiveValue = accumulator.get(accumulatorComparingKeyName);
-            values.put(comparingValueField.getName(), fieldPrimitiveValue);
-        }
-        return values;
-    }
-
-    private List<Schema.Field> createOutputFields(final Schema inputSchema,
-                                                  final Boolean outputComparingValueField,
-                                                  final Schema.Field comparingValueField) {
-
-        final List<Schema.Field> outputFields = new ArrayList<>();
-        for(final String field : fields) {
-            if(!inputSchema.hasField(field)) {
-                throw new IllegalArgumentException("field: " + field + " is not found in source schema: " + inputSchema);
+    public Object extractOutput(Accumulator accumulator, Map<String, Object> values) {
+        if(expandOutputName) {
+            final Map<String, Object> output = new HashMap<>();
+            for(final String field : fields) {
+                final String accumulatorFieldKeyName = outputKeyName(field);
+                final Object fieldPrimitiveValue = accumulator.get(accumulatorFieldKeyName);
+                output.put(field, fieldPrimitiveValue);
             }
-            final String fieldName = expandOutputName ? outputFieldName(field) : name;
-            final String keyName = expandOutputName ? outputKeyName(field) : name;
-            final Schema.Field schemaField = inputSchema.getField(field);
-            outputFields.add(Schema.Field
-                    .of(fieldName, schemaField.getFieldType().withNullable(true))
-                    .withOptions(Map.of(
-                            FIELD_OPTION_ORIGINAL_FIELD, field,
-                            FIELD_OPTION_ACCUMULATOR_KEY, keyName)));
+            return output;
+        } else {
+            final String accumulatorFieldKeyName = outputKeyName(fields.getFirst());
+            return accumulator.get(accumulatorFieldKeyName);
         }
-
-        if(outputComparingValueField) {
-            outputFields.add(comparingValueField);
-        }
-
-        return outputFields;
-    }
-
-    private String outputFieldName(String field) {
-        return String.format("%s%s%s", name, separator, field);
     }
 
     private String outputKeyName(String field) {

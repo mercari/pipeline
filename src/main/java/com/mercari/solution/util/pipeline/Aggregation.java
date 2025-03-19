@@ -49,13 +49,10 @@ public class Aggregation {
 
         for(final Aggregators aggregators : aggregatorsList) {
             for(final Aggregator aggregation : aggregators.getAggregators()) {
-                if(aggregation.getIgnore()) {
+                if(aggregation.ignore()) {
                     continue;
                 }
-                final List<Schema.Field> outputFields = aggregation.getOutputFields();
-                for(final Schema.Field outputField : outputFields) {
-                    aggregationOutputFields.add(Schema.Field.of(outputField.getName(), outputField.getFieldType()));
-                }
+                aggregationOutputFields.add(Schema.Field.of(aggregation.getName(), aggregation.getOutputFieldType()));
             }
         }
 

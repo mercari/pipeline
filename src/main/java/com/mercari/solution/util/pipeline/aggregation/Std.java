@@ -8,12 +8,15 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
+import org.joda.time.Instant;
 
 import java.util.*;
 
 public class Std implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
+
     private String name;
     private String field;
     private String expression;
@@ -24,7 +27,6 @@ public class Std implements Aggregator {
     private String condition;
 
     private Boolean ignore;
-    private String separator;
 
     private String accumKeyAvgName;
     private String accumKeyCountName;
@@ -41,13 +43,14 @@ public class Std implements Aggregator {
     private transient Filter.ConditionNode conditionNode;
 
 
-    public static Std of(final String name,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore,
-                         final String separator,
-                         final JsonObject params) {
+    public static Std of(
+            final String name,
+            final Schema inputSchema,
+            final String field,
+            final String expression,
+            final String condition,
+            final Boolean ignore,
+            final JsonObject params) {
 
         final Std std = new Std();
         std.name = name;
@@ -55,13 +58,6 @@ public class Std implements Aggregator {
         std.expression = expression;
         std.condition = condition;
         std.ignore = ignore;
-        std.separator = separator;
-
-        if(params.has("weightField")) {
-            std.weightField = params.get("weightField").getAsString();
-        } else if(params.has("weightExpression")) {
-            std.weightExpression = params.get("weightExpression").getAsString();
-        }
 
         if(params.has("ddof") && params.get("ddof").isJsonPrimitive()) {
             std.ddof = params.get("ddof").getAsInt();
@@ -75,12 +71,32 @@ public class Std implements Aggregator {
             std.outputVar = false;
         }
 
-        std.outputFields = new ArrayList<>();
-        std.outputFields.add(Schema.Field.of(name, Schema.FieldType.FLOAT64.withNullable(true)));
+        std.inputFields = new ArrayList<>();
+
+        if(field != null) {
+            std.inputFields.add(Schema.Field.of(field, inputSchema.getField(field).getFieldType()));
+        } else {
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                std.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
+        }
+        if(params.has("weightField")) {
+            std.weightField = params.get("weightField").getAsString();
+            std.inputFields.add(Schema.Field.of(std.weightField, inputSchema.getField(std.weightField).getFieldType()));
+        } else if(params.has("weightExpression")) {
+            std.weightExpression = params.get("weightExpression").getAsString();
+            for(final String variable : ExpressionUtil.estimateVariables(std.weightExpression)) {
+                std.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
+        }
+
+        std.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
+        /*
         if(std.outputVar) {
             std.outputVarName = std.outputFieldName("var");
             std.outputFields.add(Schema.Field.of(std.outputVarName, Schema.FieldType.FLOAT64.withNullable(true)));
         }
+         */
 
         std.accumKeyAvgName = name + ".avg";
         std.accumKeyCountName = name + ".count";
@@ -90,8 +106,13 @@ public class Std implements Aggregator {
     }
 
     @Override
-    public Boolean getIgnore() {
-        return ignore;
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -123,8 +144,18 @@ public class Std implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
@@ -203,18 +234,22 @@ public class Std implements Aggregator {
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
+    public Object extractOutput(final Accumulator accumulator,
                                             final Map<String, Object> values) {
 
         final Double var = accumulator.getAsDouble(name);
         final Double weight = Optional.ofNullable(accumulator.getAsDouble(accumKeyWeightName)).orElse(0D);
         if(var != null && weight != 0 && weight - ddof > 0) {
+            return Math.sqrt(var / (weight - ddof));
+            /*
             values.put(name, Math.sqrt(var / (weight - ddof)));
             if(outputVar) {
                 values.put(outputVarName, var);
             }
+             */
+        } else {
+            return null;
         }
-        return values;
     }
 
     private Accumulator add(final Accumulator accumulator, final Double inputValue, final Double inputWeight) {
@@ -238,10 +273,6 @@ public class Std implements Aggregator {
         accumulator.put(name, nextVar);
 
         return accumulator;
-    }
-
-    private String outputFieldName(String field) {
-        return String.format("%s%s%s", name, separator, field);
     }
 
 }

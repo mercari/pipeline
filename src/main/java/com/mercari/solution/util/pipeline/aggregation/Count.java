@@ -6,12 +6,14 @@ import com.google.gson.JsonElement;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
+import org.joda.time.Instant;
 
 import java.util.*;
 
 public class Count implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
 
     private String name;
     private String condition;
@@ -22,8 +24,13 @@ public class Count implements Aggregator {
 
 
     @Override
-    public Boolean getIgnore() {
-        return this.ignore;
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -32,15 +39,18 @@ public class Count implements Aggregator {
     }
 
 
-    public static Count of(final String name, final String condition, final Boolean ignore) {
+    public static Count of(
+            final String name,
+            final String condition,
+            final Boolean ignore) {
 
         final Count count = new Count();
         count.name = name;
         count.condition = condition;
         count.ignore = ignore;
 
-        count.outputFields = new ArrayList<>();
-        count.outputFields.add(Schema.Field.of(name, Schema.FieldType.INT64.withNullable(true)));
+        count.inputFields = new ArrayList<>();
+        count.outputFieldType = Schema.FieldType.INT64.withNullable(true);
 
         return count;
     }
@@ -62,8 +72,18 @@ public class Count implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return this.outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
@@ -91,12 +111,10 @@ public class Count implements Aggregator {
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
-        final Long count = Optional
+    public Object extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+        return Optional
                 .ofNullable((Long)accumulator.get(name))
                 .orElse(0L);
-        outputs.put(name, count);
-        return outputs;
     }
 
 }

@@ -8,12 +8,15 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
+import org.joda.time.Instant;
 
 import java.util.*;
 
 public class SimpleRegression implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
+
     private String name;
     private String field;
     private String xField;
@@ -25,9 +28,7 @@ public class SimpleRegression implements Aggregator {
 
     private Boolean ignore;
 
-    private String separator;
-
-    //
+    /*
     private String outputSlopeName;
     private String outputInterceptName;
     private String outputWeightName;
@@ -39,6 +40,7 @@ public class SimpleRegression implements Aggregator {
     private String outputSumOfCrossProductsName;
     private String outputRegressionSumSquaresName;
     private String outputMeanSquareErrorName;
+     */
 
     //
     private String accumKeyCountName;
@@ -63,11 +65,11 @@ public class SimpleRegression implements Aggregator {
 
     public static SimpleRegression of(
             final String name,
+            final Schema inputSchema,
             final String field,
             final String expression,
             final String condition,
             final Boolean ignore,
-            final String separator,
             final JsonObject params) {
 
         final SimpleRegression regression = new SimpleRegression();
@@ -76,13 +78,6 @@ public class SimpleRegression implements Aggregator {
         regression.expression = expression;
         regression.condition = condition;
         regression.ignore = ignore;
-        regression.separator = separator;
-
-        if(params.has("weightField")) {
-            regression.weightField = params.get("weightField").getAsString();
-        } else if(params.has("weightExpression")) {
-            regression.weightExpression = params.get("weightExpression").getAsString();
-        }
 
         regression.accumKeyCountName = name + ".count";
         regression.accumKeyWeightName = name + ".weight";
@@ -94,20 +89,45 @@ public class SimpleRegression implements Aggregator {
         regression.accumKeyXBarName = name + ".xBar";
         regression.accumKeyYBarName = name + ".yBar";
 
+        /*
         regression.outputSlopeName = regression.outputFieldName("Slope");
         regression.outputInterceptName = regression.outputFieldName("Intercept");
         regression.outputWeightName = regression.outputFieldName("N");
         regression.outputSumSquaredErrorsName = regression.outputFieldName("SSE");
         regression.outputMeanSquaredErrorsName = regression.outputFieldName("MSE");
         regression.outputRootMeanSquaredErrorsName = regression.outputFieldName("RMSE");
+         */
 
-        regression.outputFields = new ArrayList<>();
-        regression.outputFields.add(Schema.Field.of(regression.outputSlopeName, Schema.FieldType.FLOAT64.withNullable(true)));
-        regression.outputFields.add(Schema.Field.of(regression.outputInterceptName, Schema.FieldType.FLOAT64.withNullable(true)));
-        regression.outputFields.add(Schema.Field.of(regression.outputRootMeanSquaredErrorsName, Schema.FieldType.FLOAT64.withNullable(true)));
+        regression.inputFields = new ArrayList<>();
+
+        if(field != null) {
+            regression.inputFields.add(Schema.Field.of(field, inputSchema.getField(field).getFieldType()));
+        } else {
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                regression.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
+        }
+
+        if(params.has("weightField")) {
+            regression.weightField = params.get("weightField").getAsString();
+            regression.inputFields.add(Schema.Field.of(regression.weightField, inputSchema.getField(regression.weightField).getFieldType()));
+        } else if(params.has("weightExpression")) {
+            regression.weightExpression = params.get("weightExpression").getAsString();
+            for(final String variable : ExpressionUtil.estimateVariables(regression.weightExpression)) {
+                regression.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
+        }
+
+        regression.outputFieldType = Schema.FieldType.element(List.of(
+                Schema.Field.of("Slope", Schema.FieldType.FLOAT64.withNullable(true)),
+                Schema.Field.of("Intercept", Schema.FieldType.FLOAT64.withNullable(true)),
+                Schema.Field.of("RMSE", Schema.FieldType.FLOAT64.withNullable(true)),
+                Schema.Field.of("N", Schema.FieldType.INT64.withNullable(true))
+        ));
 
         if(params.has("xField")) {
             regression.xField = params.get("xField").getAsString();
+            regression.inputFields.add(Schema.Field.of(regression.xField, inputSchema.getField(regression.xField).getFieldType()));
         } else {
             regression.xField = null;
         }
@@ -122,8 +142,13 @@ public class SimpleRegression implements Aggregator {
     }
 
     @Override
-    public Boolean getIgnore() {
-        return ignore;
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -156,8 +181,18 @@ public class SimpleRegression implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
@@ -285,14 +320,16 @@ public class SimpleRegression implements Aggregator {
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
+    public Object extractOutput(final Accumulator accumulator,
                                             final Map<String, Object> values) {
 
+        final Map<String, Object> output = new HashMap<>();
         final double slope = getSlope(accumulator);
-        values.put(outputSlopeName, slope);
-        values.put(outputInterceptName, getIntercept(accumulator, slope));
-        values.put(outputRootMeanSquaredErrorsName, getRootMeanSumSquaredErrors(accumulator));
-        return values;
+        output.put("Slope", slope);
+        output.put("Intercept", getIntercept(accumulator, slope));
+        output.put("RMSE", getRootMeanSumSquaredErrors(accumulator));
+        output.put("N", getDouble(accumulator, accumKeyCountName, 0D));
+        return output;
     }
 
     private double getSlope(final Accumulator accumulator) {
@@ -361,10 +398,6 @@ public class SimpleRegression implements Aggregator {
 
     private static double getDouble(final Accumulator input, final String keyName, final Double defaultValue) {
         return Optional.ofNullable(input.getAsDouble(keyName)).orElse(defaultValue);
-    }
-
-    private String outputFieldName(String field) {
-        return String.format("%s%s%s", name, separator, field);
     }
 
 }

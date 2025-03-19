@@ -7,12 +7,14 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
+import org.joda.time.Instant;
 
 import java.util.*;
 
 public class Max implements Aggregator {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
 
     private String name;
     private String field;
@@ -27,8 +29,13 @@ public class Max implements Aggregator {
     private transient Filter.ConditionNode conditionNode;
 
     @Override
-    public Boolean getIgnore() {
-        return this.ignore;
+    public String getName() {
+        return this.name;
+    }
+
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
@@ -37,13 +44,14 @@ public class Max implements Aggregator {
     }
 
 
-    public static Max of(final String name,
-                         final Schema inputSchema,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore,
-                         final Boolean opposite) {
+    public static Max of(
+            final String name,
+            final Schema inputSchema,
+            final String field,
+            final String expression,
+            final String condition,
+            final Boolean ignore,
+            final Boolean opposite) {
 
         final Max max = new Max();
         max.name = name;
@@ -53,12 +61,16 @@ public class Max implements Aggregator {
         max.ignore = ignore;
         max.opposite = opposite;
 
-        max.outputFields = new ArrayList<>();
+        max.inputFields = new ArrayList<>();
         if (field != null) {
             final Schema.Field inputField = inputSchema.getField(field);
-            max.outputFields.add(Schema.Field.of(name, inputField.getFieldType()));
+            max.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
+            max.outputFieldType = inputField.getFieldType();
         } else {
-            max.outputFields.add(Schema.Field.of(name, Schema.FieldType.FLOAT64));
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                max.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+            }
+            max.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
         }
 
         return max;
@@ -86,8 +98,18 @@ public class Max implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return this.outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
+    }
+
+    @Override
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
     }
 
     @Override
@@ -115,10 +137,8 @@ public class Max implements Aggregator {
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
-        final Object maxValue = accumulator.get(name);
-        outputs.put(name, maxValue);
-        return outputs;
+    public Object extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+        return accumulator.get(name);
     }
 
 }
