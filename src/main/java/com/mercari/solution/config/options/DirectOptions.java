@@ -41,4 +41,28 @@ public class DirectOptions implements Serializable {
             throw new RuntimeException("Failed to set direct runner pipeline options", e);
         }
     }
+
+    public static boolean isBlockOnRun(
+            final PipelineOptions pipelineOptions) {
+        try {
+            final Class<? extends PipelineOptions> clazz = (Class<? extends PipelineOptions>)Class.forName("org.apache.beam.runners.direct.DirectOptions");
+            final PipelineOptions directOptions = pipelineOptions.as(clazz);
+            return (Boolean)clazz.getMethod("getBlockOnRun").invoke(directOptions);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+            return true;
+        }
+    }
+
+    public static void setBlockOnRun(
+            final PipelineOptions pipelineOptions,
+            final boolean blockOnRun) {
+        try {
+            final Class<? extends PipelineOptions> clazz = (Class<? extends PipelineOptions>)Class.forName("org.apache.beam.runners.direct.DirectOptions");
+            final PipelineOptions directOptions = pipelineOptions.as(clazz);
+            clazz.getMethod("setBlockOnRun", boolean.class).invoke(directOptions, blockOnRun);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+            return;
+        }
+    }
+
 }

@@ -26,8 +26,71 @@ public class Options implements Serializable {
     private PortableOptions portable;
     private DataflowOptions dataflow;
     private FlinkOptions flink;
+    private SparkOptions spark;
+
+    // cloud options
+    private GCPOptions gcp;
+    private AWSOptions aws;
 
     private BeamSQLOptions beamsql;
+
+
+    public String getJobName() {
+        return jobName;
+    }
+
+    public String getUserAgent() {
+        return userAgent;
+    }
+
+    public Long getOptionsId() {
+        return optionsId;
+    }
+
+    public Boolean getStreaming() {
+        return streaming;
+    }
+
+    public String getTempLocation() {
+        return tempLocation;
+    }
+
+    public DirectOptions getDirect() {
+        return direct;
+    }
+
+    public PrismOptions getPrism() {
+        return prism;
+    }
+
+    public PortableOptions getPortable() {
+        return portable;
+    }
+
+    public DataflowOptions getDataflow() {
+        return dataflow;
+    }
+
+    public FlinkOptions getFlink() {
+        return flink;
+    }
+
+    public SparkOptions getSpark() {
+        return spark;
+    }
+
+    public GCPOptions getGcp() {
+        return gcp;
+    }
+
+    public AWSOptions getAws() {
+        return aws;
+    }
+
+    public BeamSQLOptions getBeamsql() {
+        return beamsql;
+    }
+
 
     public static void setOptions(final PipelineOptions pipelineOptions, final Options options) {
 
@@ -55,6 +118,8 @@ public class Options implements Serializable {
             pipelineOptions.setTempLocation(options.tempLocation);
         }
 
+        GCPOptions.setOptions(pipelineOptions, options.gcp);
+
         final MPipeline.Runner runner = OptionUtil.getRunner(pipelineOptions);
         switch (runner) {
             case direct -> DirectOptions.setOptions(pipelineOptions, options.direct);
@@ -62,6 +127,7 @@ public class Options implements Serializable {
             case portable -> PortableOptions.setOptions(pipelineOptions, options.portable);
             case dataflow -> DataflowOptions.setOptions(pipelineOptions, options.dataflow);
             case flink -> FlinkOptions.setOptions(pipelineOptions, options.flink);
+            case spark -> SparkOptions.setOptions(pipelineOptions, options.spark);
         }
 
         BeamSQLOptions.setOptions(pipelineOptions, options.beamsql);

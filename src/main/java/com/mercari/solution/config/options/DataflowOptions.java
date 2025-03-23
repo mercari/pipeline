@@ -1,5 +1,8 @@
 package com.mercari.solution.config.options;
 
+import com.google.dataflow.v1beta3.FlexTemplateRuntimeEnvironment;
+import com.google.dataflow.v1beta3.LaunchFlexTemplateParameter;
+import com.mercari.solution.config.Options;
 import org.apache.beam.sdk.extensions.gcp.options.GcpOptions;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.StreamingOptions;
@@ -14,6 +17,7 @@ import java.util.Optional;
 
 public class DataflowOptions implements Serializable {
 
+    private String project;
     private String tempLocation;
     private String stagingLocation;
     private Map<String, String> labels;
@@ -23,6 +27,7 @@ public class DataflowOptions implements Serializable {
     private Integer maxNumWorkers;
     private String workerMachineType;
     private Integer diskSizeGb;
+    private String region;
     private String workerDiskType;
     private String workerRegion;
     private String workerZone;
@@ -42,6 +47,24 @@ public class DataflowOptions implements Serializable {
     private List<String> dataflowServiceOptions;
     private List<String> experiments;
 
+    private String templateLocation;
+
+    // for launcher parameter
+    private String launcherMachineType;
+
+
+    public String getProject() {
+        return project;
+    }
+
+    public String getRegion() {
+        return region;
+    }
+
+    public String getTemplateLocation() {
+        return templateLocation;
+    }
+
     public static void setOptions(
             final PipelineOptions pipelineOptions,
             final DataflowOptions dataflow) {
@@ -56,6 +79,9 @@ public class DataflowOptions implements Serializable {
 
             if(dataflow.tempLocation != null) {
                 pipelineOptions.setTempLocation(dataflow.tempLocation);
+            }
+            if(dataflow.project != null) {
+                clazz.getMethod("setProject", String.class).invoke(dataflowOptions, dataflow.project);
             }
             if(dataflow.stagingLocation != null) {
                 clazz.getMethod("setStagingLocation", String.class).invoke(dataflowOptions, dataflow.stagingLocation);
@@ -82,6 +108,9 @@ public class DataflowOptions implements Serializable {
             }
             if(dataflow.workerMachineType != null) {
                 clazz.getMethod("setWorkerMachineType", String.class).invoke(dataflowOptions, dataflow.workerMachineType);
+            }
+            if(dataflow.region != null) {
+                clazz.getMethod("setRegion", String.class).invoke(dataflowOptions, dataflow.region);
             }
             if(dataflow.workerRegion != null) {
                 pipelineOptions.as(GcpOptions.class).setWorkerRegion(dataflow.workerRegion);
@@ -147,6 +176,12 @@ public class DataflowOptions implements Serializable {
                 existingExperiments.addAll(dataflow.experiments);
                 clazz.getMethod("setExperiments", List.class).invoke(dataflowOptions, existingExperiments.stream().distinct().toList());
             }
+            /*
+            if(dataflow.templateLocation != null) {
+                clazz.getMethod("setTemplateLocation", String.class).invoke(dataflowOptions, dataflow.templateLocation);
+            }
+             */
+
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
             throw new RuntimeException("Failed to set dataflow runner pipeline options", e);
         }
@@ -159,6 +194,9 @@ public class DataflowOptions implements Serializable {
             final Class<? extends PipelineOptions> clazz = (Class<? extends PipelineOptions>)Class.forName("org.apache.beam.runners.dataflow.options.DataflowPipelineOptions");
             final PipelineOptions dataflowOptions = pipelineOptions.as(clazz);
 
+            if(clazz.getMethod("getProject").invoke(dataflowOptions) != null) {
+                dataflow.project = (String)clazz.getMethod("getProject").invoke(dataflowOptions);
+            }
             if(clazz.getMethod("getTempLocation").invoke(dataflowOptions) != null) {
                 dataflow.tempLocation = (String)clazz.getMethod("getTempLocation").invoke(dataflowOptions);
             }
@@ -189,6 +227,9 @@ public class DataflowOptions implements Serializable {
             }
             if(clazz.getMethod("getWorkerMachineType").invoke(dataflowOptions) != null) {
                 dataflow.workerMachineType = (String)clazz.getMethod("getWorkerMachineType").invoke(dataflowOptions);
+            }
+            if(clazz.getMethod("getRegion").invoke(dataflowOptions) != null) {
+                dataflow.region = (String)clazz.getMethod("getRegion").invoke(dataflowOptions);
             }
             if(clazz.getMethod("getWorkerRegion").invoke(dataflowOptions) != null) {
                 dataflow.workerRegion = (String)clazz.getMethod("getWorkerRegion").invoke(dataflowOptions);
@@ -249,6 +290,11 @@ public class DataflowOptions implements Serializable {
             if(clazz.getMethod("getExperiments").invoke(dataflowOptions) != null) {
                 dataflow.experiments = (List<String>) clazz.getMethod("getExperiments").invoke(dataflowOptions);
             }
+            /*
+            if(clazz.getMethod("getTemplateLocation").invoke(dataflowOptions) != null) {
+                dataflow.templateLocation = (String) clazz.getMethod("getTemplateLocation").invoke(dataflowOptions);
+            }
+             */
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
             throw new RuntimeException("Failed to set dataflow runner pipeline options", e);
         }
@@ -277,6 +323,74 @@ public class DataflowOptions implements Serializable {
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
             throw new RuntimeException("Failed to getServiceAccount", e);
         }
+    }
+
+    public static LaunchFlexTemplateParameter createLaunchFlexTemplateParameter(
+            final String templatePath,
+            final Map<String, String> parameters,
+            final Options options) {
+
+        final LaunchFlexTemplateParameter.Builder builder = LaunchFlexTemplateParameter.newBuilder();
+        builder.setContainerSpecGcsPath(templatePath);
+        builder.putAllParameters(parameters);
+        if(options != null) {
+            if(options.getJobName() != null) {
+                builder.setJobName(options.getJobName());
+            }
+            if(options.getDataflow() != null) {
+                if(options.getDataflow().update != null) {
+                    builder.setUpdate(options.getDataflow().update);
+                }
+                final FlexTemplateRuntimeEnvironment environment = createFlexTemplateRuntimeEnvironment(options.getDataflow());
+                builder.setEnvironment(environment);
+            }
+        }
+
+        return builder.build();
+    }
+
+    private static FlexTemplateRuntimeEnvironment createFlexTemplateRuntimeEnvironment(final DataflowOptions dataflow) {
+        final FlexTemplateRuntimeEnvironment.Builder builder = FlexTemplateRuntimeEnvironment.newBuilder();
+        if(dataflow.tempLocation != null) {
+            builder.setTempLocation(dataflow.tempLocation);
+        }
+        if(dataflow.stagingLocation != null) {
+            builder.setStagingLocation(dataflow.stagingLocation);
+        }
+        if(dataflow.serviceAccount != null) {
+            builder.setServiceAccountEmail(dataflow.serviceAccount);
+        }
+        if(dataflow.network != null) {
+            builder.setNetwork(dataflow.network);
+        }
+        if(dataflow.subnetwork != null) {
+            builder.setSubnetwork(dataflow.subnetwork);
+        }
+        if(dataflow.workerRegion != null) {
+            builder.setWorkerRegion(dataflow.workerRegion);
+        }
+        if(dataflow.workerZone != null) {
+            builder.setWorkerZone(dataflow.workerZone);
+        }
+        if(dataflow.workerMachineType != null) {
+            builder.setMachineType(dataflow.workerMachineType);
+        }
+        if(dataflow.numWorkers != null) {
+            builder.setNumWorkers(dataflow.numWorkers);
+        }
+        if(dataflow.maxNumWorkers != null) {
+            builder.setMaxWorkers(dataflow.maxNumWorkers);
+        }
+        if(dataflow.experiments != null && !dataflow.experiments.isEmpty()) {
+            builder.addAllAdditionalExperiments(dataflow.experiments);
+        }
+        if(dataflow.enableStreamingEngine != null) {
+            builder.setEnableStreamingEngine(dataflow.enableStreamingEngine);
+        }
+        if(dataflow.launcherMachineType != null) {
+            builder.setLauncherMachineType(dataflow.launcherMachineType);
+        }
+        return builder.build();
     }
 
 }
