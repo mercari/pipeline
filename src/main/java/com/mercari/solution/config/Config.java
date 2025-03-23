@@ -6,10 +6,6 @@ import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import freemarker.template.Template;
 import freemarker.template.TemplateException;
-import org.joda.time.DateTimeZone;
-import org.joda.time.LocalDate;
-import org.joda.time.format.DateTimeFormat;
-import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,16 +20,6 @@ public class Config implements Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Config.class);
 
-    private static final DateTimeFormatter FORMATTER_YYYYMMDD = DateTimeFormat.forPattern("yyyyMMdd");
-    private static final String[] RESERVED_PARAMETERS = {
-            "__EVENT_EPOCH_SECOND__",
-            "__EVENT_EPOCH_SECOND_PRE__",
-            "__EVENT_EPOCH_MILLISECOND__",
-            "__EVENT_EPOCH_MILLISECOND_PRE__",
-            "__EVENT_DATETIME_ISO__",
-            "__EVENT_DATETIME_ISO_PRE__"
-    };
-
     private String name;
     private String description;
 
@@ -42,7 +28,6 @@ public class Config implements Serializable {
     private List<SourceConfig> sources;
     private List<TransformConfig> transforms;
     private List<SinkConfig> sinks;
-    private List<FailureConfig> failures;
 
     private List<Import> imports;
 
@@ -57,24 +42,12 @@ public class Config implements Serializable {
         return name;
     }
 
-    public void setName(String name) {
-        this.name = name;
-    }
-
     public String getDescription() {
         return description;
     }
 
     public List<Import> getImports() {
         return imports;
-    }
-
-    public void setImports(List<Import> imports) {
-        this.imports = imports;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
     }
 
     public Map<String, String> getArgs() {
@@ -91,40 +64,16 @@ public class Config implements Serializable {
         return settings;
     }
 
-    public void setSettings(Options settings) {
-        this.settings = settings;
-    }
-
     public List<SourceConfig> getSources() {
         return sources;
-    }
-
-    public void setSources(List<SourceConfig> sources) {
-        this.sources = sources;
     }
 
     public List<TransformConfig> getTransforms() {
         return transforms;
     }
 
-    public void setTransforms(List<TransformConfig> transforms) {
-        this.transforms = transforms;
-    }
-
     public List<SinkConfig> getSinks() {
         return sinks;
-    }
-
-    public void setSinks(List<SinkConfig> sinks) {
-        this.sinks = sinks;
-    }
-
-    public List<FailureConfig> getFailures() {
-        return failures;
-    }
-
-    public void setFailures(List<FailureConfig> failures) {
-        this.failures = failures;
     }
 
     public Boolean getEmpty() {
@@ -176,57 +125,30 @@ public class Config implements Serializable {
             return name;
         }
 
-        public void setName(String name) {
-            this.name = name;
-        }
-
         public String getBase() {
             return base;
-        }
-
-        public void setBase(String base) {
-            this.base = base;
         }
 
         public List<String> getFiles() {
             return files;
         }
 
-        public void setFiles(List<String> files) {
-            this.files = files;
-        }
-
         public Map<String, List<String>> getInputs() {
             return inputs;
-        }
-
-        public void setInputs(Map<String, List<String>> inputs) {
-            this.inputs = inputs;
         }
 
         public Map<String, JsonObject> getParameters() {
             return parameters;
         }
 
-        public void setParameters(Map<String, JsonObject> parameters) {
-            this.parameters = parameters;
-        }
-
         public List<String> getIncludes() {
             return includes;
-        }
-
-        public void setIncludes(List<String> includes) {
-            this.includes = includes;
         }
 
         public List<String> getExcludes() {
             return excludes;
         }
 
-        public void setExcludes(List<String> excludes) {
-            this.excludes = excludes;
-        }
 
         public boolean filter(final String name) {
             if(!this.includes.isEmpty()) {
@@ -313,7 +235,7 @@ public class Config implements Serializable {
         }
 
         LOG.info("Pipeline config: \n{}", new GsonBuilder().setPrettyPrinting().create().toJson(jsonObject));
-        final String jsonText = replaceParameters(jsonObject.toString());
+        final String jsonText = jsonObject.toString();
         try {
             final Config config = new Gson().fromJson(jsonText, Config.class);
             if(config == null) {
@@ -400,9 +322,9 @@ public class Config implements Serializable {
                 throw new IllegalArgumentException("no module definition!");
             }
 
-            config.setSources(sources);
-            config.setTransforms(transforms);
-            config.setSinks(sinks);
+            config.sources = sources;
+            config.transforms = transforms;
+            config.sinks = sinks;
 
             config.content = templatedConfigJson;
 
@@ -454,13 +376,6 @@ public class Config implements Serializable {
         }
     }
 
-    private static String replaceParameters(final String json) {
-        final LocalDate today = LocalDate.now(DateTimeZone.forID("Asia/Tokyo"));
-        return json
-                .replaceAll("<TODAY>", FORMATTER_YYYYMMDD.print(today))
-                .replaceAll("<YESTERDAY>", FORMATTER_YYYYMMDD.print(today.plusDays(-1)));
-    }
-
     private static Map<String, Map<String, String>> filterConfigArgs(final String[] args) {
         return Arrays.stream(args)
                 .filter(s -> s.contains("=") && s.split("=")[0].contains("."))
@@ -475,9 +390,6 @@ public class Config implements Serializable {
 
     private static String executeTemplate(final String config, final Map<String, String> parameters) throws IOException, TemplateException {
         final Map<String, Object> map = new HashMap<>();
-        for(final String reservedParameter : RESERVED_PARAMETERS) {
-            map.put(reservedParameter, String.format("${%s}", reservedParameter));
-        }
         for(final Map.Entry<String, String> entry : parameters.entrySet()) {
             JsonElement jsonElement;
             try {

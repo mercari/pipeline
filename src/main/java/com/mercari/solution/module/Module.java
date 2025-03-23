@@ -23,6 +23,7 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
 
     private String parametersText;
 
+    private List<Logging> loggings;
     private transient List<PCollection<?>> waits;
     private Map<String, Object> templateArgs;
     private Boolean failFast;
@@ -51,6 +52,10 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
 
     public String getParametersText() {
         return parametersText;
+    }
+
+    public List<Logging> getLoggings() {
+        return loggings;
     }
 
     public List<PCollection<?>> getWaits() {
@@ -91,14 +96,17 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
         this.failFast = Optional
                 .ofNullable(config.getFailFast())
                 .orElseGet(() -> !OptionUtil.isStreaming(options));
-        this.outputFailure = Optional
-                .ofNullable(config.getOutputFailure())
-                .orElse(false);
-        this.outputType = config.getOutputType();
+        this.loggings = Optional
+                .ofNullable(config.getLogging())
+                .orElseGet(ArrayList::new);
         this.waits = new ArrayList<>();
         for(final MCollection wait : waits) {
             this.waits.add(wait.getCollection());
         }
+        this.outputFailure = Optional
+                .ofNullable(config.getOutputFailure())
+                .orElse(false);
+        this.outputType = config.getOutputType();
         this.runner = OptionUtil.getRunner(options);
     }
 

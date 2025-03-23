@@ -2,6 +2,7 @@ package com.mercari.solution.config;
 
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.DataType;
+import com.mercari.solution.module.Logging;
 
 import java.io.Serializable;
 import java.util.List;
@@ -14,6 +15,8 @@ public class ModuleConfig implements Serializable {
     private JsonObject parameters;
 
     private List<String> wait;
+
+    private List<Logging> logging;
 
     private Boolean ignore;
     private Boolean failFast;
@@ -41,6 +44,10 @@ public class ModuleConfig implements Serializable {
 
     public List<String> getWait() {
         return wait;
+    }
+
+    public List<Logging> getLogging() {
+        return logging;
     }
 
     public Boolean getIgnore() {

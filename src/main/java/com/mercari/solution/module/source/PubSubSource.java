@@ -364,8 +364,8 @@ public class PubSubSource extends Source {
     }
 
     private enum Format {
-        avro,
         json,
+        avro,
         protobuf,
         message
     }
@@ -420,7 +420,7 @@ public class PubSubSource extends Source {
             final PCollectionTuple outputs = pubsubMessages
                     .apply("Format", ParDo
                             .of(new OutputDoFn(getJobName(), getName(), outputSchema, parameters.format, parameters.additionalFields,
-                                    getFailFast(), getOutputFailure(), failuresTag, originalTag))
+                                    getFailFast(), getOutputFailure(), getLoggings(), failuresTag, originalTag))
                             .withOutputTags(outputTag, TupleTagList.of(outputTags)));
             final MCollectionTuple outputTuple = MCollectionTuple
                     .of(outputs.get(outputTag), outputSchema)
@@ -512,6 +512,8 @@ public class PubSubSource extends Source {
         private final TupleTag<MElement> failuresTag;
         private final TupleTag<MElement> originalTag;
 
+        private final Map<String, Logging> loggings;
+
         // for non format
         private final List<Schema.Field> fields;
 
@@ -535,6 +537,7 @@ public class PubSubSource extends Source {
                 final AdditionalFieldsParameters messageFields,
                 final boolean failFast,
                 final boolean outputFailure,
+                final List<Logging> loggings,
                 final TupleTag<MElement> failuresTag,
                 final TupleTag<MElement> originalTag) {
 
@@ -544,6 +547,7 @@ public class PubSubSource extends Source {
             this.messageFields = messageFields;
             this.failFast = failFast;
             this.outputFailure = outputFailure;
+            this.loggings = Logging.of(loggings);
             this.failuresTag = failuresTag;
             this.originalTag = originalTag;
 
@@ -601,17 +605,19 @@ public class PubSubSource extends Source {
                 return;
             }
             try {
+                Logging.log(LOG, loggings, "input", message.toString());
                 if(originalTag != null) {
                     final MElement element = MElement.of(message, c.timestamp());
                     c.output(originalTag, element);
                 }
-                final MElement element = switch (format) {
+                final MElement output = switch (format) {
                     case message -> MElement.of(message, c.timestamp());
                     case json -> parseJson(message, c.timestamp());
                     case avro -> parseAvro(message, c.timestamp());
                     case protobuf -> parseProtobuf(message, c.timestamp());
                 };
-                c.output(element);
+                Logging.log(LOG, loggings, "output", output);
+                c.output(output);
             } catch (final Throwable e) {
                 ERROR_COUNTER.inc();
                 String errorMessage = MFailure.convertThrowableMessage(e);

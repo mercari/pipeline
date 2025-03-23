@@ -23,6 +23,8 @@ public class SinkConfig extends ModuleConfig {
             final List<String> list = new ArrayList<>();
             list.add(input);
             return list;
+        } else if("action".equalsIgnoreCase(getModule())) {
+            return new ArrayList<>();
         } else {
             throw new IllegalArgumentException("Sink module: " + getName() + " has not input");
         }
