@@ -10,6 +10,7 @@ The following items can be defined as options.
 | direct    | [Direct Options](direct.md)     | Specify [Direct runner](https://beam.apache.org/documentation/runners/direct/) specific options.           |
 | portable  | [Portable Options](portable.md) | Specify Portable runner specific options.                                                                  |
 | flink     | [Flink Options](flink.md)       | Specify [Flink runner](https://beam.apache.org/documentation/runners/flink/) specific options.             |
+| gcp       | [GCP Options](gcp.md)           | Specify Google Cloud options.                                                                              |
 | beamsql   | [BeamSQL Options](beamsql.md)   | Specify Beam SQL common settings.                                                                          |
 
 
@@ -18,9 +19,8 @@ The following items can be defined as options.
 ```JSON:options
 {
   "options": {
-    "streaming": false,
+    "streaming": true,
     "dataflow": {
-      "autoscalingAlgorithm": "NONE",
       "workerMachineType": "n2-custom-2-131072-ext",
       "numWorkers": 1,
       "diskSizeGb": 256,
