@@ -64,7 +64,7 @@ If the parameters `format`,`cellType` are not specified, the upper-level setting
         "projectId": "example-project",
         "instanceId": "example-instance",
         "tableId": "example-table",
-        "rowFilter": {
+        "filter": {
           "type": "timestamp_range",
           "start": "2024-01-01T00:00:00Z",
           "end": "2024-12-31T23:59:59Z"

@@ -2,19 +2,15 @@ package com.mercari.solution.util.schema;
 
 import com.mercari.solution.TestDatum;
 import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.io.BinaryEncoder;
-import org.apache.avro.io.Decoder;
-import org.apache.avro.io.DecoderFactory;
-import org.apache.avro.io.EncoderFactory;
+import org.apache.avro.util.Utf8;
 import org.joda.time.Instant;
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 public class AvroSchemaUtilTest {
 
@@ -216,6 +212,112 @@ public class AvroSchemaUtilTest {
         o = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.STRING, bytes);
         Assert.assertEquals(s, o);
 
+    }
+
+    @Test
+    public void testEncodeDecodeMap() throws IOException {
+
+        final Map<String, Long> values = new HashMap<>();
+        values.put("a",  1L);
+        values.put("b",  2L);
+        values.put("c", -1L);
+
+        final byte[] serialized = AvroSchemaUtil.encode(values);
+        final Object deserialized = AvroSchemaUtil.decode(com.mercari.solution.module.Schema.FieldType.map(com.mercari.solution.module.Schema.FieldType.INT64), serialized);
+
+        Assert.assertTrue(deserialized instanceof Map<?,?>);
+        final Map<String, Long> mapFieldValueMap = (Map<String, Long>) deserialized;
+        for(final Map.Entry<String, Long> entry : mapFieldValueMap.entrySet()) {
+            switch (entry.getKey()) {
+                case "a" -> Assert.assertEquals( 1L, entry.getValue().longValue());
+                case "b" -> Assert.assertEquals( 2L, entry.getValue().longValue());
+                case "c" -> Assert.assertEquals(-1L, entry.getValue().longValue());
+            }
+        }
+
+    }
+
+    @Test
+    public void testEncodeDecodeRecord() throws IOException {
+
+        final String avroSchema = """
+                {
+                  "name": "root",
+                  "type": "record",
+                  "fields": [
+                    { "name": "booleanField", "type": "boolean" },
+                    { "name": "stringField", "type": "string" },
+                    { "name": "intField", "type": "int" },
+                    { "name": "longField", "type": "long" },
+                    { "name": "floatField", "type": "float" },
+                    { "name": "doubleField", "type": "double" },
+                    { "name": "arrayStringField",
+                      "type": {
+                        "type": "array",
+                        "items": "string"
+                      }
+                    },
+                    { "name": "mapField",
+                      "type": {
+                        "type": "map",
+                        "values": "long"
+                      }
+                    }
+                  ]
+                }
+                """;
+        final Schema schema = AvroSchemaUtil.convertSchema(avroSchema);
+
+        final GenericRecord record = new GenericData.Record(schema);
+
+        record.put("booleanField", true);
+        record.put("stringField", "text");
+        record.put("intField", 100);
+        record.put("longField", 1000000L);
+        record.put("floatField", 0.12345F);
+        record.put("doubleField", -0.123456789D);
+        record.put("arrayStringField", List.of("a", "b", "c", "d", "e"));
+        record.put("mapField", Map.of(
+                "a",  1L,
+                "b",  2L,
+                "c", -1L));
+
+        final byte[] serialized = AvroSchemaUtil.encode(record);
+        final Object deserialized = AvroSchemaUtil.decode(schema, serialized);
+
+        Assert.assertTrue(deserialized instanceof GenericData.Record);
+        final GenericRecord r = (GenericRecord) deserialized;
+
+        Assert.assertEquals(true, r.get("booleanField"));
+        Assert.assertEquals("text", r.get("stringField").toString());
+        Assert.assertEquals(100, r.get("intField"));
+        Assert.assertEquals(1000000L, r.get("longField"));
+        Assert.assertEquals(0.12345F, r.get("floatField"));
+        Assert.assertEquals(-0.123456789D, r.get("doubleField"));
+
+        final Object arrayStringFieldValue = r.get("arrayStringField");
+        Assert.assertTrue(arrayStringFieldValue instanceof Collection<?>);
+        final List<?> arrayStringFieldCollection = (List<?>) arrayStringFieldValue;
+        for(int i=0; i<arrayStringFieldCollection.size(); i++) {
+            switch (i) {
+                case 0 -> Assert.assertEquals("a", arrayStringFieldCollection.get(i).toString());
+                case 1 -> Assert.assertEquals("b", arrayStringFieldCollection.get(i).toString());
+                case 2 -> Assert.assertEquals("c", arrayStringFieldCollection.get(i).toString());
+                case 3 -> Assert.assertEquals("d", arrayStringFieldCollection.get(i).toString());
+                case 4 -> Assert.assertEquals("e", arrayStringFieldCollection.get(i).toString());
+            }
+        }
+
+        final Object mapFieldValue = r.get("mapField");
+        Assert.assertTrue(mapFieldValue instanceof Map<?,?>);
+        final Map<Utf8,Long> mapFieldValueMap = (Map<Utf8,Long>) mapFieldValue;
+        for(final Map.Entry<Utf8, Long> entry : mapFieldValueMap.entrySet()) {
+            switch (entry.getKey().toString()) {
+                case "a" -> Assert.assertEquals(1L, entry.getValue().longValue());
+                case "b" -> Assert.assertEquals(2L, entry.getValue().longValue());
+                case "c" -> Assert.assertEquals(-1L, entry.getValue().longValue());
+            }
+        }
     }
 
 }

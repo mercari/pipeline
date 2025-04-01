@@ -26,8 +26,9 @@ public class BigtableSchemaUtil {
     public enum Format {
         bytes,
         avro,
+        text,
         hadoop,
-        text
+        avromap
     }
 
     public enum MutationOp implements Serializable {
@@ -90,16 +91,17 @@ public class BigtableSchemaUtil {
                 final Format defaultFormat,
                 final CellType cellType) {
 
-            setDefaults(defaultFormat, null, null, cellType);
+            setDefaults(defaultFormat, null, null, cellType, null);
         }
 
         // for write cell
         public void setDefaults(
                 final Format defaultFormat,
                 final MutationOp defaultOp,
-                final TimestampType defaultTimestampType) {
+                final TimestampType defaultTimestampType,
+                final List<Schema.Field> fields) {
 
-            setDefaults(defaultFormat, defaultOp, defaultTimestampType, null);
+            setDefaults(defaultFormat, defaultOp, defaultTimestampType, null, fields);
         }
 
         // for read cell
@@ -107,7 +109,8 @@ public class BigtableSchemaUtil {
                 final Format defaultFormat,
                 final MutationOp defaultOp,
                 final TimestampType defaultTimestampType,
-                final CellType defaultCellType) {
+                final CellType defaultCellType,
+                final List<Schema.Field> fields) {
 
             if(format == null) {
                 format = defaultFormat;
@@ -127,6 +130,14 @@ public class BigtableSchemaUtil {
             }
             if(qualifiers == null) {
                 qualifiers = new ArrayList<>();
+                switch (mutationOp) {
+                    case SET_CELL, DELETE_FROM_COLUMN -> {
+                        for(final Schema.Field field : fields) {
+                            final ColumnQualifierProperties qualifier = ColumnQualifierProperties.of(field);
+                            qualifiers.add(qualifier);
+                        }
+                    }
+                }
             }
             for(final ColumnQualifierProperties qualifier : qualifiers) {
                 qualifier.setDefaults(format, mutationOp, timestampType);
@@ -288,6 +299,12 @@ public class BigtableSchemaUtil {
             return valueType;
         }
 
+        public static ColumnQualifierProperties of(final Schema.Field field) {
+            final ColumnQualifierProperties qualifier = new ColumnQualifierProperties();
+            qualifier.name = field.getName();
+            qualifier.field = field.getName();
+            return qualifier;
+        }
 
         public List<String> validate(int i, int j) {
             final List<String> errorMessages = new ArrayList<>();
@@ -611,6 +628,7 @@ public class BigtableSchemaUtil {
 
     private static ByteString toByteString(final Format format, final Object primitiveValue) {
         return switch (format) {
+            case text -> toByteStringText(primitiveValue);
             case bytes -> toByteStringBytes(primitiveValue);
             case hadoop -> toByteStringHadoop(primitiveValue);
             case avro -> {
@@ -621,7 +639,37 @@ public class BigtableSchemaUtil {
                     throw new RuntimeException("Failed to convert to avro ByteString", e);
                 }
             }
-
+            case avromap -> {
+                final Map<String, Object> values = new HashMap<>();
+                switch (primitiveValue) {
+                    case Map<?,?> map -> values.putAll((Map<String, Object>)map);
+                    case List<?> list -> {
+                        for(final Object listValue : list) {
+                            if(listValue == null) {
+                                continue;
+                            }
+                            if(!(listValue instanceof Map)) {
+                                throw new IllegalArgumentException("avro");
+                            }
+                            final Map<?,?> map = (Map<?,?>) listValue;
+                            if(!map.containsKey("key") || !map.containsKey("value")) {
+                                throw new IllegalArgumentException("avromap format requires fields key and value. but input: " + map);
+                            }
+                            String key = (String) map.get("key");
+                            Object value = map.get("value");
+                            values.put(key, value);
+                        }
+                    }
+                    default -> throw new IllegalArgumentException("avromap is not supported to convert byte string");
+                }
+                try {
+                    final byte[] bytes = AvroSchemaUtil.encode(values);
+                    System.out.println("base64: " + Base64.getEncoder().encodeToString(bytes));
+                    yield ByteString.copyFrom(bytes);
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to convert to avro ByteString", e);
+                }
+            }
             default -> throw new IllegalArgumentException("Not supported byte string convert format: " + format);
         };
     }
@@ -646,6 +694,22 @@ public class BigtableSchemaUtil {
             default -> throw new IllegalArgumentException("Not supported bytes class: " + primitiveValue.getClass());
         };
         return ByteString.copyFrom(bytes);
+    }
+
+    public static ByteString toByteStringText(final Object primitiveValue) {
+        if(primitiveValue == null) {
+            return ByteString.copyFrom(new byte[0]);
+        }
+        final String text = switch (primitiveValue) {
+            case String s -> s;
+            case Utf8 u -> u.toString();
+            case byte[] bs -> Base64.getEncoder().encodeToString(bs);
+            case ByteBuffer bb -> Base64.getEncoder().encodeToString(bb.array());
+            case ByteString bs -> Base64.getEncoder().encodeToString(bs.toByteArray());
+            case ByteArray ba -> Base64.getEncoder().encodeToString(ba.toByteArray());
+            default -> primitiveValue.toString();
+        };
+        return ByteString.copyFrom(text, StandardCharsets.UTF_8);
     }
 
     public static ByteString toByteStringBytes(final Object primitiveValue) {
@@ -680,7 +744,8 @@ public class BigtableSchemaUtil {
     public static Object toPrimitiveValue(final Format format, final Schema.FieldType fieldtype, final ByteString byteString) {
         return switch (format) {
             case bytes -> toPrimitiveValueFromBytes(fieldtype, byteString);
-            case avro -> {
+            case text -> ElementSchemaUtil.getAsPrimitive(fieldtype, new String(byteString.toByteArray(), StandardCharsets.UTF_8));
+            case avro, avromap -> {
                 try {
                     yield AvroSchemaUtil.decode(fieldtype, byteString.toByteArray());
                 } catch (IOException e) {
@@ -688,7 +753,6 @@ public class BigtableSchemaUtil {
                 }
             }
             case hadoop -> toPrimitiveValueFromWritable(fieldtype, byteString);
-            case text -> ElementSchemaUtil.getAsPrimitive(fieldtype, new String(byteString.toByteArray(), StandardCharsets.UTF_8));
         };
     }
 

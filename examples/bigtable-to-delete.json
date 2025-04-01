@@ -1,0 +1,38 @@
+{
+  "sources": [
+    {
+      "name": "BigtableInput",
+      "module": "bigtable",
+      "parameters": {
+        "projectId": "xxx",
+        "instanceId": "xxx",
+        "tableId": "xxx",
+        "appProfileId": "my_profile",
+        "withRowKey": true,
+        "rowKeyField": "row_key",
+        "flowControl": true,
+        "filter": [
+          { "type": "limit_cells_per_row", "limit": 1 }
+        ]
+      }
+    }
+  ],
+  "sinks": [
+    {
+      "name": "BigtableOutput",
+      "module": "bigtable",
+      "inputs": ["BigtableInput"],
+      "parameters": {
+        "projectId": "xxx",
+        "instanceId": "xxx",
+        "tableId": "xxx",
+        "rowKey": "${row_key}",
+        "mutationOp": "DELETE_FROM_ROW",
+        "appProfileId": "my_profile",
+        "flowControl": true,
+        "maxElementsPerBatch": 1000,
+        "maxBytesPerBatch": 5485760
+      }
+    }
+  ]
+}

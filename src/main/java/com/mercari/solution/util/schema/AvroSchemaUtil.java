@@ -1914,7 +1914,17 @@ public class AvroSchemaUtil {
             case float64 -> decoder.readDouble();
             case map -> {
                 final Map<String, Object> map = new HashMap<>();
-                decoder.readMapStart();
+                long len = decoder.readMapStart();
+                if(len == 0) {
+                    yield map;
+                }
+                do {
+                    for(long i=0; i<len; i++) {
+                        final String key = decoder.readString(null).toString();
+                        final Object value = read(decoder, fieldType.getMapValueType());
+                        map.put(key, value);
+                    }
+                } while((len = decoder.mapNext()) != 0);
                 yield map;
             }
             case element -> decode(fieldType.getElementSchema().getAvroSchema(), decoder.readBytes(null).array());

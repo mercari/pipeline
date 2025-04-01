@@ -9,6 +9,7 @@ Cell data serialization format. The default is `bytes`
 | bytes      | Serialized Values of primitive types in big-endian(Same format as Bytes in HBase). For arrays and structures, they are serialized as JSON strings.     |
 | avro       | Serialize in Avro format with the specified schema. This is used when you want to serialize a structure in an efficient way, instead of a JSON string. |
 | text       | Serialize all types as strings. Arrays and structures are treated as JSON strings. High readability but poor compression efficiency.                   |
+| avromap    | Serialize Avro format with Map type. specified field schema must be array of record(key:string, value:any)                                             |
 
 ### Serialization format for each data type.
 

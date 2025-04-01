@@ -4,32 +4,33 @@ Sink module to write(or delete) inputs data to a specified Cloud Bigtable table.
 
 ## Sink module common parameters
 
-| parameter        | optional | type                | description                                                                             |
-|------------------|----------|---------------------|-----------------------------------------------------------------------------------------|
-| name             | required | String              | Step name. specified to be unique in config file.                                       |
-| module           | required | String              | Specified `bigtable`                                                                    |
-| inputs           | required | Array<String\>      | Step names whose data you want to write from                                            |
-| parameters       | required | Map<String,Object\> | Specify the following individual parameters.                                            |
+| parameter  | optional | type                                    | description                                                               |
+|------------|----------|-----------------------------------------|---------------------------------------------------------------------------|
+| name       | required | String                                  | Step name. specified to be unique in config file.                         |
+| module     | required | String                                  | Specified `bigtable`                                                      |
+| inputs     | required | Array<String\>                          | Step names whose data you want to write from                              |
+| parameters | required | Map<String,Object\>                     | Specify the following individual parameters.                              |
+| logging    | optional | Array<[Logging](../common/logging.md)\> | Step names whose data you want to print log. support `input` and `output` |
 
 ## Bigtable sink module parameters
 
-| parameter              | optional | type           | description                                                                                                                                                                                                                            |
-|------------------------|----------|----------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| projectId              | required | String         | Cloud Bigtable's GCP project ID that you want to write                                                                                                                                                                                 |
-| instanceId             | required | String         | The instance ID of the Cloud Bigtable you want to write                                                                                                                                                                                |
-| tableId                | required | String         | The table name of the Cloud Bigtable you want to write                                                                                                                                                                                 |
-| rowKey                 | required | String         | Specify the template text when you want to specify the rowKey value by conversion using template engine [FreeMarker](https://freemarker.apache.org/)                                                                                   |
-| columns                | required | Array<Column\> | Specify column insertion settings. (If you specify `DELETE_FROM_ROW` in `mutationOp`, it is not required)                                                                                                                              |
-| format                 | optional | Enum           | Specify the cell value serialization format.　One of `bytes`, `avro` or `text`. Used as default value if not specified in each `columns` parameter. The default is `bytes`.                                                             |
-| mutationOp             | optional | Enum           | Specify the change type you want to make to the row. One of `SET_CELL`, `DELETE_FROM_COLUMN`, `DELETE_FROM_FAMILY` or `DELETE_FROM_ROW`. Used as default value if not specified in each `columns` parameter. The default is `SET_CELL` |
-| timestampType          | optional | Enum           | Specify the type of timestamp to apply cells. One of `server`,`event`,`field`,`fixed`. Used as default value if not specified in each `columns` parameter. The default is `server`                                                     |
-| appProfileId           | optional | String         | Specify the app profile id                                                                                                                                                                                                             |
-| flowControl            | optional | Boolean        | Specify flow control enabled                                                                                                                                                                                                           |
-| maxBytesPerBatch       | optional | Integer        | Specify max bytes a batch can have                                                                                                                                                                                                     |
-| maxElementsPerBatch    | optional | Integer        | Specify max elements a batch can have                                                                                                                                                                                                  |
-| maxOutstandingBytes    | optional | Integer        | Specify max number of outstanding bytes allowed before enforcing flow control                                                                                                                                                          |
-| maxOutstandingElements | optional | Integer        | Specify max number of outstanding elements allowed before enforcing flow control                                                                                                                                                       |
-| batching               | optional | Boolean        | Enabling this function reduces the IO load on Bigtable by aggregating mutations by key. Consider using this function when the mutation contains a large number of columns. (The default is false)                                      |
+| parameter              | optional | type                          | description                                                                                                                                                                                                                            |
+|------------------------|----------|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| projectId              | required | String                        | Cloud Bigtable's GCP project ID that you want to write                                                                                                                                                                                 |
+| instanceId             | required | String                        | The instance ID of the Cloud Bigtable you want to write                                                                                                                                                                                |
+| tableId                | required | String                        | The table name of the Cloud Bigtable you want to write                                                                                                                                                                                 |
+| rowKey                 | required | String                        | Specify the template text when you want to specify the rowKey value by conversion using template engine [FreeMarker](https://freemarker.apache.org/)                                                                                   |
+| columns                | required | Array<Column\>                | Specify column insertion settings. (If you specify `DELETE_FROM_ROW` in `mutationOp`, it is not required)                                                                                                                              |
+| format                 | optional | [Enum](../common/bigtable.md) | Specify the cell value serialization format.　One of `bytes`, `avro` or `text`. Used as default value if not specified in each `columns` parameter. The default is `bytes`.                                                             |
+| mutationOp             | optional | Enum                          | Specify the change type you want to make to the row. One of `SET_CELL`, `DELETE_FROM_COLUMN`, `DELETE_FROM_FAMILY` or `DELETE_FROM_ROW`. Used as default value if not specified in each `columns` parameter. The default is `SET_CELL` |
+| timestampType          | optional | Enum                          | Specify the type of timestamp to apply cells. One of `server`,`event`,`field`,`fixed`. Used as default value if not specified in each `columns` parameter. The default is `server`                                                     |
+| appProfileId           | optional | String                        | Specify the app profile id                                                                                                                                                                                                             |
+| flowControl            | optional | Boolean                       | Specify flow control enabled                                                                                                                                                                                                           |
+| maxBytesPerBatch       | optional | Integer                       | Specify max bytes a batch can have                                                                                                                                                                                                     |
+| maxElementsPerBatch    | optional | Integer                       | Specify max elements a batch can have                                                                                                                                                                                                  |
+| maxOutstandingBytes    | optional | Integer                       | Specify max number of outstanding bytes allowed before enforcing flow control                                                                                                                                                          |
+| maxOutstandingElements | optional | Integer                       | Specify max number of outstanding elements allowed before enforcing flow control                                                                                                                                                       |
+| batching               | optional | Boolean                       | Enabling this function reduces the IO load on Bigtable by aggregating mutations by key. Consider using this function when the mutation contains a large number of columns. (The default is false)                                      |
 
 ## Column parameters
 
@@ -56,39 +57,6 @@ If the parameters `format`,`mutationOp`,`timestampType` are not specified, the u
 | format        | optional | Enum   | Specify the cell value serialization format. The default is parent `format` value                                                            |
 | mutationOp    | optional | Enum   | Specify the row change type to be assigned to the field. One of `SET_CELL` or `DELETE_FROM_COLUMN`. The default is parent `mutationOp` value |
 | timestampType | optional | Enum   | Specify the time to use as the timestamp for cell. The default is parent `timestampType` value                                               |
-
-## Format
-
-Specify the cell data serialization format.
-
-| mutationOp | description                                                                                                                                            |
-|------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| bytes      | Serialized Values of primitive types in big-endian(Same format as Bytes in HBase). For arrays and structures, they are serialized as JSON strings.     |
-| avro       | Serialize in Avro format with the specified schema. This is used when you want to serialize a structure in an efficient way, instead of a JSON string. |
-| text       | Serialize all types as strings. Arrays and structures are treated as JSON strings. High readability but poor compression efficiency.                   |
-
-### Serialization format for each data type.
-
-(For more information on Avro's serialization format, please refer to the [official document](https://avro.apache.org/docs/1.11.1/specification/#binary-encoding))
-
-| -         | bytes                  | avro                    | text                   |
-|-----------|------------------------|-------------------------|------------------------|
-| boolean   | bit                    | bit                     | as string              |
-| string    | utf-8                  | long(size) + utf-8      | utf-8                  |
-| bytes     | byte array             | long(size) + byte array | byte array             |
-| int32     | big-endian             | variable-length zig-zag | as string              |
-| int64     | big-endian             | variable-length zig-zag | as string              |
-| float32   | big-endian             | little-endian           | as string              |
-| float64   | big-endian             | little-endian           | as string              |
-| date      | as int32(epoch days)   | as int32(epoch days)    | as string              |
-| time      | as int64(epoch micros) | as int64(epoch micros)  | as string              |
-| timestamp | as int64(epoch micros) | as int64(epoch micros)  | as string              |
-| enum      | as int32(index)        | as int32(index)         | as string              |
-| array     | as string(json array)  | avro array              | as string(json array)  |
-| struct    | as string(json object) | avro record             | as string(json object) |
-| map       | as string(json object) | avro map                | as string(json object) |
-| null      | empty byte array       | empty byte array        | empty byte array       |
-
 
 ## MutationOp
 
@@ -191,3 +159,4 @@ ${user_id}#${utils.bigtable.reverseTimestampMicros(timestampField)}
 ## Related example config files
 
 * [BigQuery to Cloud Bigtable](../../../../examples/bigquery-to-bigtable.json)
+* [Cloud Bigtable to delete](../../../../examples/bigtable-to-delete.json)

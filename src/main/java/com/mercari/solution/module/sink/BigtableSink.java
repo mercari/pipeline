@@ -13,15 +13,14 @@ import org.apache.beam.sdk.io.gcp.bigtable.BigtableWriteResult;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PDone;
+import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.*;
 
 
@@ -30,7 +29,7 @@ public class BigtableSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(BigtableSink.class);
 
-    private static class BigtableSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String instanceId;
@@ -54,9 +53,12 @@ public class BigtableSink extends Sink {
         private Long maxOutstandingBytes;
         private Long maxOutstandingElements;
         private Boolean batching;
+        private Long maxMutationPerBatchElement;
 
         private Integer operationTimeoutSecond;
         private Integer attemptTimeoutSecond;
+
+        private String emulatorHost;
 
         public void validate() {
             final List<String> errorMessages = new ArrayList<>();
@@ -74,7 +76,7 @@ public class BigtableSink extends Sink {
             }
             if(columns == null || columns.isEmpty()) {
                 if(!BigtableSchemaUtil.MutationOp.DELETE_FROM_ROW.equals(mutationOp)) {
-                    errorMessages.add("parameters.columns must not be empty");
+                    //errorMessages.add("parameters.columns must not be empty");
                 }
             } else {
                 for(int i=0; i<columns.size(); i++) {
@@ -118,7 +120,7 @@ public class BigtableSink extends Sink {
             }
         }
 
-        public void setDefaults() {
+        public void setDefaults(final List<Schema.Field> fields) {
             if(format == null) {
                 format = BigtableSchemaUtil.Format.bytes;
             }
@@ -132,7 +134,7 @@ public class BigtableSink extends Sink {
                 columns = new ArrayList<>();
             }
             for(var column : columns) {
-                column.setDefaults(format, mutationOp, timestampType);
+                column.setDefaults(format, mutationOp, timestampType, fields);
             }
             if(withWriteResults == null) {
                 withWriteResults = false;
@@ -143,38 +145,52 @@ public class BigtableSink extends Sink {
             if(batching == null) {
                 batching = false;
             }
+            if(maxMutationPerBatchElement == null) {
+                maxMutationPerBatchElement = 1000L;
+            }
         }
 
     }
 
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
-        final BigtableSinkParameters parameters = getParameters(BigtableSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
-        parameters.setDefaults();
 
         final Schema inputSchema = Union.createUnionSchema(inputs);
+        parameters.setDefaults(inputSchema.getFields());
+
         final PCollection<MElement> input = inputs
                 .apply("Union", Union.flatten()
                         .withWaits(getWaits())
                         .withStrategy(getStrategy()));
 
-        PCollection<KV<ByteString, Iterable<Mutation>>> mutation = input
-                .apply("ToMutation", ParDo.of(new MutationDoFn(parameters, inputSchema)));
+        final TupleTag<KV<ByteString, Iterable<Mutation>>> outputTag = new TupleTag<>() {};
+        final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+
+        final PCollectionTuple mutationTuple = input
+                .apply("ToMutation", ParDo
+                        .of(new MutationDoFn(
+                            getJobName(), getName(),
+                            parameters, inputSchema,
+                            getLoggings(), getFailFast(), failuresTag))
+                        .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+
+        PCollection<KV<ByteString, Iterable<Mutation>>> mutation = mutationTuple.get(outputTag);
 
         if(parameters.batching) {
             mutation = mutation
                     .apply("GroupByKey", GroupByKey.create())
-                    .apply("Batching", ParDo.of(new GroupByKeyDoFn()));
+                    .apply("Batching", ParDo.of(new GroupByKeyDoFn(parameters.maxMutationPerBatchElement)));
         }
 
         final BigtableIO.Write write = createWrite(parameters);
         if(parameters.withWriteResults) {
-            final PCollection<BigtableWriteResult> writeResults = mutation
-                    .apply("WriteWithResult", write.withWriteResults());
-            // TODO output writeResult
-            final PDone done = PDone.in(inputs.getPipeline());
-            return MCollectionTuple.done(done);
+            final PCollection<MElement> writeResults = mutation
+                    .apply("WriteWithResult", write.withWriteResults())
+                    .apply("FormatResult", ParDo.of(new ResultDoFn()));
+            return MCollectionTuple
+                    .of(writeResults, ResultDoFn.outputSchema());
         } else {
             final PDone done = mutation
                     .apply("Write", write);
@@ -183,7 +199,7 @@ public class BigtableSink extends Sink {
     }
 
     private static BigtableIO.Write createWrite(
-            final BigtableSinkParameters parameters) {
+            final Parameters parameters) {
 
         BigtableIO.Write write = BigtableIO
                 .write()
@@ -216,11 +232,17 @@ public class BigtableSink extends Sink {
         if(parameters.attemptTimeoutSecond != null) {
             write = write.withAttemptTimeout(Duration.standardSeconds(parameters.attemptTimeoutSecond));
         }
+        if(parameters.emulatorHost != null) {
+            write = write.withEmulator(parameters.emulatorHost);
+        }
 
         return write;
     }
 
     private static class MutationDoFn extends DoFn<MElement, KV<ByteString, Iterable<Mutation>>> {
+
+        private final String jobName;
+        private final String moduleName;
 
         private final String rowKey;
         private final List<BigtableSchemaUtil.ColumnFamilyProperties> columns;
@@ -230,16 +252,38 @@ public class BigtableSink extends Sink {
         private final Set<String> valueArgs;
         private final Set<String> templateArgs;
 
+        private final Map<String, Logging> logging;
+
+        private final boolean failFast;
+        private final TupleTag<MElement> failuresTag;
+
         private transient org.apache.avro.Schema avroSchema;
 
         private transient Template templateRowKey;
 
 
-        public MutationDoFn(final BigtableSinkParameters parameters, final Schema inputSchema) {
+        public MutationDoFn(
+                final String jobName,
+                final String moduleName,
+                //
+                final Parameters parameters,
+                final Schema inputSchema,
+                //
+                final List<Logging> logging,
+                final boolean failFast,
+                final TupleTag<MElement> failuresTag) {
+
+            this.jobName = jobName;
+            this.moduleName = moduleName;
+
             this.rowKey = parameters.rowKey;
             this.columns = parameters.columns;
             this.mutationOp = parameters.mutationOp;
             this.inputSchema = inputSchema;
+
+            this.logging = Logging.map(logging);
+            this.failFast = failFast;
+            this.failuresTag = failuresTag;
 
             this.templateArgs = new HashSet<>();
             this.templateArgs.addAll(TemplateUtil.extractTemplateArgs(rowKey, inputSchema));
@@ -263,38 +307,55 @@ public class BigtableSink extends Sink {
 
         @ProcessElement
         public void processElement(final ProcessContext c) {
-            final MElement element = c.element();
-            if(element == null) {
+            final MElement input = c.element();
+            if(input == null) {
                 return;
             }
+            Logging.log(LOG, logging, "input", input);
 
-            final Map<String,Object> templateVariables = element.asStandardMap(inputSchema, templateArgs);
-            templateVariables.put("_timestamp", DateTimeUtil.toInstant(c.timestamp().getMillis() * 1000L));
-            final String rowKeyString = TemplateUtil.executeStrictTemplate(templateRowKey, templateVariables);
-            final ByteString rowKey = ByteString.copyFrom(rowKeyString, StandardCharsets.UTF_8);
+            try {
+                final Map<String, Object> templateVariables = input.asStandardMap(inputSchema, templateArgs);
+                templateVariables.put("__timestamp", DateTimeUtil.toInstant(c.timestamp().getMillis() * 1000L));
+                final String rowKeyString = TemplateUtil.executeStrictTemplate(templateRowKey, templateVariables);
+                final ByteString rowKey = ByteString.copyFrom(rowKeyString, StandardCharsets.UTF_8);
 
-            if(BigtableSchemaUtil.MutationOp.DELETE_FROM_ROW.equals(mutationOp)) {
-                final Mutation mutation = Mutation.newBuilder()
-                        .setDeleteFromRow(Mutation.DeleteFromRow.newBuilder()
-                                .build())
-                        .build();
-                final KV<ByteString, Iterable<Mutation>> output = KV.of(rowKey, List.of(mutation));
+                if (BigtableSchemaUtil.MutationOp.DELETE_FROM_ROW.equals(mutationOp)) {
+                    final Mutation mutation = Mutation.newBuilder()
+                            .setDeleteFromRow(Mutation.DeleteFromRow.newBuilder()
+                                    .build())
+                            .build();
+                    final KV<ByteString, Iterable<Mutation>> output = KV.of(rowKey, List.of(mutation));
+                    c.output(output);
+                    return;
+                }
+
+                final Map<String, Object> primitiveValues = input.asPrimitiveMap(valueArgs);
+                final List<Mutation> mutations = BigtableSchemaUtil.toMutations(columns, primitiveValues, templateVariables, c.timestamp());
+                final KV<ByteString, Iterable<Mutation>> output = KV.of(rowKey, mutations);
                 c.output(output);
-                return;
+                if(logging.containsKey("output")) {
+                    Logging.log(LOG, logging, "output", input);
+                }
+            } catch (final Throwable e) {
+                final MFailure failure = MFailure
+                        .of(jobName, moduleName, input.toString(), e, c.timestamp());
+                final String errorMessage = String.format("Failed to convert input %s, error: %s", input, e.getMessage());
+                LOG.error(errorMessage);
+                if(failFast) {
+                    throw new RuntimeException(errorMessage, e);
+                }
+                c.output(failuresTag, failure.toElement(c.timestamp()));
             }
-
-            final Map<String, Object> primitiveValues = element.asPrimitiveMap(valueArgs);
-            final List<Mutation> mutations = BigtableSchemaUtil.toMutations(columns, primitiveValues, templateVariables, c.timestamp());
-            final KV<ByteString, Iterable<Mutation>> output = KV.of(rowKey, mutations);
-            c.output(output);
         }
 
     }
 
     private static class GroupByKeyDoFn extends DoFn<KV<ByteString, Iterable<Iterable<Mutation>>>, KV<ByteString, Iterable<Mutation>>> {
 
-        @Setup
-        public void setup() {
+        private final Long maxMutationPerBatchElement;
+
+        GroupByKeyDoFn(final Long maxMutationPerBatchElement) {
+            this.maxMutationPerBatchElement = maxMutationPerBatchElement;
         }
 
         @ProcessElement
@@ -308,23 +369,54 @@ public class BigtableSink extends Sink {
             int count = 0;
             long size = 0;
 
-            final ByteString key = inputs.getKey();
-            final List<Mutation> mutations = new ArrayList<>();
-            for(final Iterable<Mutation> values : inputs.getValue()) {
-                for(final Mutation mutation : values) {
-                    mutations.add(mutation);
-                    count++;
-                    if(count > 1000) {
-                        c.output(KV.of(key, new ArrayList<>(mutations)));
-                        count = 0;
-                        mutations.clear();
+            try {
+                final ByteString key = inputs.getKey();
+                final List<Mutation> mutations = new ArrayList<>();
+                for(final Iterable<Mutation> values : inputs.getValue()) {
+                    for(final Mutation mutation : values) {
+                        mutations.add(mutation);
+                        count++;
+                        if(count > maxMutationPerBatchElement) {
+                            c.output(KV.of(key, new ArrayList<>(mutations)));
+                            count = 0;
+                            mutations.clear();
+                        }
                     }
                 }
+
+                if(!mutations.isEmpty()) {
+                    c.output(KV.of(key, mutations));
+                }
+            } catch (final Throwable e) {
+
             }
 
-            if(!mutations.isEmpty()) {
-                c.output(KV.of(key, mutations));
+        }
+
+    }
+
+    private static class ResultDoFn extends DoFn<BigtableWriteResult, MElement> {
+
+        public static Schema outputSchema() {
+            return Schema.of(List.of(
+                    Schema.Field.of("rowsWritten", Schema.FieldType.INT64),
+                    Schema.Field.of("timestamp", Schema.FieldType.TIMESTAMP),
+                    Schema.Field.of("eventtime", Schema.FieldType.TIMESTAMP)));
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final BigtableWriteResult result = c.element();
+            if(result == null) {
+                return;
             }
+
+            final Map<String, Object> values = new HashMap<>();
+            values.put("rowsWritten", result.getRowsWritten());
+            values.put("timestamp", DateTimeUtil.toEpochMicroSecond(Instant.now()));
+            values.put("eventtime", c.timestamp().getMillis() * 1000L);
+            final MElement output = MElement.of(values, c.timestamp());
+            c.output(output);
         }
 
     }
