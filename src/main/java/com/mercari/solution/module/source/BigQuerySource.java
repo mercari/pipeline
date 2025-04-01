@@ -9,6 +9,7 @@ import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.gcp.BigQueryUtil;
+import com.mercari.solution.util.gcp.ParameterManagerUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.pipeline.MicroBatch;
 import com.mercari.solution.util.pipeline.OptionUtil;
@@ -33,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 
@@ -243,8 +245,16 @@ public class BigQuerySource extends Source {
         if(parameters.query != null) {
             final String query;
             if(parameters.query.startsWith("gs://")) {
+                LOG.info("query parameter is GCS path: {}", parameters.query);
                 final String rawQuery = StorageUtil.readString(parameters.query);
                 query = TemplateUtil.executeStrictTemplate(rawQuery, templateArgs);
+            } else if(ParameterManagerUtil.isParameterVersionResource(parameters.query)) {
+                LOG.info("query parameter is Parameter Manager resource: {}", parameters.query);
+                final ParameterManagerUtil.Version version = ParameterManagerUtil.getParameterVersion(parameters.query);
+                if(version.payload == null) {
+                    throw new IllegalArgumentException("query resource does not exists for: " + parameters.query);
+                }
+                query = new String(version.payload, StandardCharsets.UTF_8);
             } else {
                 query = parameters.query;
             }
@@ -258,7 +268,12 @@ public class BigQuerySource extends Source {
                 read = read.withQueryLocation(parameters.queryLocation);
             }
             if(parameters.queryTempDataset != null) {
-                read = read.withQueryTempDataset(parameters.queryTempDataset);
+                if(parameters.queryTempDataset.contains(".")) {
+                    final String[] strs = parameters.queryTempDataset.split("\\.", 2);
+                    read = read.withQueryTempProjectAndDataset(strs[0], strs[1]);
+                } else {
+                    read = read.withQueryTempDataset(parameters.queryTempDataset);
+                }
             }
 
             final TableSchema tableSchema = BigQueryUtil.getTableSchemaFromQuery(parameters.queryRunProjectId, query);
