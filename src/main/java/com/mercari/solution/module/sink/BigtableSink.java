@@ -42,16 +42,20 @@ public class BigtableSink extends Sink {
         private BigtableSchemaUtil.Format format;
         private BigtableSchemaUtil.MutationOp mutationOp;
         private BigtableSchemaUtil.TimestampType timestampType;
+        private String timestampField;
+        private String timestampValue;
 
         private Boolean withWriteResults;
 
         // performance control config
         private String appProfileId;
         private Boolean flowControl;
+
         private Long maxBytesPerBatch;
         private Long maxElementsPerBatch;
         private Long maxOutstandingBytes;
         private Long maxOutstandingElements;
+
         private Boolean batching;
         private Long maxMutationPerBatchElement;
 
@@ -134,7 +138,7 @@ public class BigtableSink extends Sink {
                 columns = new ArrayList<>();
             }
             for(var column : columns) {
-                column.setDefaults(format, mutationOp, timestampType, fields);
+                column.setDefaults(format, mutationOp, timestampType, timestampField, timestampValue, fields);
             }
             if(withWriteResults == null) {
                 withWriteResults = false;

@@ -64,6 +64,8 @@ public class BigtableSchemaUtil {
         // for sink
         private MutationOp mutationOp;
         private TimestampType timestampType;
+        private String timestampField;
+        private String timestampValue;
 
         // for source
         private CellType cellType;
@@ -87,21 +89,26 @@ public class BigtableSchemaUtil {
             return errorMessages;
         }
 
+        // for source read and transform read
         public void setDefaults(
                 final Format defaultFormat,
                 final CellType cellType) {
 
-            setDefaults(defaultFormat, null, null, cellType, null);
+            setDefaults(defaultFormat, null, null, null, null, cellType, null);
         }
 
-        // for write cell
+        // for sink write cell
         public void setDefaults(
                 final Format defaultFormat,
                 final MutationOp defaultOp,
                 final TimestampType defaultTimestampType,
+                final String defaultTimestampField,
+                final String defaultTimestampValue,
                 final List<Schema.Field> fields) {
 
-            setDefaults(defaultFormat, defaultOp, defaultTimestampType, null, fields);
+            setDefaults(defaultFormat, defaultOp,
+                    defaultTimestampType, defaultTimestampField, defaultTimestampValue,
+                    null, fields);
         }
 
         // for read cell
@@ -109,6 +116,8 @@ public class BigtableSchemaUtil {
                 final Format defaultFormat,
                 final MutationOp defaultOp,
                 final TimestampType defaultTimestampType,
+                final String defaultTimestampField,
+                final String defaultTimestampValue,
                 final CellType defaultCellType,
                 final List<Schema.Field> fields) {
 
@@ -125,6 +134,12 @@ public class BigtableSchemaUtil {
                         .ofNullable(defaultTimestampType)
                         .orElse(TimestampType.server);
             }
+            if(timestampField == null) {
+                timestampField = defaultTimestampField;
+            }
+            if(timestampValue == null) {
+                timestampValue = defaultTimestampValue;
+            }
             if(cellType == null) {
                 cellType = Optional.ofNullable(defaultCellType).orElse(CellType.last);
             }
@@ -140,7 +155,7 @@ public class BigtableSchemaUtil {
                 }
             }
             for(final ColumnQualifierProperties qualifier : qualifiers) {
-                qualifier.setDefaults(format, mutationOp, timestampType);
+                qualifier.setDefaults(format, mutationOp, timestampType, timestampField, timestampValue);
             }
         }
 
@@ -311,7 +326,7 @@ public class BigtableSchemaUtil {
             if(name == null) {
                 errorMessages.add("parameters.columns[" + i + "].qualifiers[" + j + "].name must not be null");
             }
-            if(field == null) {
+            if(field == null && name == null) {
                 errorMessages.add("parameters.columns[" + i + "].qualifiers[" + j + "].field must not be empty");
             }
             if(symbols == null) {
@@ -334,20 +349,31 @@ public class BigtableSchemaUtil {
             return errorMessages;
         }
 
-        public void setDefaults(
-                final Format defaultFormat,
-                final MutationOp defaultOp,
-                final TimestampType defaultTimestampType) {
-
-            setDefaults(defaultFormat, defaultOp, defaultTimestampType, null);
-        }
-
+        // for write
         public void setDefaults(
                 final Format defaultFormat,
                 final MutationOp defaultOp,
                 final TimestampType defaultTimestampType,
+                final String defaultTimestampField,
+                final String defaultTimestampValue) {
+
+            setDefaults(defaultFormat, defaultOp,
+                    defaultTimestampType, defaultTimestampField, defaultTimestampValue,
+                    null);
+        }
+
+        // for read
+        private void setDefaults(
+                final Format defaultFormat,
+                final MutationOp defaultOp,
+                final TimestampType defaultTimestampType,
+                final String defaultTimestampField,
+                final String defaultTimestampValue,
                 final CellType defaultCellType) {
 
+            if(field == null) {
+                field = name;
+            }
             if(format == null) {
                 format = defaultFormat;
             }
@@ -356,6 +382,12 @@ public class BigtableSchemaUtil {
             }
             if(timestampType == null) {
                 timestampType = defaultTimestampType;
+            }
+            if(this.timestampField == null) {
+                this.timestampField = defaultTimestampField;
+            }
+            if(this.timestampValue == null) {
+                this.timestampValue = defaultTimestampValue;
             }
             if(cellType == null) {
                 cellType = defaultCellType;
