@@ -29,12 +29,20 @@ public class ElementToEntityConverter {
 
     private ElementToEntityConverter() {}
 
+    public static Entity.Builder convertBuilder(final Schema schema, final MElement element) {
+        return switch (element.getType()) {
+            case ELEMENT -> convertBuilder(schema, element.asPrimitiveMap(), List.of());
+            case AVRO -> AvroToEntityConverter.convertBuilder(schema.getAvroSchema(), (GenericRecord) element.getValue(), List.of());
+            case ROW -> RowToEntityConverter.convertBuilder(schema.getRowSchema(), (Row) element.getValue(), List.of());
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
     public static Entity.Builder convertBuilder(final Schema schema, final MElement element, final List<String> excludeFromIndexFields) {
         return switch (element.getType()) {
             case ELEMENT -> convertBuilder(schema, element.asPrimitiveMap(), excludeFromIndexFields);
             case AVRO -> AvroToEntityConverter.convertBuilder(schema.getAvroSchema(), (GenericRecord) element.getValue(), excludeFromIndexFields);
             case ROW -> RowToEntityConverter.convertBuilder(schema.getRowSchema(), (Row) element.getValue(), excludeFromIndexFields);
-            //case STRUCT -> StructToEntityConverter.convertBuilder(schema.getRowSchema(), (Struct) element.getValue(), excludeFromIndexFields);
             default -> throw new IllegalArgumentException();
         };
     }

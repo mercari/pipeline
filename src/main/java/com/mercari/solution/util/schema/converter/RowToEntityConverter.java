@@ -22,6 +22,10 @@ import java.util.stream.Collectors;
 
 public class RowToEntityConverter {
 
+    public static Entity.Builder convertBuilder(final Schema schema, final Row row) {
+        return convertBuilder(schema, row, List.of());
+    }
+
     public static Entity.Builder convertBuilder(final Schema schema, final Row row, final List<String> excludeFromIndexFields) {
 
         final Entity.Builder builder = Entity.newBuilder();

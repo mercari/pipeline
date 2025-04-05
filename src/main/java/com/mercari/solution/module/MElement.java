@@ -103,12 +103,20 @@ public class MElement implements Serializable {
         return new MElement(0, DataType.STRUCT, struct, epochMillis);
     }
 
-    public static MElement of(Entity entity, org.joda.time.Instant timestamp) {
-        return new MElement(0, DataType.ENTITY, entity, timestamp.getMillis());
-    }
-
     public static MElement of(Document document, org.joda.time.Instant timestamp) {
         return new MElement(0, DataType.DOCUMENT, document, timestamp.getMillis());
+    }
+
+    public static MElement of(Document document, long epochMillis) {
+        return new MElement(0, DataType.DOCUMENT, document, epochMillis);
+    }
+
+    public static MElement of(Entity entity, long epochMillis) {
+        return new MElement(0, DataType.ENTITY, entity, epochMillis);
+    }
+
+    public static MElement of(Entity entity, org.joda.time.Instant timestamp) {
+        return new MElement(0, DataType.ENTITY, entity, timestamp.getMillis());
     }
 
     public static MElement of(PubsubMessage message, org.joda.time.Instant timestamp) {
@@ -152,21 +160,41 @@ public class MElement implements Serializable {
         return switch (dataType) {
             case ELEMENT -> switch (type) {
                 case ELEMENT -> this;
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Convert from: " + type + " to Element is not yet supported");
             };
             case AVRO -> switch (type) {
                 case ELEMENT -> of(ElementToAvroConverter.convert(schema, this), epochMillis);
                 case AVRO -> this;
                 case ROW -> of(RowToRecordConverter.convert(schema.getAvroSchema(), (Row)value), epochMillis);
-                default -> throw new IllegalArgumentException();
+                case STRUCT -> of(StructToAvroConverter.convert(schema.getAvroSchema(), (Struct) value), epochMillis);
+                case DOCUMENT -> of(DocumentToAvroConverter.convert(schema.getAvroSchema(), (Document) value), epochMillis);
+                case ENTITY -> of(EntityToAvroConverter.convert(schema.getAvroSchema(), (Entity) value), epochMillis);
+                default -> throw new IllegalArgumentException("Convert from: " + type + " to Avro is not yet supported");
             };
             case ROW -> switch (type) {
                 case ELEMENT -> of(ElementToRowConverter.convert(schema, this), epochMillis);
-                case AVRO -> of(ElementToAvroConverter.convert(schema, this), epochMillis);
-                case ROW -> of(RowToRecordConverter.convert(schema.getAvroSchema(), (Row)value), epochMillis);
-                default -> throw new IllegalArgumentException();
+                case AVRO -> of(AvroToRowConverter.convert(schema.getRowSchema(), (GenericRecord) value), epochMillis);
+                case ROW -> this;
+                case DOCUMENT -> of(DocumentToRowConverter.convert(schema.getRowSchema(), (Document) value), epochMillis);
+                case ENTITY -> of(EntityToRowConverter.convert(schema.getRowSchema(), (Entity) value), epochMillis);
+                default -> throw new IllegalArgumentException("Convert from: " + type + " to Row is not yet supported");
             };
-            default -> throw new IllegalArgumentException();
+            case DOCUMENT -> switch (type) {
+                case ELEMENT -> of(ElementToDocumentConverter.convertBuilder(schema, this).build(), epochMillis);
+                case AVRO -> of(AvroToDocumentConverter.convertBuilder(schema.getAvroSchema(), (GenericRecord) value).build(), epochMillis);
+                case ROW -> of(RowToDocumentConverter.convertBuilder(schema.getRowSchema(), (Row) value).build(), epochMillis);
+                case DOCUMENT -> this;
+                case ENTITY -> of(EntityToDocumentConverter.convert(schema.getRowSchema(), (Entity) value).build(), epochMillis);
+                default -> throw new IllegalArgumentException("Convert from: " + type + " to Document is not yet supported");
+            };
+            case ENTITY -> switch (type) {
+                case ELEMENT -> of(ElementToEntityConverter.convertBuilder(schema, this).build(), epochMillis);
+                case AVRO -> of(AvroToEntityConverter.convertBuilder(schema.getAvroSchema(), (GenericRecord) value).build(), epochMillis);
+                case ROW -> of(RowToEntityConverter.convertBuilder(schema.getRowSchema(), (Row) value).build(), epochMillis);
+                case ENTITY -> this;
+                default -> throw new IllegalArgumentException("Convert from: " + type + " to Entity is not yet supported");
+            };
+            default -> throw new IllegalArgumentException("Convert from: " + type + " to: " + dataType + " is not yet supported");
         };
     }
 
@@ -522,7 +550,10 @@ public class MElement implements Serializable {
                     final List<Object> mapList = new ArrayList<>();
                     for(final Object value : list) {
                         final Map<String, Object> outputMap = new HashMap<>();
-                        final Map<String, Object> childMap = (Map<String, Object>) value;
+                        final Map<String, Object> childMap = switch (value) {
+                            case Map map -> map;
+                            default -> throw new IllegalArgumentException("Illegal each value: " + value);
+                        };
                         for(Schema.Field childField : fieldType.getArrayValueType().getElementSchema().getFields()) {
                             final Object childValue = getValue(childMap, childField.getName(), childField.getFieldType());
                             outputMap.put(childField.getName(), childValue);

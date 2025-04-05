@@ -43,7 +43,7 @@ public class RowToElementConverter {
             case INT64 -> Schema.FieldType.type(Schema.Type.int64);
             case FLOAT -> Schema.FieldType.type(Schema.Type.float32);
             case DOUBLE -> Schema.FieldType.type(Schema.Type.float64);
-            case DECIMAL -> Schema.FieldType.type(Schema.Type.decimal);
+            case DECIMAL -> Schema.FieldType.decimal(38, 9);
             case DATETIME -> Schema.FieldType.type(Schema.Type.timestamp);
             case LOGICAL_TYPE -> {
                 if(RowSchemaUtil.isLogicalTypeDate(fieldType)) {

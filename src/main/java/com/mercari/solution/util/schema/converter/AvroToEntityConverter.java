@@ -22,6 +22,10 @@ public class AvroToEntityConverter {
 
     private static final String KEY_FIELD_NAME = "__key__";
 
+    public static Entity.Builder convertBuilder(final Schema schema, final GenericRecord record) {
+        return convertBuilder(schema, record, List.of());
+    }
+
     public static Entity.Builder convertBuilder(final Schema schema, final GenericRecord record, final List<String> excludeFromIndexFields) {
         final Entity.Builder builder = Entity.newBuilder();
         for(final Schema.Field field : schema.getFields()) {
