@@ -6,43 +6,47 @@
 
   <groupId>com.mercari.solution</groupId>
   <artifactId>pipeline</artifactId>
-  <version>1.0.0</version>
+  <version>1.0.0-alpha1</version>
   <name>Mercari Pipeline</name>
 
   <packaging>${packaging}</packaging>
 
   <properties>
-    <beam.version>2.61.0</beam.version>
+    <beam.version>2.64.0</beam.version>
 
-    <freemarker.version>2.3.33</freemarker.version>
     <hadoop.version>3.4.1</hadoop.version>
-    <hbase.version>2.6.1</hbase.version>
-    <onnxruntime.version>1.20.0</onnxruntime.version>
+    <hbase.version>2.6.2</hbase.version>
+    <onnxruntime.version>1.21.0</onnxruntime.version>
     <onnxruntime-extensions.version>0.13.0</onnxruntime-extensions.version>
     <onnx.version>1.17.0-1.5.11</onnx.version>
-    <solr.version>9.7.0</solr.version>
-    <lucene.version>9.11.1</lucene.version>
-    <neo4j.version>5.19.0</neo4j.version>
-    <h2.version>2.3.232</h2.version>
-    <pdfbox.version>3.0.3</pdfbox.version>
-    <jts.version>1.20.0</jts.version>
+
+    <freemarker.version>2.3.34</freemarker.version>
+    <exp4j.version>0.4.8</exp4j.version>
+    <jsoup.version>1.19.1</jsoup.version>
+    <snakeyaml.version>2.9</snakeyaml.version>
+    <commons-math3.version>3.6.1</commons-math3.version>
+    <lucene.version>10.1.0</lucene.version>
+    <pdfbox.version>3.0.4</pdfbox.version>
+
     <mysql-connector.version>8.4.0</mysql-connector.version>
     <postgresql-connector.version>42.7.4</postgresql-connector.version>
     <sqlserver-connector.version>8.4.1.jre11</sqlserver-connector.version>
-    <alloydb-connector.version>1.1.7</alloydb-connector.version>
+    <alloydb-connector.version>1.1.8</alloydb-connector.version>
     <jdbc-socket-factory.version>1.21.0</jdbc-socket-factory.version>
-    <drive.version>v3-rev20221023-2.0.0</drive.version>
-    <exp4j.version>0.4.8</exp4j.version>
-    <jsoup.version>1.18.1</jsoup.version>
+    <h2.version>2.3.232</h2.version>
+    <drive.version>v3-rev20250220-2.0.0</drive.version>
+
+    <slf4j.version>2.0.16</slf4j.version>
     <junit.version>4.13.1</junit.version>
+    <mockito.version>3.0.0</mockito.version>
+
+    <maven-jib-plugin.version>3.4.4</maven-jib-plugin.version>
     <maven-compiler-plugin.version>3.8.1</maven-compiler-plugin.version>
-    <maven-exec-plugin.version>1.6.0</maven-exec-plugin.version>
     <maven-jar-plugin.version>3.0.2</maven-jar-plugin.version>
     <maven-shade-plugin.version>3.1.0</maven-shade-plugin.version>
-    <mockito.version>3.0.0</mockito.version>
-    <slf4j.version>1.7.30</slf4j.version>
-    <jakarta-servlet.version>6.1.0</jakarta-servlet.version>
     <maven-surefire-plugin.version>2.21.0</maven-surefire-plugin.version>
+
+    <jakarta-servlet.version>6.1.0</jakarta-servlet.version>
 
     <packaging>jar</packaging>
     <jib.entrypoint>INHERIT</jib.entrypoint>
@@ -141,6 +145,7 @@
       <plugin>
         <groupId>com.google.cloud.tools</groupId>
         <artifactId>jib-maven-plugin</artifactId>
+        <version>${maven-jib-plugin.version}</version>
         <executions>
           <execution>
             <phase>package</phase>
@@ -172,18 +177,6 @@
 
     </plugins>
 
-    <pluginManagement>
-      <plugins>
-        <plugin>
-          <groupId>org.codehaus.mojo</groupId>
-          <artifactId>exec-maven-plugin</artifactId>
-          <version>${maven-exec-plugin.version}</version>
-          <configuration>
-            <cleanupDaemonThreads>false</cleanupDaemonThreads>
-          </configuration>
-        </plugin>
-      </plugins>
-    </pluginManagement>
   </build>
 
   <profiles>
@@ -287,7 +280,7 @@
       </dependencies>
     </profile>
 
-    <!-- Makes the PortableRunner available when running a portable pipeline job. -->
+    <!-- Makes the FlinkRunner available when running a flink pipeline job. -->
     <profile>
       <id>flink</id>
       <activation>
@@ -306,6 +299,24 @@
       </dependencies>
     </profile>
 
+    <!-- Makes the SparkRunner available when running a spark pipeline job. -->
+    <profile>
+      <id>spark</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <jib.entrypoint>java,-cp,/template/MPipeline/libs/*:/template/MPipeline/classes:/template/MPipeline/resources/libs/*,-Xmx4096m,com.mercari.solution.MPipeline,--runner=SparkRunner</jib.entrypoint>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-spark-3</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
     <!-- Makes the Config Builder on Jetty available. -->
     <profile>
       <id>server</id>
@@ -314,7 +325,7 @@
       </activation>
       <properties>
         <packaging>war</packaging>
-        <jetty.version>11.0.24</jetty.version>
+        <jetty.version>11.0.25</jetty.version>
         <jib.image>jetty:${jetty.version}-jdk21</jib.image>
         <jib.entrypoint>java,-jar,/usr/local/jetty/start.jar</jib.entrypoint>
         <jib.appRoot>/var/lib/jetty/webapps/ROOT</jib.appRoot>
@@ -396,6 +407,8 @@
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-extensions-sql-zetasql -->
+    <!-- remove comment out if zetasql planner is needed -->
+    <!--
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-extensions-sql-zetasql</artifactId>
@@ -406,16 +419,11 @@
         </exclusion>
       </exclusions>
     </dependency>
+    -->
 
     <!-- Big Data -->
-    <!-- https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-common -->
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-common</artifactId>
-      <version>${hadoop.version}</version>
-    </dependency>
-
     <!-- https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-mapreduce-client-core -->
+    <!--
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-mapreduce-client-core</artifactId>
@@ -427,12 +435,21 @@
         </exclusion>
       </exclusions>
     </dependency>
+    -->
 
     <!-- https://mvnrepository.com/artifact/org.apache.hbase/hbase-common -->
     <dependency>
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-common</artifactId>
       <version>${hbase.version}</version>
+      <!--
+      <exclusions>
+        <exclusion>
+          <groupId>io.opentelemetry</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+        -->
     </dependency>
 
     <!-- Machine Learning -->
@@ -458,39 +475,22 @@
     </dependency>
 
     <!-- Search Engine -->
-    <!-- https://mvnrepository.com/artifact/org.apache.solr/solr-core -->
-    <dependency>
-      <groupId>org.apache.solr</groupId>
-      <artifactId>solr-core</artifactId>
-      <version>${solr.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/org.apache.lucene/lucene-analysis-kuromoji -->
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-analysis-kuromoji</artifactId>
       <version>${lucene.version}</version>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.apache.lucene/lucene-analysis-opennlp -->
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-analysis-opennlp</artifactId>
       <version>${lucene.version}</version>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.apache.lucene/lucene-analysis-icu -->
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-analysis-icu</artifactId>
       <version>${lucene.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/com.h2database/h2 -->
-    <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2</artifactId>
-      <version>${h2.version}</version>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/org.apache.pdfbox/pdfbox -->
@@ -498,13 +498,6 @@
       <groupId>org.apache.pdfbox</groupId>
       <artifactId>pdfbox</artifactId>
       <version>${pdfbox.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/org.locationtech.jts/jts-core -->
-    <dependency>
-      <groupId>org.locationtech.jts</groupId>
-      <artifactId>jts-core</artifactId>
-      <version>${jts.version}</version>
     </dependency>
 
     <!-- Google Services -->
@@ -590,7 +583,13 @@
       <groupId>com.google.cloud</groupId>
       <artifactId>alloydb-jdbc-connector</artifactId>
       <version>${alloydb-connector.version}</version>
-      <scope>runtime</scope>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/com.h2database/h2 -->
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>${h2.version}</version>
     </dependency>
 
     <!-- Utils -->
@@ -615,18 +614,18 @@
       <version>${jsoup.version}</version>
     </dependency>
 
-    <!-- for solr dependency conflict -->
-    <!-- https://mvnrepository.com/artifact/jakarta.xml.bind/jakarta.xml.bind-api -->
+    <!-- https://mvnrepository.com/artifact/org.snakeyaml/snakeyaml-engine -->
     <dependency>
-      <groupId>jakarta.xml.bind</groupId>
-      <artifactId>jakarta.xml.bind-api</artifactId>
-      <version>4.0.2</version>
+      <groupId>org.snakeyaml</groupId>
+      <artifactId>snakeyaml-engine</artifactId>
+      <version>${snakeyaml.version}</version>
     </dependency>
 
+    <!-- https://mvnrepository.com/artifact/org.apache.commons/commons-math3 -->
     <dependency>
-      <groupId>javax.xml.bind</groupId>
-      <artifactId>jaxb-api</artifactId>
-      <version>2.3.1</version>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-math3</artifactId>
+      <version>${commons-math3.version}</version>
     </dependency>
 
     <!-- Log -->
@@ -656,13 +655,6 @@
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-runners-direct-java</artifactId>
-      <scope>test</scope>
-    </dependency>
-
-    <dependency>
-      <groupId>org.mockito</groupId>
-      <artifactId>mockito-core</artifactId>
-      <version>${mockito.version}</version>
       <scope>test</scope>
     </dependency>
 
