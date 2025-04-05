@@ -4,10 +4,21 @@
     <servlet>
         <servlet-name>MPipelineServer</servlet-name>
         <servlet-class>com.mercari.solution.MPipelineServer</servlet-class>
+        <async-supported>true</async-supported>
     </servlet>
 
     <servlet-mapping>
         <servlet-name>MPipelineServer</servlet-name>
-        <url-pattern>/api/*</url-pattern>
+        <url-pattern>/api/pipeline/*</url-pattern>
+    </servlet-mapping>
+
+    <servlet-mapping>
+        <servlet-name>MPipelineServer</servlet-name>
+        <url-pattern>/api/schema/*</url-pattern>
+    </servlet-mapping>
+
+    <servlet-mapping>
+        <servlet-name>MPipelineServer</servlet-name>
+        <url-pattern>/probe/*</url-pattern>
     </servlet-mapping>
 </web-app>

@@ -18,11 +18,12 @@
       <div style="clear: both;"></div>
     </div>
     <div id="buttons" style="padding-right: 20px">
-      <button id="dryRunButton" type="button" name="dryrun" class="btn btn-secondary" style="width: 140px">Dry Run<span id="dryRunButtonTimer" style="display:none; margin-left: 10px;"></span></button>
-      <button id="runButton" type="button" name="run" class="btn btn-primary" style="width: 140px">Run<span id="runButtonTimer" style="display:none; margin-left: 10px;"></span></button>
+      <button id="dryRunButton" type="button" name="dryrun" class="btn btn-secondary" style="width: 150px">Dry Run<span id="dryRunButtonTimer" style="display:none; margin-left: 10px;"></span></button>
+      <button id="runButton" type="button" name="run" class="btn btn-primary" style="width: 150px">Run<span id="runButtonTimer" style="display:none; margin-left: 10px;"></span></button>
+      <button id="launchButton" type="button" name="launch" class="btn btn-warning" style="width: 150px">Launch<span id="launchButtonTimer" style="display:none; margin-left: 10px;"></span></button>
     </div>
   </header>
-  <main style="width:none; padding: 10px 20px; height: 100%;">
+  <main style="width:none; padding: 0px 20px; height: 100%;">
     <div id="input" style="height: 50%;">
       <div class="form-floating" style="height: 100%;">
         <textarea id="configTextarea" class="form-control" placeholder="write config here" style="height: 100%"></textarea>
@@ -41,7 +42,7 @@
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.js"></script>
-  <script charset="utf-8" src="/js/base.js?id=1" type="text/javascript"></script>
+  <script charset="utf-8" src="/js/base.js?id=20250325" type="text/javascript"></script>
   <script>
 
   </script>

@@ -5,10 +5,14 @@ $("#buttons").on("click", "button", function(e){
 
   let durationMillis = 0
   let $buttonTimer
-  if(buttonId == "dryrun") {
+  if(buttonId === "dryrun") {
     $buttonTimer = $("#dryRunButtonTimer")
-  } else {
+  } else if(buttonId === "run") {
     $buttonTimer = $("#runButtonTimer")
+  } else if(buttonId === "launch") {
+    $buttonTimer = $("#launchButtonTimer")
+  } else {
+
   }
   $buttonTimer.text("")
   $buttonTimer.show()
@@ -50,13 +54,13 @@ $("#buttons").on("click", "button", function(e){
 
 const send = function(data, success, error) {
   $.ajax({
-    url: "/api",
+    url: "/api/pipeline",
     data: JSON.stringify(data),
     type: "POST",
     dataType: "json",
     contentType: "application/json",
     cache: false,
-    timeout: 30000,
+    timeout: 300000,
     //processData: false,
     success: success,
     error: error
