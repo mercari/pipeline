@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 
 public class Logging implements Serializable {
 
+    private String moduleName;
     private String name;
     private Level level;
 
@@ -21,12 +22,27 @@ public class Logging implements Serializable {
         return level;
     }
 
+    public String getModuleName() {
+        return moduleName;
+    }
+
+    public void setModuleName(String moduleName) {
+        this.moduleName = moduleName;
+    }
+
     public List<String> validate() {
         final List<String> errorMessages = new ArrayList<>();
         if(name == null) {
             errorMessages.add("logging name must not be null");
         }
         return errorMessages;
+    }
+
+    public enum Type {
+        input,
+        output,
+        not_matched,
+        system
     }
 
     public enum Level {
@@ -37,7 +53,7 @@ public class Logging implements Serializable {
         error
     }
 
-    public static Map<String, Logging> of(List<Logging> loggingList) {
+    public static Map<String, Logging> map(List<Logging> loggingList) {
         return loggingList.stream().collect(Collectors.toMap(Logging::getName, p -> p));
     }
 
@@ -73,14 +89,23 @@ public class Logging implements Serializable {
         if(logger == null || logging == null || message == null) {
             return;
         }
+        final String logMessage = String.format("%s.%s: %s", logging.getModuleName(), logging.getName(), message);
         switch (logging.level) {
-            case trace -> logger.trace(message);
-            case debug -> logger.debug(message);
-            case info -> logger.info(message);
-            case warn -> logger.warn(message);
-            case error -> logger.error(message);
-            case null -> logger.debug(message);
+            case trace -> logger.trace(logMessage);
+            case debug -> logger.debug(logMessage);
+            case info -> logger.info(logMessage);
+            case warn -> logger.warn(logMessage);
+            case error -> logger.error(logMessage);
+            case null -> logger.debug(logMessage);
         }
+    }
+
+    public static void log(final Logger logger, final Map<String, Logging> loggings, final String message) {
+        if(loggings == null || loggings.isEmpty()) {
+            return;
+        }
+        final Logging logging = loggings.get("system");
+        log(logger, logging, message);
     }
 
 }

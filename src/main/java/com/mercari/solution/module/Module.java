@@ -1,7 +1,9 @@
 package com.mercari.solution.module;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.mercari.solution.MPipeline;
+import com.mercari.solution.config.Config;
 import com.mercari.solution.config.ModuleConfig;
 import com.mercari.solution.util.pipeline.OptionUtil;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -97,7 +99,11 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
                 .ofNullable(config.getFailFast())
                 .orElseGet(() -> !OptionUtil.isStreaming(options));
         this.loggings = Optional
-                .ofNullable(config.getLogging())
+                .ofNullable(config.getLoggings())
+                .map(l -> {
+                    l.forEach(ll -> ll.setModuleName(name));
+                    return l;
+                })
                 .orElseGet(ArrayList::new);
         this.waits = new ArrayList<>();
         for(final MCollection wait : waits) {
@@ -112,7 +118,8 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
 
     protected <ParameterT> ParameterT getParameters(Class<ParameterT> clazz) {
         try {
-            ParameterT parameters = new Gson().fromJson(parametersText, clazz);
+            final JsonObject parametersJson = Config.convertConfigJson(parametersText);
+            final ParameterT parameters = new Gson().fromJson(parametersJson, clazz);
             if (parameters == null) {
                 throw new IllegalModuleException("parameters must not be empty");
             }
