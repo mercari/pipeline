@@ -31,14 +31,9 @@ public class MPipeline {
 
     public interface MPipelineOptions extends PipelineOptions {
 
-        @Description("Config json text body or gcs path.")
+        @Description("Config text body or config resource name.")
         String getConfig();
         void setConfig(String config);
-
-        @Description("Config file type")
-        @Default.String("json")
-        String getType();
-        void setType(String type);
 
         @Description("Enable template engine for config")
         @Default.Boolean(false)
@@ -145,7 +140,7 @@ public class MPipeline {
             content = new String(version.payload, StandardCharsets.UTF_8);
         } else if(configParam.startsWith("data:")) {
             LOG.info("config parameter is base64 encoded");
-            content = new String(Base64.getDecoder().decode(configParam), StandardCharsets.UTF_8);
+            content = new String(Base64.getDecoder().decode(configParam.replaceFirst("data:", "")), StandardCharsets.UTF_8);
         } else if(PubSubUtil.isSubscriptionResource(configParam)) {
             LOG.info("config parameter is PubSub Subscription: {}", configParam);
             content = PubSubUtil.getTextMessage(configParam);
@@ -159,14 +154,14 @@ public class MPipeline {
             Path path;
             try {
                 path = Paths.get(configParam);
-            } catch (Throwable e) {
+            } catch (final Throwable e) {
                 path = null;
             }
             if(path != null && Files.exists(path) && !Files.isDirectory(path)) {
                 LOG.info("config parameter is local file path: {}", configParam);
                 content = Files.readString(path, StandardCharsets.UTF_8);
             } else {
-                LOG.info("config parameter is json body: {}", configParam);
+                LOG.info("config parameter body: {}", configParam);
                 content = configParam;
             }
         }

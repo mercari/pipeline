@@ -8,6 +8,7 @@ import freemarker.template.Template;
 import freemarker.template.TemplateException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -183,29 +184,22 @@ public class Config implements Serializable {
         }
     }
 
-    public static Config parse(final String configJson, final String[] args, Boolean useConfigTemplate) throws Exception {
+    public static Config parse(final String configText, final String[] args, Boolean useConfigTemplate) throws Exception {
         final Map<String, Map<String, String>> argsParameters = filterConfigArgs(args);
         if(argsParameters.containsKey("template") && !argsParameters.get("template").isEmpty()) {
             if(!useConfigTemplate) {
                 useConfigTemplate = true;
             }
         }
-        final String templatedConfigJson;
+        final String templatedConfigText;
         if(useConfigTemplate) {
-            templatedConfigJson = executeTemplate(
-                    configJson, argsParameters.getOrDefault("template", new HashMap<>()));
+            templatedConfigText = executeTemplate(
+                    configText, argsParameters.getOrDefault("template", new HashMap<>()));
         } else {
-            templatedConfigJson = configJson;
+            templatedConfigText = configText;
         }
 
-        final JsonObject jsonObject;
-        try {
-            jsonObject= new Gson().fromJson(templatedConfigJson, JsonObject.class);
-        } catch (Exception e) {
-            final String errorMessage = "Failed to parse template json: " + templatedConfigJson;
-            LOG.error(errorMessage);
-            throw new IllegalArgumentException(errorMessage, e);
-        }
+        final JsonObject jsonObject = parseConfigText(templatedConfigText);
 
         // Config sources parameters
         if(jsonObject.has("sources")) {
@@ -326,7 +320,7 @@ public class Config implements Serializable {
             config.transforms = transforms;
             config.sinks = sinks;
 
-            config.content = templatedConfigJson;
+            config.content = templatedConfigText;
 
             return config;
         } catch (Throwable e) {
@@ -437,6 +431,28 @@ public class Config implements Serializable {
             } else {
                 parameters.add(entry.getKey(), entry.getValue());
             }
+        }
+    }
+
+    private static JsonObject parseConfigText(final String configText) {
+        try {
+            return new Gson().fromJson(configText, JsonObject.class);
+        } catch (final JsonSyntaxException e) {
+            try {
+                final Yaml yaml = new Yaml();
+                final Map<?,?> loadedYaml = yaml.loadAs(configText, Map.class);
+                final Gson gson = new GsonBuilder().setPrettyPrinting().create();
+                final String jsonText = gson.toJson(loadedYaml, Map.class);
+                return new Gson().fromJson(jsonText, JsonObject.class);
+            } catch (final Throwable ee) {
+                final String errorMessage = "Failed to parse config: " + configText;
+                LOG.error(errorMessage);
+                throw new IllegalArgumentException(errorMessage, e);
+            }
+        } catch (final Throwable e) {
+            final String errorMessage = "Failed to parse config json: " + configText;
+            LOG.error(errorMessage);
+            throw new IllegalArgumentException(errorMessage, e);
         }
     }
 
