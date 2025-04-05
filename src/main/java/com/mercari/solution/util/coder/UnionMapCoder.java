@@ -2,6 +2,7 @@ package com.mercari.solution.util.coder;
 
 import org.apache.avro.Schema;
 import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.ListCoder;
 import org.apache.beam.sdk.coders.MapCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.extensions.avro.coders.AvroGenericCoder;
@@ -14,16 +15,26 @@ import java.util.Map;
 
 public class UnionMapCoder {
 
+    private static final int DEFAULT_DEPTH = 6;
+
     public static Coder<Map<String,Object>> mapCoder() {
-        return mapCoder(6);
+        return mapCoder(DEFAULT_DEPTH);
     }
 
     public static Coder<Map<String,Object>> mapCoder(int depth) {
         return MapCoder.of(StringUtf8Coder.of(), unionValueCoder(depth));
     }
 
+    public static Coder<List<Object>> listCoder() {
+        return listCoder(DEFAULT_DEPTH);
+    }
+
+    public static Coder<List<Object>> listCoder(int depth) {
+        return ListCoder.of(unionValueCoder(depth));
+    }
+
     public static Coder<Object> unionValueCoder() {
-        return unionValueCoder(6);
+        return unionValueCoder(DEFAULT_DEPTH);
     }
 
     public static Coder<Object> unionValueCoder(int depth) {
@@ -44,63 +55,51 @@ public class UnionMapCoder {
         }
     }
 
-    private static org.apache.avro.Schema mapSchema(int depth) {
-        final org.apache.avro.Schema unionValueSchema = unionValueSchema(depth);
-        return org.apache.avro.Schema.createMap(unionValueSchema);
+    private static Schema mapSchema(int depth) {
+        final Schema unionValueSchema = unionValueSchema(depth);
+        return Schema.createMap(unionValueSchema);
     }
 
-    private static org.apache.avro.Schema unionValueSchema(int depth) {
-        final List<Schema> unionSchema = new ArrayList<>();
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.STRING));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.LONG));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.NULL));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.INT));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.DOUBLE));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.FLOAT));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.BOOLEAN));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.BYTES));
-
-        unionSchema.add(org.apache.avro.Schema.createArray(arrayElementSchema(depth)));
+    private static Schema unionValueSchema(int depth) {
+        final List<Schema> unionSchema = createUnionValueSchemas();
+        unionSchema.add(Schema.createArray(arrayElementSchema(depth)));
 
         if(depth > 0) {
-            final org.apache.avro.Schema nestedSchema = mapSchema(depth - 1);
+            final Schema nestedSchema = mapSchema(depth - 1);
             unionSchema.add(nestedSchema);
         }
 
-        return org.apache.avro.Schema.createUnion(unionSchema);
+        return Schema.createUnion(unionSchema);
     }
 
     // without nested array
-    private static org.apache.avro.Schema arrayElementSchema(int depth) {
-        final List<org.apache.avro.Schema> unionSchema = new ArrayList<>();
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.STRING));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.DOUBLE));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.LONG));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.INT));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.NULL));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.FLOAT));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.BOOLEAN));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.BYTES));
+    private static Schema arrayElementSchema(int depth) {
+        final List<Schema> unionSchema = createUnionValueSchemas();
 
         if(depth > 0) {
-            final org.apache.avro.Schema nestedSchema = mapSchema(depth - 1);
+            final Schema nestedSchema = mapSchema(depth - 1);
             unionSchema.add(nestedSchema);
         }
 
-        return org.apache.avro.Schema.createUnion(unionSchema);
+        return Schema.createUnion(unionSchema);
     }
 
-    private static org.apache.avro.Schema primitiveUnionValueSchema() {
-        final List<org.apache.avro.Schema> unionSchema = new ArrayList<>();
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.STRING));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.DOUBLE));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.LONG));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.INT));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.NULL));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.FLOAT));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.BOOLEAN));
-        unionSchema.add(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.BYTES));
-        return org.apache.avro.Schema.createUnion(unionSchema);
+    private static Schema primitiveUnionValueSchema() {
+        final List<Schema> unionSchema = createUnionValueSchemas();
+        return Schema.createUnion(unionSchema);
+    }
+
+    private static List<Schema> createUnionValueSchemas() {
+        final List<Schema> unionSchema = new ArrayList<>();
+        unionSchema.add(Schema.create(Schema.Type.BOOLEAN));
+        unionSchema.add(Schema.create(Schema.Type.STRING));
+        unionSchema.add(Schema.create(Schema.Type.BYTES));
+        unionSchema.add(Schema.create(Schema.Type.INT));
+        unionSchema.add(Schema.create(Schema.Type.LONG));
+        unionSchema.add(Schema.create(Schema.Type.FLOAT));
+        unionSchema.add(Schema.create(Schema.Type.DOUBLE));
+        unionSchema.add(Schema.create(Schema.Type.NULL));
+        return unionSchema;
     }
 
 }
