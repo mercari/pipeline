@@ -196,16 +196,16 @@ public class MPipeline {
                 continue;
             }
 
-            if(sourceConfig.getWait() != null && !outputs.keySet().containsAll(sourceConfig.getWait())) {
+            if(sourceConfig.getWaits() != null && !outputs.keySet().containsAll(sourceConfig.getWaits())) {
                 notDoneModules.add(sourceConfig);
                 continue;
             }
 
             final List<MCollection> waits;
-            if(sourceConfig.getWait() == null) {
+            if(sourceConfig.getWaits() == null) {
                 waits = new ArrayList<>();
             } else {
-                waits = sourceConfig.getWait().stream()
+                waits = sourceConfig.getWaits().stream()
                         .map(outputs::get)
                         .toList();
             }
@@ -257,7 +257,7 @@ public class MPipeline {
             }
 
             // Add queue if wait not done.
-            if(transformConfig.getWait() != null && !outputs.keySet().containsAll(transformConfig.getWait())) {
+            if(transformConfig.getWaits() != null && !outputs.keySet().containsAll(transformConfig.getWaits())) {
                 notDoneModules.add(transformConfig);
                 continue;
             }
@@ -275,10 +275,10 @@ public class MPipeline {
             }
 
             final List<MCollection> waits;
-            if(transformConfig.getWait() == null) {
+            if(transformConfig.getWaits() == null) {
                 waits = new ArrayList<>();
             } else {
-                waits = transformConfig.getWait().stream()
+                waits = transformConfig.getWaits().stream()
                         .map(outputs::get)
                         .toList();
             }
@@ -343,7 +343,7 @@ public class MPipeline {
             }
 
             // Add queue if wait not done.
-            if(sinkConfig.getWait() != null && !outputs.keySet().containsAll(sinkConfig.getWait())) {
+            if(sinkConfig.getWaits() != null && !outputs.keySet().containsAll(sinkConfig.getWaits())) {
                 notDoneModules.add(sinkConfig);
                 continue;
             }
@@ -356,10 +356,10 @@ public class MPipeline {
 
             // Add waits
             final List<MCollection> waits;
-            if(sinkConfig.getWait() == null) {
+            if(sinkConfig.getWaits() == null) {
                 waits = new ArrayList<>();
             } else {
-                waits = sinkConfig.getWait().stream()
+                waits = sinkConfig.getWaits().stream()
                         .map(outputs::get)
                         .collect(Collectors.toList());
             }

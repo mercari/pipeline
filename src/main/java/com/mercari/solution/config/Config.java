@@ -1,6 +1,7 @@
 package com.mercari.solution.config;
 
 import com.google.api.services.storage.Storage;
+import com.google.common.io.CharStreams;
 import com.google.gson.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
@@ -11,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
+import java.io.Reader;
 import java.io.Serializable;
 import java.io.StringWriter;
 import java.util.*;
@@ -199,7 +201,7 @@ public class Config implements Serializable {
             templatedConfigText = configText;
         }
 
-        final JsonObject jsonObject = parseConfigText(templatedConfigText);
+        final JsonObject jsonObject = convertConfigJson(templatedConfigText);
 
         // Config sources parameters
         if(jsonObject.has("sources")) {
@@ -328,6 +330,37 @@ public class Config implements Serializable {
         }
     }
 
+    public static JsonObject convertConfigJson(final Reader reader) {
+        try {
+            final String configText = CharStreams.toString(reader);
+            return convertConfigJson(configText);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static JsonObject convertConfigJson(final String configText) {
+        try {
+            return new Gson().fromJson(configText, JsonObject.class);
+        } catch (final JsonSyntaxException e) {
+            try {
+                final Yaml yaml = new Yaml();
+                final Map<?,?> loadedYaml = yaml.loadAs(configText, Map.class);
+                final Gson gson = new GsonBuilder().setPrettyPrinting().create();
+                final String jsonText = gson.toJson(loadedYaml, Map.class);
+                return new Gson().fromJson(jsonText, JsonObject.class);
+            } catch (final Throwable ee) {
+                final String errorMessage = "Failed to parse config: " + configText;
+                LOG.error(errorMessage);
+                throw new IllegalArgumentException(errorMessage, e);
+            }
+        } catch (final Throwable e) {
+            final String errorMessage = "Failed to parse config json: " + configText;
+            LOG.error(errorMessage);
+            throw new IllegalArgumentException(errorMessage, e);
+        }
+    }
+
     static Map<String, Object> getTemplateArgs(final String[] args) {
         final Map<String, Map<String, String>> argsParameters = filterConfigArgs(args);
         final Map<String, Object> map = new HashMap<>();
@@ -431,28 +464,6 @@ public class Config implements Serializable {
             } else {
                 parameters.add(entry.getKey(), entry.getValue());
             }
-        }
-    }
-
-    private static JsonObject parseConfigText(final String configText) {
-        try {
-            return new Gson().fromJson(configText, JsonObject.class);
-        } catch (final JsonSyntaxException e) {
-            try {
-                final Yaml yaml = new Yaml();
-                final Map<?,?> loadedYaml = yaml.loadAs(configText, Map.class);
-                final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-                final String jsonText = gson.toJson(loadedYaml, Map.class);
-                return new Gson().fromJson(jsonText, JsonObject.class);
-            } catch (final Throwable ee) {
-                final String errorMessage = "Failed to parse config: " + configText;
-                LOG.error(errorMessage);
-                throw new IllegalArgumentException(errorMessage, e);
-            }
-        } catch (final Throwable e) {
-            final String errorMessage = "Failed to parse config json: " + configText;
-            LOG.error(errorMessage);
-            throw new IllegalArgumentException(errorMessage, e);
         }
     }
 

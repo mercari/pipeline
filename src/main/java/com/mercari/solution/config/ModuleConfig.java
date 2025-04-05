@@ -14,9 +14,9 @@ public class ModuleConfig implements Serializable {
     private String module;
     private JsonObject parameters;
 
-    private List<String> wait;
+    private List<String> waits;
 
-    private List<Logging> logging;
+    private List<Logging> loggings;
 
     private Boolean ignore;
     private Boolean failFast;
@@ -42,12 +42,12 @@ public class ModuleConfig implements Serializable {
         return parameters;
     }
 
-    public List<String> getWait() {
-        return wait;
+    public List<String> getWaits() {
+        return waits;
     }
 
-    public List<Logging> getLogging() {
-        return logging;
+    public List<Logging> getLoggings() {
+        return loggings;
     }
 
     public Boolean getIgnore() {
