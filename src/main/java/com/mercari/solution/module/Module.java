@@ -11,10 +11,7 @@ import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 public abstract class Module<T extends PInput> extends PTransform<T, MCollectionTuple> {
 
@@ -25,8 +22,10 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
 
     private String parametersText;
 
-    private List<Logging> loggings;
+    private Set<String> tags;
     private transient List<PCollection<?>> waits;
+    private List<Logging> loggings;
+
     private Map<String, Object> templateArgs;
     private Boolean failFast;
     private Boolean outputFailure;
@@ -94,10 +93,12 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
         this.jobName = options.getJobName();
         this.description = config.getDescription();
         this.parametersText = config.getParameters().toString();
-        this.templateArgs = config.getArgs();
-        this.failFast = Optional
-                .ofNullable(config.getFailFast())
-                .orElseGet(() -> !OptionUtil.isStreaming(options));
+
+        this.tags = Optional.ofNullable(config.getTags()).orElseGet(HashSet::new);
+        this.waits = new ArrayList<>();
+        for(final MCollection wait : waits) {
+            this.waits.add(wait.getCollection());
+        }
         this.loggings = Optional
                 .ofNullable(config.getLoggings())
                 .map(l -> {
@@ -105,15 +106,16 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
                     return l;
                 })
                 .orElseGet(ArrayList::new);
-        this.waits = new ArrayList<>();
-        for(final MCollection wait : waits) {
-            this.waits.add(wait.getCollection());
-        }
+
+        this.failFast = Optional
+                .ofNullable(config.getFailFast())
+                .orElseGet(() -> !OptionUtil.isStreaming(options));
         this.outputFailure = Optional
                 .ofNullable(config.getOutputFailure())
                 .orElse(false);
         this.outputType = config.getOutputType();
         this.runner = OptionUtil.getRunner(options);
+        this.templateArgs = config.getArgs();
     }
 
     protected <ParameterT> ParameterT getParameters(Class<ParameterT> clazz) {

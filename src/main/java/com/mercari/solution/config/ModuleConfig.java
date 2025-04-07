@@ -7,6 +7,7 @@ import com.mercari.solution.module.Logging;
 import java.io.Serializable;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class ModuleConfig implements Serializable {
 
@@ -14,8 +15,8 @@ public class ModuleConfig implements Serializable {
     private String module;
     private JsonObject parameters;
 
-    private List<String> waits;
-
+    private Set<String> tags;
+    private Set<String> waits;
     private List<Logging> loggings;
 
     private Boolean ignore;
@@ -42,7 +43,11 @@ public class ModuleConfig implements Serializable {
         return parameters;
     }
 
-    public List<String> getWaits() {
+    public Set<String> getTags() {
+        return tags;
+    }
+
+    public Set<String> getWaits() {
         return waits;
     }
 
@@ -68,6 +73,17 @@ public class ModuleConfig implements Serializable {
 
     public String getDescription() {
         return description;
+    }
+
+    public void applyTags(final Set<String> pipelineTags) {
+        if(pipelineTags == null || pipelineTags.isEmpty()) {
+            return;
+        }
+        if(this.tags == null || this.tags.isEmpty()) {
+            this.ignore = true;
+        } else {
+            this.ignore = pipelineTags.stream().noneMatch(tags::contains);
+        }
     }
 
     public Map<String, Object> getArgs() {

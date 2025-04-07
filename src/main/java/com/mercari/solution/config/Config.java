@@ -27,6 +27,7 @@ public class Config implements Serializable {
     private String description;
 
     private Map<String, String> args;
+    private Set<String> tags;
     private Options options;
     private List<SourceConfig> sources;
     private List<TransformConfig> transforms;
@@ -55,6 +56,10 @@ public class Config implements Serializable {
 
     public Map<String, String> getArgs() {
         return args;
+    }
+
+    public Set<String> getTags() {
+        return tags;
     }
 
     public Options getOptions() {
@@ -102,6 +107,9 @@ public class Config implements Serializable {
     public void setDefaults() {
         if(args == null) {
             args = new HashMap<>();
+        }
+        if(tags == null) {
+            tags = new HashSet<>();
         }
         if(this.imports == null) {
             this.imports = new ArrayList<>();
@@ -186,7 +194,7 @@ public class Config implements Serializable {
         }
     }
 
-    public static Config parse(final String configText, final String[] args, Boolean useConfigTemplate) throws Exception {
+    public static Config parse(final String configText, final Set<String> tags, final String[] args, Boolean useConfigTemplate) throws Exception {
         final Map<String, Map<String, String>> argsParameters = filterConfigArgs(args);
         if(argsParameters.containsKey("template") && !argsParameters.get("template").isEmpty()) {
             if(!useConfigTemplate) {
@@ -238,21 +246,27 @@ public class Config implements Serializable {
                 throw new IllegalArgumentException("Json Config must not be null !");
             }
             config.setDefaults();
+            if(tags != null && !tags.isEmpty()) {
+                config.tags = tags;
+            }
 
             final Map<String, Object> templateArgs = getTemplateArgs(args);
             final List<SourceConfig> sources = Optional.ofNullable(config.getSources()).orElseGet(ArrayList::new)
                     .stream()
                     .filter(Objects::nonNull)
+                    .peek(c -> c.applyTags(config.getTags()))
                     .peek(c -> c.setArgs(templateArgs))
                     .collect(Collectors.toList());
             final List<TransformConfig> transforms = Optional.ofNullable(config.getTransforms()).orElseGet(ArrayList::new)
                     .stream()
                     .filter(Objects::nonNull)
+                    .peek(c -> c.applyTags(config.getTags()))
                     .peek(c -> c.setArgs(templateArgs))
                     .collect(Collectors.toList());
             final List<SinkConfig> sinks = Optional.ofNullable(config.getSinks()).orElseGet(ArrayList::new)
                     .stream()
                     .filter(Objects::nonNull)
+                    .peek(c -> c.applyTags(config.getTags()))
                     .peek(c -> c.setArgs(templateArgs))
                     .collect(Collectors.toList());
 
@@ -264,7 +278,7 @@ public class Config implements Serializable {
                     for(final String path : i.getFiles()) {
                         final String gcsPath = (i.getBase() == null ? "" : i.getBase()) + path;
                         final String json = StorageUtil.readString(storage, gcsPath);
-                        final Config importConfig = Config.parse(json, args, useConfigTemplate);
+                        final Config importConfig = Config.parse(json, tags, args, useConfigTemplate);
                         if(importConfig.getSources() != null) {
                             sources.addAll(importConfig.getSources()
                                     .stream()
@@ -274,6 +288,7 @@ public class Config implements Serializable {
                                             final JsonObject iparam = iparams.get(c.getName());
                                             setAltParameters(c.getParameters(), iparam);
                                         }
+                                        c.applyTags(config.getTags());
                                     })
                                     .collect(Collectors.toList()));
                         }
@@ -289,6 +304,7 @@ public class Config implements Serializable {
                                         if(inputs.containsKey(c.getName())) {
                                             c.setInputs(inputs.get(c.getName()));
                                         }
+                                        c.applyTags(config.getTags());
                                     })
                                     .collect(Collectors.toList()));
                         }
@@ -307,6 +323,7 @@ public class Config implements Serializable {
                                                 c.setInputs(input);
                                             }
                                         }
+                                        c.applyTags(config.getTags());
                                     })
                                     .collect(Collectors.toList()));
                         }

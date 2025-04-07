@@ -35,6 +35,10 @@ public class MPipeline {
         String getConfig();
         void setConfig(String config);
 
+        @Description("Config text body or config resource name.")
+        String getTags();
+        void setTags(String tags);
+
         @Description("Enable template engine for config")
         @Default.Boolean(false)
         Boolean getEnableConfigTemplate();
@@ -66,7 +70,15 @@ public class MPipeline {
         final Runner runner = OptionUtil.getRunner(pipelineOptions);
         LOG.info("Runner: {}", runner);
 
-        final Config config = loadConfig(pipelineOptions.getConfig(), args, pipelineOptions.getEnableConfigTemplate());
+        final Set<String> tags;
+        if(pipelineOptions.getTags() != null) {
+            tags = new HashSet<>(Arrays.asList(pipelineOptions.getTags().strip().split(",")));
+        } else {
+            tags = new HashSet<>();
+        }
+
+        final Config config = loadConfig(pipelineOptions.getConfig(), tags, args, pipelineOptions.getEnableConfigTemplate());
+
         if(Optional.ofNullable(config.getEmpty()).orElse(false)) {
             LOG.info("Empty pipeline");
             final Pipeline pipeline = Pipeline.create(pipelineOptions);
@@ -118,10 +130,10 @@ public class MPipeline {
     }
 
     public static Config loadConfig(final String configParam) throws Exception {
-        return loadConfig(configParam, new String[0], true);
+        return loadConfig(configParam, null, new String[0], true);
     }
 
-    public static Config loadConfig(final String configParam, final String[] args, final Boolean useConfigTemplate) throws Exception {
+    public static Config loadConfig(final String configParam, final Set<String> tags, final String[] args, final Boolean useConfigTemplate) throws Exception {
         if(configParam == null) {
             throw new IllegalArgumentException("Parameter config must not be null!");
         }
@@ -170,7 +182,7 @@ public class MPipeline {
             throw new IllegalArgumentException("Content is null for config parameter: " + configParam);
         }
 
-        return Config.parse(content, args, useConfigTemplate);
+        return Config.parse(content, tags, args, useConfigTemplate);
     }
 
     private static void setSourceResult(

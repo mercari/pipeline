@@ -6,13 +6,139 @@ import com.mercari.solution.util.*;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 
 public class ConfigTest {
+
+    @Test
+    public void testYaml() {
+        final String configYaml1 = """
+                args:
+                  writeDisposition: WRITE_APPEND
+                sources:
+                  - name: BigQueryInput
+                    module: bigquery
+                    parameters:
+                      query: |-
+                        SELECT *
+                        FROM `myproject:mydataset.mytable`
+                      queryLocation: asia-northeast1
+                sinks:
+                  - name: BigQueryOutput
+                    module: bigquery
+                    inputs:
+                      - BigQueryInput
+                    parameters:
+                      table: "yourproject:yourrdataset.yourtable"
+                      writeDisposition: ${args.writeDisposition}
+                      createDisposition: CREATE_IF_NEEDED
+                      method: FILE_LOADS
+                      customGcsTempLocation: gs://mybucket/myobject
+                """;
+        try {
+            final Config config = Config.parse(configYaml1, Set.of(), new String[0], false);
+            final SourceConfig sourceConfig = config.getSources().getFirst();
+            final SinkConfig sinkConfig = config.getSinks().getFirst();
+            Assert.assertEquals("BigQueryInput", sourceConfig.getName());
+            Assert.assertEquals("bigquery", sourceConfig.getModule());
+            Assert.assertEquals("SELECT *\n" +
+                    "FROM `myproject:mydataset.mytable`", sourceConfig.getParameters().get("query").getAsString());
+            Assert.assertEquals("asia-northeast1", sourceConfig.getParameters().get("queryLocation").getAsString());
+
+            Assert.assertEquals("BigQueryOutput", sinkConfig.getName());
+            Assert.assertEquals("bigquery", sinkConfig.getModule());
+            Assert.assertEquals("yourproject:yourrdataset.yourtable", sinkConfig.getParameters().get("table").getAsString());
+            Assert.assertEquals("${args.writeDisposition}", sinkConfig.getParameters().get("writeDisposition").getAsString());
+            Assert.assertEquals("gs://mybucket/myobject", sinkConfig.getParameters().get("customGcsTempLocation").getAsString());
+
+            System.out.println(config);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    public void testTags() {
+        final String configTag1 = """
+                {
+                  "sources": [
+                    {
+                      "name": "create",
+                      "module": "create",
+                      "tags": ["tag1"],
+                      "parameters": {
+                        "from": 1,
+                        "to": 10,
+                        "type": "int64"
+                      }
+                    }
+                  ],
+                  "transforms": [
+                    {
+                      "name": "select",
+                      "module": "select",
+                      "inputs": ["create"],
+                      "tags": ["tag2"],
+                      "parameters": {
+                        "select": [
+                          { "name": "value" }
+                        ]
+                      }
+                    }
+                  ],
+                  "sinks": [
+                    {
+                      "name": "debug",
+                      "module": "debug",
+                      "inputs": ["select"],
+                      "parameters": {}
+                    }
+                  ]
+                }
+                """;
+
+        try {
+            final Config config = Config.parse(configTag1, Set.of(), new String[0], false);
+            Assert.assertEquals(Set.of(), config.getTags());
+            Assert.assertNull(config.getSources().getFirst().getIgnore());
+            Assert.assertNull(config.getTransforms().getFirst().getIgnore());
+            Assert.assertNull(config.getSinks().getFirst().getIgnore());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        try {
+            final Config config = Config.parse(configTag1, Set.of("tag1"), new String[0], false);
+            Assert.assertEquals(Set.of("tag1"), config.getTags());
+            Assert.assertFalse(config.getSources().getFirst().getIgnore());
+            Assert.assertTrue(config.getTransforms().getFirst().getIgnore());
+            Assert.assertTrue(config.getSinks().getFirst().getIgnore());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        try {
+            final Config config = Config.parse(configTag1, Set.of("tag1", "tag2"), new String[0], false);
+            Assert.assertEquals(Set.of("tag1", "tag2"), config.getTags());
+            Assert.assertFalse(config.getSources().getFirst().getIgnore());
+            Assert.assertFalse(config.getTransforms().getFirst().getIgnore());
+            Assert.assertTrue(config.getSinks().getFirst().getIgnore());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        try {
+            final Config config = Config.parse(configTag1, Set.of("tag1", "tag2", "tag3"), new String[0], false);
+            Assert.assertEquals(Set.of("tag1", "tag2", "tag3"), config.getTags());
+            Assert.assertFalse(config.getSources().getFirst().getIgnore());
+            Assert.assertFalse(config.getTransforms().getFirst().getIgnore());
+            Assert.assertTrue(config.getSinks().getFirst().getIgnore());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+    }
 
     @Test
     public void testGetTemplateArgs() {
@@ -47,7 +173,7 @@ public class ConfigTest {
                 "SpannerInput.table=ohmytable",
                 "SpannerOutput.instanceId=ohmyinstance"
         };
-        final Config config = Config.parse(configJson, args, true);
+        final Config config = Config.parse(configJson, new HashSet<>(), args, true);
 
         Assert.assertEquals(2, config.getSources().size());
         Assert.assertEquals(1, config.getTransforms().size());
