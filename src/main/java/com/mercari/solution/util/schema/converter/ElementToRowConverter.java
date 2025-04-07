@@ -66,6 +66,10 @@ public class ElementToRowConverter {
         return RowSchemaUtil.convertPrimitives(rowSchema, primitives);
     }
 
+    public static Row convert(final org.apache.beam.sdk.schemas.Schema schema, final Map<String, Object> primitiveValues) {
+        return RowSchemaUtil.convertPrimitives(schema, primitiveValues);
+    }
+
     public static org.apache.beam.sdk.schemas.Schema.FieldType convertFieldType(final Schema.FieldType fieldType) {
         final org.apache.beam.sdk.schemas.Schema.FieldType rowFieldType = switch (fieldType.getType()) {
             case bytes -> org.apache.beam.sdk.schemas.Schema.FieldType.BYTES;

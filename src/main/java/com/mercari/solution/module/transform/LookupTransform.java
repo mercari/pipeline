@@ -20,7 +20,7 @@ public class LookupTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(LookupTransform.class);
 
-    private static class LookupTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private List<LookupParameter> lookups;
         private JsonElement select;
@@ -93,7 +93,7 @@ public class LookupTransform extends Transform {
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
 
-        final LookupTransformParameters parameters = getParameters(LookupTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getSideInputs());
         if(getSideInputs().isEmpty()) {
             throw new IllegalModuleException("`sideInputs` must not be empty");
@@ -102,7 +102,7 @@ public class LookupTransform extends Transform {
 
         final Map<String, PCollectionView<?>> views = new HashMap<>();
         final Map<String, Schema> sideInputSchemas = new HashMap<>();
-        for(final LookupTransformParameters.LookupParameter lookup : parameters.lookups) {
+        for(final Parameters.LookupParameter lookup : parameters.lookups) {
             final MCollection collection = getSideInputs().stream()
                     .filter(c -> lookup.sideInput.equals(c.getName()))
                     .findAny()
@@ -198,7 +198,7 @@ public class LookupTransform extends Transform {
             output = lookup;
         } else {
             final Select.Transform selectTransform = Select.of(
-                    getJobName(), getName(), selectFunctions, parameters.flattenField, getFailFast(), getOutputFailure());
+                    getJobName(), getName(), selectFunctions, parameters.flattenField, getLoggings(), getFailFast());
             final PCollectionTuple selected = lookup
                     .apply("Select", selectTransform);
             output = selected.get(selectTransform.outputTag);
@@ -211,12 +211,12 @@ public class LookupTransform extends Transform {
     }
 
     private static Schema createOutputSchema(
-            final LookupTransformParameters parameters,
+            final Parameters parameters,
             final Schema inputSchema,
             final Map<String, Schema> sideInputSchemas) {
 
         final Schema.Builder builder = Schema.builder(inputSchema);
-        for(final LookupTransformParameters.LookupParameter lookup : parameters.lookups) {
+        for(final Parameters.LookupParameter lookup : parameters.lookups) {
             final Schema sideInputSchema = sideInputSchemas.get(lookup.sideInput);
             if(lookup.flatten) {
                 for(final Schema.Field field : sideInputSchema.getFields()) {
@@ -237,7 +237,7 @@ public class LookupTransform extends Transform {
         private final String jobName;
         private final String name;
         private final Schema schema;
-        private final List<LookupTransformParameters.LookupParameter> lookups;
+        private final List<Parameters.LookupParameter> lookups;
         private final Map<String, PCollectionView<?>> views;
         private final TupleTag<MElement> failureTag;
         private final boolean failFast;
@@ -248,7 +248,7 @@ public class LookupTransform extends Transform {
                 final String jobName,
                 final String name,
                 final Schema schema,
-                final List<LookupTransformParameters.LookupParameter> lookups,
+                final List<Parameters.LookupParameter> lookups,
                 final Map<String, PCollectionView<?>> views,
                 final TupleTag<MElement> failureTag,
                 final boolean failFast) {
@@ -277,7 +277,7 @@ public class LookupTransform extends Transform {
             }
             try {
                 final Map<String, Object> values = element.asPrimitiveMap();
-                for(final LookupTransformParameters.LookupParameter lookup : lookups) {
+                for(final Parameters.LookupParameter lookup : lookups) {
 
                     final PCollectionView<Map<String, Object>> view = (PCollectionView<Map<String, Object>>)views.get(lookup.sideInput);
                     final Map<String, Object> sideInputValues = c.sideInput(view);
@@ -326,7 +326,7 @@ public class LookupTransform extends Transform {
         private final String jobName;
         private final String name;
         private final Schema schema;
-        private final List<LookupTransformParameters.LookupParameter> lookups;
+        private final List<Parameters.LookupParameter> lookups;
         private final Map<String, PCollectionView<?>> views;
         private final TupleTag<MElement> failureTag;
 
@@ -336,7 +336,7 @@ public class LookupTransform extends Transform {
                 final String jobName,
                 final String name,
                 final Schema schema,
-                final List<LookupTransformParameters.LookupParameter> lookups,
+                final List<Parameters.LookupParameter> lookups,
                 final Map<String, PCollectionView<?>> views,
                 final TupleTag<MElement> failureTag) {
 
@@ -369,7 +369,7 @@ public class LookupTransform extends Transform {
             try {
                 for(final MElement element : elements) {
                     final Map<String, Object> values = element.asPrimitiveMap();
-                    for (final LookupTransformParameters.LookupParameter lookup : lookups) {
+                    for (final Parameters.LookupParameter lookup : lookups) {
 
                         final PCollectionView<Map<String, Object>> view = (PCollectionView<Map<String, Object>>) views.get(lookup.sideInput);
                         final Map<String, Object> sideInputValues = c.sideInput(view);

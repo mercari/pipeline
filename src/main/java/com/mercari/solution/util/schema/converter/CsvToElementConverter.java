@@ -19,7 +19,7 @@ public class CsvToElementConverter {
 
     private static final Logger LOG = LoggerFactory.getLogger(CsvToElementConverter.class);
 
-    public static Map<String, Object> convert(final Schema schema, final String text) {
+    public static Map<String, Object> convert(final List<Schema.Field> fields, final String text) {
         try(final CSVParser parser = CSVParser.parse(text, CSVFormat.DEFAULT)) {
             final List<CSVRecord> records = parser.getRecords();
             if(records.size() != 1) {
@@ -27,7 +27,6 @@ public class CsvToElementConverter {
             }
             final CSVRecord record = records.get(0);
 
-            final List<Schema.Field> fields = schema.getFields();
             final Map<String, Object> values = new HashMap<>();
             for(int i=0; i<fields.size(); i++) {
                 if(i >= record.size()) {

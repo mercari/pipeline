@@ -33,7 +33,7 @@ public class PubSubUtil {
     private static final Pattern PATTERN_SUBSCRIPTION = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/subscriptions\\/[.a-zA-Z0-9_-]+$");
     private static final Pattern PATTERN_SNAPSHOT = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/snapshots\\/[a-zA-Z0-9_-]+$");
 
-    public static Pubsub pubsub() {
+    public static Pubsub pubsub(final String rootUrl) {
         final HttpTransport transport = new NetHttpTransport();
         final JsonFactory jsonFactory = GsonFactory.getDefaultInstance();
         try {
@@ -42,12 +42,21 @@ public class PubSubUtil {
                     new HttpCredentialsAdapter(credential),
                     // Do not log 404. It clutters the output and is possibly even required by the caller.
                     new RetryHttpRequestInitializer(ImmutableList.of(404)));
-            return new Pubsub.Builder(transport, jsonFactory, initializer)
-                    .setApplicationName("PubSubClient")
-                    .build();
+
+            final Pubsub.Builder builder = new Pubsub.Builder(transport, jsonFactory, initializer)
+                    .setApplicationName("PubSubClient");
+            if(rootUrl == null) {
+                return builder.build();
+            } else {
+                return builder.setRootUrl(rootUrl).build();
+            }
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public static Pubsub pubsub() {
+        return pubsub(null);
     }
 
     public static Schema getSchemaFromTopic(final String topic) {

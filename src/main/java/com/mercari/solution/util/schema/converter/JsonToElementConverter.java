@@ -11,22 +11,22 @@ import java.util.stream.Collectors;
 
 public class JsonToElementConverter {
 
-    public static Map<String,Object> convert(final Schema schema, final String text) {
+    public static Map<String,Object> convert(final List<Schema.Field> fields, final String text) {
         if(text == null || text.trim().length() < 2) {
             return null;
         }
         final JsonElement jsonElement = new Gson().fromJson(text, JsonElement.class);
-        return convert(schema, jsonElement);
+        return convert(fields, jsonElement);
     }
 
-    public static Map<String,Object> convert(final Schema schema, final JsonElement jsonElement) {
+    public static Map<String,Object> convert(final List<Schema.Field> fields, final JsonElement jsonElement) {
         if(jsonElement.isJsonObject()) {
-            return convert(schema, jsonElement.getAsJsonObject());
+            return convert(fields, jsonElement.getAsJsonObject());
         } else if(jsonElement.isJsonArray()) {
             final Map<String, Object> map = new HashMap<>();
             final JsonArray array = jsonElement.getAsJsonArray();
-            for(int i=0; i<schema.getFields().size(); i++) {
-                final Schema.Field field = schema.getField(i);
+            for(int i=0; i<fields.size(); i++) {
+                final Schema.Field field = fields.get(i);
                 if(i < array.size()) {
                     final JsonElement arrayElement = array.get(i);
                     map.put(field.getName(), convertValue(field.getFieldType(), arrayElement));
@@ -40,9 +40,9 @@ public class JsonToElementConverter {
         }
     }
 
-    public static Map<String,Object> convert(final Schema schema, final JsonObject jsonObject) {
+    public static Map<String,Object> convert(final List<Schema.Field> fields, final JsonObject jsonObject) {
         final Map<String, Object> values = new HashMap<>();
-        for(final Schema.Field field : schema.getFields()) {
+        for(final Schema.Field field : fields) {
             final String fieldName;
             if(field.getOptions().containsKey(Schema.OPTION_ORIGINAL_FIELD_NAME)) {
                 fieldName = field.getOptions().get(Schema.OPTION_ORIGINAL_FIELD_NAME);
@@ -63,7 +63,7 @@ public class JsonToElementConverter {
         }
         return switch (fieldType.getType()) {
             case string, json -> jsonElement.isJsonPrimitive() ? jsonElement.getAsString() : jsonElement.toString();
-            case bytes -> jsonElement.isJsonPrimitive() ? Base64.getUrlDecoder().decode(jsonElement.getAsString()) : null;
+            case bytes -> jsonElement.isJsonPrimitive() ? Base64.getDecoder().decode(jsonElement.getAsString()) : null;
             case int8 -> jsonElement.isJsonPrimitive() ? jsonElement.getAsByte() : null;
             case int16 -> jsonElement.isJsonPrimitive() ? jsonElement.getAsShort() : null;
             case int32 -> jsonElement.isJsonPrimitive() ? Integer.valueOf(jsonElement.getAsString()) : null;
@@ -160,7 +160,7 @@ public class JsonToElementConverter {
                     throw new IllegalStateException(String.format("FieldType: %s's type is record, but jsonElement is %s",
                             fieldType.getType(), jsonElement));
                 }
-                yield convert(fieldType.getElementSchema(), jsonElement);
+                yield convert(fieldType.getElementSchema().getFields(), jsonElement);
             }
             case map -> {
                 if(!jsonElement.isJsonObject()) {

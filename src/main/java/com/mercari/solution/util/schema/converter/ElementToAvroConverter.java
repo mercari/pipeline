@@ -98,11 +98,16 @@ public class ElementToAvroConverter {
     }
 
     public static GenericRecord convert(final org.apache.avro.Schema schema, final Map<String, Object> values) {
+        final GenericRecordBuilder builder = convertBuilder(schema, values);
+        return builder.build();
+    }
+
+    public static GenericRecordBuilder convertBuilder(final org.apache.avro.Schema schema, final Map<String, Object> values) {
         final GenericRecordBuilder builder = new GenericRecordBuilder(schema);
         for(final org.apache.avro.Schema.Field field : schema.getFields()) {
             builder.set(field, convertValue(field.name(), field.schema(), values.get(field.name())));
         }
-        return builder.build();
+        return builder;
     }
 
     private static org.apache.avro.Schema convertFieldSchema(

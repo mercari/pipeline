@@ -84,14 +84,14 @@ public class FilterTransform extends Transform {
         if(parameters.useSelect()) {
             final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, inputSchema.getFields());
             final Select.Transform selectTransform = Select
-                    .of(getJobName(), getName(), parameters.filter, selectFunctions, parameters.flattenField, getFailFast(), getOutputFailure(), parameters.outputType);
+                    .of(getJobName(), getName(), parameters.filter, selectFunctions, parameters.flattenField, getLoggings(), getFailFast(), parameters.outputType);
             outputSchema = selectTransform.outputSchema;
             final String stepName = (parameters.useFilter() ? "FilterAnd" : "") + "Select";
             final PCollectionTuple selectedTuple = input.apply(stepName, selectTransform);
             output = selectedTuple.get(selectTransform.outputTag);
             failure = selectedTuple.has(selectTransform.failuresTag) ? selectedTuple.get(selectTransform.failuresTag) : null;
         } else {
-            final Filter.Transform filteringTransform = Filter.of(getJobName(), getName(), parameters.filter, inputSchema, getFailFast());
+            final Filter.Transform filteringTransform = Filter.of(getJobName(), getName(), parameters.filter, inputSchema, getLoggings(), getFailFast());
             outputSchema = inputSchema;
             final PCollectionTuple filteredTuple = input.apply("Filter", filteringTransform);
             output = filteredTuple.get(filteringTransform.outputTag);

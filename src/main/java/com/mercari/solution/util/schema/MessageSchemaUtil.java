@@ -1,9 +1,11 @@
 package com.mercari.solution.util.schema;
 
+import com.google.gson.JsonObject;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -73,6 +75,25 @@ public class MessageSchemaUtil {
             case "attributes" -> message.getAttributeMap();
             default -> null;
         };
+    }
+
+    public static String toJsonString(final PubsubMessage message) {
+        if(message == null) {
+            return null;
+        }
+        final JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("messageId", message.getMessageId());
+        jsonObject.addProperty("topic", message.getTopic());
+        jsonObject.addProperty("orderingKey", message.getOrderingKey());
+        jsonObject.addProperty("payload", Base64.getEncoder().encodeToString(message.getPayload()));
+        if(message.getAttributeMap() != null) {
+            final JsonObject attributes = new JsonObject();
+            for(final Map.Entry<String, String> entry : message.getAttributeMap().entrySet()) {
+                attributes.addProperty(entry.getKey(), entry.getValue());
+            }
+            jsonObject.add("attributes", attributes);
+        }
+        return jsonObject.toString();
     }
 
 }

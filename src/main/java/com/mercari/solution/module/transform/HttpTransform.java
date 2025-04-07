@@ -6,20 +6,14 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.coder.UnionMapCoder;
-import com.mercari.solution.util.schema.converter.JsonToMapConverter;
-import com.mercari.solution.util.pipeline.OptionUtil;
-import com.mercari.solution.util.pipeline.Select;
-import com.mercari.solution.util.pipeline.Union;
-import com.mercari.solution.util.pipeline.Views;
+import com.mercari.solution.util.domain.web.HttpUtil;
+import com.mercari.solution.util.pipeline.*;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.schema.converter.JsonToElementConverter;
-import freemarker.template.Template;
 import org.apache.beam.io.requestresponse.*;
 import org.apache.beam.sdk.coders.KvCoder;
-import org.apache.beam.sdk.coders.VarLongCoder;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.transforms.windowing.AfterProcessingTime;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
@@ -33,16 +27,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.stream.Collectors;
 
 
 @Transform.Module(name="http")
@@ -50,12 +39,12 @@ public class HttpTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(HttpTransform.class);
 
-    private static final String METADATA_ENDPOINT = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/";
+    public static class Parameters implements Serializable {
 
-    public static class HttpTransformParameters implements Serializable {
-
-        private RequestParameters request;
-        private ResponseParameters response;
+        private Auth.Parameters auth;
+        private HttpUtil.Request request;
+        private List<HttpUtil.Request> requests;
+        private HttpUtil.Response response;
         private RetryParameters retry;
         private Integer timeoutSecond;
         private JsonArray select;
@@ -64,20 +53,28 @@ public class HttpTransform extends Transform {
 
         public void validate() {
             final List<String> errorMessages = new ArrayList<>();
-            if(this.request == null) {
+            if(this.request == null && (this.requests == null || this.requests.isEmpty())) {
                 errorMessages.add("parameters.request must not be null.");
+            } else if(this.request != null) {
+                errorMessages.addAll(this.request.validate(""));
             } else {
-                errorMessages.addAll(this.request.validate());
+                for(var req : requests) {
+                    req.validate("");
+                }
             }
 
             if(this.response == null) {
                 errorMessages.add("parameters.response must not be null.");
             } else {
-                errorMessages.addAll(this.response.validate());
+                errorMessages.addAll(this.response.validate(""));
             }
 
             if(this.retry != null) {
                 errorMessages.addAll(this.retry.validate());
+            }
+
+            if(auth != null) {
+                errorMessages.addAll(this.auth.validate(""));
             }
 
             if(!errorMessages.isEmpty()) {
@@ -86,7 +83,15 @@ public class HttpTransform extends Transform {
         }
 
         public void setDefaults() {
-            this.request.setDefaults();
+            if(requests == null) {
+                requests = new ArrayList<>();
+            }
+            if(request != null) {
+                requests.add(request);
+            }
+            for(var req : requests) {
+                req.setDefaults();
+            }
             this.response.setDefaults();
             if(this.retry == null) {
                 this.retry = new RetryParameters();
@@ -97,6 +102,8 @@ public class HttpTransform extends Transform {
             }
         }
 
+
+        /*
         private static class RequestParameters implements Serializable {
 
             private String endpoint;
@@ -176,6 +183,8 @@ public class HttpTransform extends Transform {
                 //this.prepareParameters = getPrepareParameters();
             }
 
+         */
+
             /*
             public Map<String, String> getPrepareParameters() {
                 final Map<String, String> prepareParameters = new HashMap<>();
@@ -216,10 +225,11 @@ public class HttpTransform extends Transform {
                 }
             }
 
-             */
 
         }
+             */
 
+        /*
         private static class ResponseParameters implements Serializable {
 
             private HttpTransform.Format format;
@@ -253,6 +263,8 @@ public class HttpTransform extends Transform {
             }
 
         }
+
+         */
 
         private static class RetryParameters implements Serializable {
 
@@ -314,65 +326,59 @@ public class HttpTransform extends Transform {
 
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
-        final HttpTransformParameters parameters = getParameters(HttpTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
-        final Schema responseSchema = createResponseSchema(parameters.response);
+        final Schema responseSchema = HttpUtil.createResponseSchema(parameters.response);
         final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, responseSchema.getFields());
         final Schema outputSchema = createOutputSchema(responseSchema, selectFunctions, parameters.flattenField);
 
-        final PCollection<MElement> elements = inputs
+        final PCollection<MElement> input = inputs
                 .apply("Union", Union.flatten()
                         .withWaits(getWaits())
                         .withStrategy(getStrategy()));
         final Schema inputSchema = Union.createUnionSchema(inputs);
 
-        final PCollection<KV<Map<String, Object>, MElement>> elementWithParams;
-        if(parameters.request.prepareRequests != null && false) {
-            final PCollection<Long> seed;
-            if(OptionUtil.isStreaming(inputs)) {
-                seed = inputs.getPipeline().begin()
-                        .apply("Seed", Create
-                                .of(1L)
-                                .withCoder(VarLongCoder.of()))
-                        .apply("WithTrigger", Window
-                                .<Long>into(new GlobalWindows())
-                                .triggering(Repeatedly.forever(AfterProcessingTime.pastFirstElementInPane()))
-                                .discardingFiredPanes());
-            } else {
-                seed = inputs.getPipeline().begin()
-                        .apply("Seed", Create
-                                .of(1L)
-                                .withCoder(VarLongCoder.of()));
-            }
-            final PCollectionView<Map<String, Object>> params = seed
-                    .apply("Prepare", ParDo.of(new PrepareDoFn(getParametersText())))
-                    .setCoder(UnionMapCoder.mapCoder())
-                    .apply(View.asSingleton());
-            elementWithParams = elements
-                    .apply("Lookup", ParDo.of(new LookupDoFn(params)).withSideInputs(params));
-        } else if(!getSideInputs().isEmpty()) {
+        final PCollection<KV<Map<String, Object>, MElement>> inputWithParams;
+        if(parameters.auth != null || !getSideInputs().isEmpty()) {
+
             final Map<String, PCollectionView<?>> views = new HashMap<>();
             for(final MCollection collection : getSideInputs()) {
                 final PCollectionView<Map<String,Object>> sideInputView = collection
                         .apply("AsView" + collection.getName(), Views.singleton());
                 views.put(collection.getName(), sideInputView);
             }
-            elementWithParams = elements
-                    .apply("Lookup", ParDo.of(new Lookup2DoFn(views)).withSideInputs(views));
+
+            if(parameters.auth != null) {
+                final Auth.Transform transform = Auth.of(
+                        getJobName(), getName(), parameters.auth, getFailFast(), getLoggings());
+                final PCollectionTuple auth = inputs.getPipeline().begin()
+                        .apply("Auth", transform);
+
+                final PCollection<Map<String, Object>> authOutput = auth
+                        .get(transform.outputTag)
+                        .apply("WithTrigger", Window
+                                .<Map<String, Object>>into(new GlobalWindows())
+                                .triggering(Repeatedly.forever(AfterProcessingTime.pastFirstElementInPane()))
+                                .discardingFiredPanes());
+                final PCollectionView<Map<String, Object>> params = authOutput.apply(View.asSingleton());
+                views.put("auth", params);
+            }
+            inputWithParams = input
+                    .apply("LookupAuth", ParDo.of(new LookupDoFn(views)).withSideInputs(views));
         } else {
-            elementWithParams = elements
-                    .apply("Lookup", WithKeys.of(new HashMap<>()));
+            inputWithParams = input
+                    .apply("EmptyAuth", WithKeys.of(new HashMap<>()));
         }
 
         final HttpCaller caller = new HttpCaller(
-                getName(), getParametersText(), inputSchema, selectFunctions, responseSchema, outputSchema);
+                getName(), getParametersText(), inputSchema, selectFunctions, responseSchema, outputSchema, getLoggings());
         final RequestResponseIO<KV<Map<String, Object>, MElement>, MElement> requestResponseIO = RequestResponseIO
                 .ofCallerAndSetupTeardown(caller, ElementCoder.of(outputSchema))
                 .withTimeout(Duration.standardSeconds(parameters.timeoutSecond));
 
-        final Result<MElement> httpResult = elementWithParams
+        final Result<MElement> httpResult = inputWithParams
                 .setCoder(KvCoder.of(UnionMapCoder.mapCoder(), ElementCoder.of(inputSchema)))
                 .apply("HttpCall", requestResponseIO);
 
@@ -390,36 +396,18 @@ public class HttpTransform extends Transform {
                     .map(JsonElement::toString)
                     .orElse(null);
             final Select.Transform selectTransform = Select.of(
-                    getJobName(), getName(), filterString, selectFunctions, parameters.flattenField, getFailFast(), getOutputFailure(), DataType.ELEMENT);
+                    getJobName(), getName(), filterString, selectFunctions, parameters.flattenField, getLoggings(), getFailFast(), DataType.ELEMENT);
             final PCollectionTuple tuple = httpResult.getResponses()
                     .apply("Select", selectTransform);
             output = tuple.get(selectTransform.outputTag);
-            errorList = errorList.and(tuple.get(selectTransform.failuresTag));
+            if(getOutputFailure()) {
+                errorList = errorList.and(tuple.get(selectTransform.failuresTag));
+            }
         }
 
         return MCollectionTuple
                 .of(output, outputSchema)
                 .failure(errorList.apply(Flatten.pCollections()));
-    }
-
-    private static Schema createResponseSchema(final HttpTransformParameters.ResponseParameters response) {
-        final Schema.FieldType fieldType;
-        if(response.schema == null) {
-            fieldType = switch (response.format) {
-                case bytes -> Schema.FieldType.BYTES.withNullable(true);
-                case text -> Schema.FieldType.STRING.withNullable(true);
-                case json -> Schema.FieldType.JSON.withNullable(true);
-            };
-        } else {
-            final Schema responseSchema = Schema.parse(response.schema.getAsJsonObject());
-            fieldType = Schema.FieldType.element(responseSchema);
-        }
-
-        return Schema.builder()
-                .withField("statusCode", Schema.FieldType.INT32)
-                .withField("body", fieldType)
-                .withField("headers", Schema.FieldType.map(Schema.FieldType.array(Schema.FieldType.STRING)).withNullable(true))
-                .build();
     }
 
     private static Schema createOutputSchema(
@@ -445,16 +433,15 @@ public class HttpTransform extends Transform {
 
         private final List<SelectFunction> selectFunctions;
 
+        private final Map<String, Logging> loggings;
+
         private final Set<HttpCaller.TokenType> tokenTypes;
 
         private transient HttpClient client;
 
-        private transient String idToken;
-        private transient String accessToken;
-
-        private transient HttpTransformParameters.RequestParameters request;
-        private transient HttpTransformParameters.ResponseParameters response;
-        private transient HttpTransformParameters.RetryParameters retry;
+        private transient HttpUtil.Request request;
+        private transient HttpUtil.Response response;
+        private transient Parameters.RetryParameters retry;
         private transient Integer timeoutSecond;
 
 
@@ -464,7 +451,8 @@ public class HttpTransform extends Transform {
                 final Schema inputSchema,
                 final List<SelectFunction> selectFunctions,
                 final Schema responseSchema,
-                final Schema outputSchema) {
+                final Schema outputSchema,
+                final List<Logging> loggings) {
 
             this.name = name;
             this.parametersText = parametersText;
@@ -474,23 +462,9 @@ public class HttpTransform extends Transform {
             this.responseSchema = responseSchema;
             this.outputSchema = outputSchema;
 
-            this.tokenTypes = new HashSet<>();
-            /*
-            this.tokenTypes = request.headers.entrySet().stream().map(
-                            s -> {
-                                if(!s.getKey().contains("Authorization")) {
-                                    return HttpCaller.TokenType.none;
-                                } else if(s.getValue().contains("_id_token")) {
-                                    return HttpCaller.TokenType.id;
-                                } else if(s.getValue().contains("_access_token")) {
-                                    return HttpCaller.TokenType.access;
-                                } else {
-                                    return HttpCaller.TokenType.none;
-                                }
-                            })
-                    .collect(Collectors.toSet());
+            this.loggings = Logging.map(loggings);
 
-             */
+            this.tokenTypes = new HashSet<>();
         }
 
         @Override
@@ -498,7 +472,7 @@ public class HttpTransform extends Transform {
 
             this.client = HttpClient.newBuilder().build();
 
-            final HttpTransformParameters parameters = new Gson().fromJson(parametersText, HttpTransformParameters.class);
+            final Parameters parameters = new Gson().fromJson(parametersText, Parameters.class);
             parameters.setDefaults();
 
             this.request = parameters.request;
@@ -507,13 +481,6 @@ public class HttpTransform extends Transform {
             this.timeoutSecond = parameters.timeoutSecond;
 
             this.request.setup();
-
-            if(this.tokenTypes.contains(HttpCaller.TokenType.id)) {
-                this.idToken = getIdToken(client, request.endpoint);
-            }
-            if(this.tokenTypes.contains(HttpCaller.TokenType.access)) {
-                this.accessToken = getAccessToken(client);
-            }
 
             for(final SelectFunction selectFunction : selectFunctions) {
                 selectFunction.setup();
@@ -530,34 +497,16 @@ public class HttpTransform extends Transform {
         @Override
         public MElement call(KV<Map<String, Object>, MElement> kv) throws UserCodeExecutionException {
             try {
-                HttpResponse.BodyHandler<?> bodyHandler = switch (response.format) {
-                    case text, json -> HttpResponse.BodyHandlers.ofString();
-                    case bytes -> HttpResponse.BodyHandlers.ofByteArray();
-                };
-
                 final MElement element = kv.getValue();
+                Logging.log(LOG, loggings, "input", element);
+
                 final Map<String, Object> params = element.asStandardMap(inputSchema, null);
                 final Map<String, Object> preparedParams = kv.getKey();
                 if(preparedParams != null) {
                     params.putAll(preparedParams);
                 }
-                TemplateUtil.setFunctions(params);
 
-                HttpResponse<?> httpResponse = sendRequest(client, request, params, bodyHandler);
-                if(httpResponse.statusCode() == 401
-                        && (tokenTypes.contains(TokenType.id) || tokenTypes.contains(TokenType.access))) {
-
-                    if(tokenTypes.contains(TokenType.id)) {
-                        LOG.info("Try to reacquire id token");
-                        this.idToken = getIdToken(client, request.endpoint);
-                    }
-                    if(tokenTypes.contains(TokenType.access)) {
-                        LOG.info("Try to reacquire access token");
-                        this.accessToken = getAccessToken(client);
-                    }
-                    httpResponse = sendRequest(client, request, params, bodyHandler);
-                }
-
+                final HttpResponse<?> httpResponse = HttpUtil.sendRequest(client, request, params, HttpUtil.getBodyHandler(response.format));
                 final boolean acceptable = response.acceptableStatusCodes.contains(httpResponse.statusCode());
                 if(httpResponse.statusCode() >= 400 && httpResponse.statusCode() < 500) {
                     if(!acceptable) {
@@ -569,7 +518,7 @@ public class HttpTransform extends Transform {
                     }
                 }
 
-                final Map<String, Object> output = switch (this.response.format) {
+                final Map<String, Object> outputValues = switch (this.response.format) {
                     case text -> {
                         final String body = (String) httpResponse.body();
                         final Map<String, Object> values = new HashMap<>();
@@ -616,10 +565,12 @@ public class HttpTransform extends Transform {
                                 jsonObject.addProperty("body", responseJson.toString());
                             }
                         }
-                        yield JsonToElementConverter.convert(responseSchema, jsonObject);
+                        yield JsonToElementConverter.convert(responseSchema.getFields(), jsonObject);
                     }
                 };
-                return MElement.of(output, element.getEpochMillis());
+                final MElement output = MElement.of(outputValues, element.getEpochMillis());
+                Logging.log(LOG, loggings, "output", output);
+                return output;
             } catch (URISyntaxException e) {
                 throw new UserCodeExecutionException("Illegal endpoint: " + request.endpoint, e);
             } catch (IOException | InterruptedException e) {
@@ -636,72 +587,11 @@ public class HttpTransform extends Transform {
         }
     }
 
-    private static class PrepareDoFn extends DoFn<Long, Map<String, Object>> {
-
-        private final String parametersText;
-        private transient HttpTransformParameters parameters;
-
-        PrepareDoFn(final String parametersText) {
-            this.parametersText = parametersText;
-        }
-
-        @Setup
-        public void setup() {
-            this.parameters = new Gson().fromJson(parametersText, HttpTransformParameters.class);
-            this.parameters.setDefaults();
-            this.parameters.request.setup();
-        }
-
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-            final Map<String, Object> values = new HashMap<>();
-            try {
-                final HttpClient client = HttpClient.newBuilder().build();
-                for(var request : parameters.request.prepareRequests) {
-                    final HttpResponse<String> response = sendRequest(
-                            client, request, values, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-                    final String body = response.body();
-                    JsonElement responseJson = new Gson().fromJson(body, JsonElement.class);
-                    if(!responseJson.isJsonObject()) {
-                        responseJson = new JsonObject();
-                    }
-                    final Map<String, Object> map = JsonToMapConverter.convert(responseJson);
-                    values.putAll(map);
-                }
-            } catch (final Throwable e) {
-                System.out.println(e);
-            }
-            c.output(values);
-        }
-
-    }
-
     private static class LookupDoFn extends DoFn<MElement, KV<Map<String, Object>, MElement>> {
-
-        private final PCollectionView<Map<String, Object>> view;
-
-        LookupDoFn(final PCollectionView<Map<String, Object>> view) {
-            this.view = view;
-        }
-
-        @Setup
-        public void setup() {
-
-        }
-
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-            final Map<String, Object> sideInput = c.sideInput(view);
-            c.output(KV.of(sideInput, c.element()));
-        }
-
-    }
-
-    private static class Lookup2DoFn extends DoFn<MElement, KV<Map<String, Object>, MElement>> {
 
         private final Map<String, PCollectionView<?>> views;
 
-        Lookup2DoFn(final Map<String, PCollectionView<?>> views) {
+        LookupDoFn(final Map<String, PCollectionView<?>> views) {
             this.views = views;
         }
 
@@ -719,7 +609,6 @@ public class HttpTransform extends Transform {
                     sideInputs.putAll(sideInput);
                 }
             }
-            System.out.println(sideInputs);
             c.output(KV.of(sideInputs, c.element()));
         }
 
@@ -759,48 +648,8 @@ public class HttpTransform extends Transform {
 
     }
 
-    private static <ResponseT> HttpResponse<ResponseT> sendRequest(
-            final HttpClient client,
-            final HttpTransformParameters.RequestParameters request,
-            final Map<String, Object> values,
-            final HttpResponse.BodyHandler<ResponseT> bodyHandler) throws IOException, InterruptedException, URISyntaxException {
 
-        final String url = createEndpoint(request, values);
-        final String bodyText;
-        if(request.templateBody != null) {
-            bodyText = TemplateUtil.executeStrictTemplate(request.templateBody, values);
-        } else {
-            bodyText = "";
-        }
-        final HttpRequest.BodyPublisher bodyPublisher = HttpRequest.BodyPublishers.ofString(bodyText);
-
-        HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(new URI(url))
-                .timeout(java.time.Duration.ofSeconds(100))
-                .method(request.method.toUpperCase(), bodyPublisher);
-
-        for(final Map.Entry<String, Template> entry : request.templateHeaders.entrySet()) {
-            final String headerValue = TemplateUtil.executeStrictTemplate(entry.getValue(), values);
-            builder = builder.header(entry.getKey(), headerValue);
-        }
-
-        return client.send(builder.build(), bodyHandler);
-    }
-
-    private static String createEndpoint(
-            final HttpTransformParameters.RequestParameters request,
-            final Map<String, Object> values) {
-
-        final String params = request.templateParams.entrySet()
-                .stream()
-                .map(e -> e.getKey() + "=" + URLEncoder
-                        .encode(TemplateUtil
-                                .executeStrictTemplate(e.getValue(), values), StandardCharsets.UTF_8))
-                .collect(Collectors.joining("&"));
-
-        return TemplateUtil.executeStrictTemplate(request.templateEndpoint, values) + (params.isEmpty() ? "" : ("?" + params));
-    }
-
+    /*
     private static String getIdToken(
             final HttpClient client,
             final String endpoint) throws UserCodeExecutionException {
@@ -850,5 +699,7 @@ public class HttpTransform extends Transform {
             throw new UserCodeRemoteSystemException("Failed to get access token", e);
         }
     }
+
+     */
 
 }

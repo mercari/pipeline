@@ -3,10 +3,7 @@ package com.mercari.solution.util.pipeline;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.module.MElement;
-import com.mercari.solution.module.MFailure;
-import com.mercari.solution.module.Schema;
-import com.mercari.solution.module.Strategy;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.ExpressionUtil;
@@ -504,9 +501,10 @@ public class Filter implements Serializable {
             final String name,
             final String filterJson,
             final Schema inputSchema,
+            final List<Logging> loggings,
             final boolean failFast) {
 
-        return new Transform(jobName, name, filterJson, inputSchema, failFast);
+        return new Transform(jobName, name, filterJson, inputSchema, loggings, failFast);
     }
 
     public static Transform of(
@@ -514,10 +512,11 @@ public class Filter implements Serializable {
             final String name,
             final JsonElement filterJson,
             final Schema inputSchema,
+            final List<Logging> loggings,
             final boolean failFast) {
 
         final String filterText = Optional.ofNullable(filterJson).map(JsonElement::toString).orElse(null);
-        return new Transform(jobName, name, filterText, inputSchema, failFast);
+        return new Transform(jobName, name, filterText, inputSchema, loggings, failFast);
     }
 
 
@@ -527,6 +526,7 @@ public class Filter implements Serializable {
         final String name;
         final String filterJson;
         final Schema inputSchema;
+        final Map<String, Logging> loggings;
         final boolean failFast;
 
         public final TupleTag<MElement> outputTag;
@@ -537,12 +537,14 @@ public class Filter implements Serializable {
                 final String name,
                 final String filterJson,
                 final Schema inputSchema,
+                final List<Logging> loggings,
                 final boolean failFast) {
 
             this.jobName = jobName;
             this.name = name;
             this.filterJson = filterJson;
             this.inputSchema = inputSchema;
+            this.loggings = Logging.map(loggings);
             this.failFast = failFast;
             this.outputTag = new TupleTag<>() {};
             this.failuresTag = new TupleTag<>() {};
@@ -552,7 +554,7 @@ public class Filter implements Serializable {
         public PCollectionTuple expand(PCollection<MElement> input) {
             final PCollectionTuple outputs = input
                     .apply("Filter", ParDo
-                            .of(new FilterDoFn(jobName, name, filterJson, inputSchema, failuresTag, failFast))
+                            .of(new FilterDoFn(jobName, name, filterJson, inputSchema, loggings, failuresTag, failFast))
                             .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
 
             return PCollectionTuple
@@ -569,6 +571,8 @@ public class Filter implements Serializable {
             private final String name;
             private final String conditionJsons;
             private final Schema inputSchema;
+            private final Map<String, Logging> loggings;
+
             private final TupleTag<MElement> failureTag;
             private final boolean failFast;
 
@@ -581,6 +585,7 @@ public class Filter implements Serializable {
                     final String name,
                     final String conditionJsons,
                     final Schema inputSchema,
+                    final Map<String, Logging> loggings,
                     final TupleTag<MElement> failureTag,
                     final boolean failFast) {
 
@@ -588,6 +593,7 @@ public class Filter implements Serializable {
                 this.name = name;
                 this.conditionJsons = conditionJsons;
                 this.inputSchema = inputSchema;
+                this.loggings = loggings;
                 this.failFast = failFast;
                 this.failureTag = failureTag;
 
@@ -601,25 +607,26 @@ public class Filter implements Serializable {
 
             @ProcessElement
             public void processElement(ProcessContext c) {
-                final MElement element = c.element();
-                if(element == null) {
+                final MElement input = c.element();
+                if(input == null) {
                     return;
                 }
 
                 try {
-                    if (Filter.filter(conditions, inputSchema, element)) {
-                        c.output(element);
+                    if (Filter.filter(conditions, inputSchema, input)) {
+                        Logging.log(LOG, loggings, "matched", input);
+                        c.output(input);
                     } else {
-                        LOG.info("not matched element: " + element);
+                        Logging.log(LOG, loggings, "not_matched", input);
                     }
                 } catch (final Throwable e) {
                     errorCounter.inc();
                     final MFailure failure = MFailure
-                            .of(jobName, name, element.toString(), e, c.timestamp());
+                            .of(jobName, name, input.toString(), e, c.timestamp());
                     final String errorMessage = String.format("Failed to filter for input: %s, for condition: %s, error: %s", failure.getInput(), conditionJsons, failure.getError());
                     LOG.error(errorMessage);
                     if(failFast) {
-                        throw new RuntimeException("Failed to filter for input: " + element + ", for condition: " + conditionJsons, e);
+                        throw new RuntimeException("Failed to filter for input: " + input + ", for condition: " + conditionJsons, e);
                     }
                     c.output(failureTag, failure.toElement(c.timestamp()));
                 }
