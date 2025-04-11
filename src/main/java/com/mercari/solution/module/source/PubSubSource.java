@@ -229,12 +229,14 @@ public class PubSubSource extends Source {
                 .ofNullable(getOutputType())
                 .orElse(DataType.ELEMENT);
 
-        final Schema inputSchema = createOutputSchema(parameters, getSchema());
+        final Schema inputSchema = createDeserializedInputSchema(parameters, getSchema());
         final Schema outputSchema;
         final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, inputSchema.getFields());
         if(selectFunctions.isEmpty()) {
-            outputSchema = inputSchema.copy()
-                    .withType(outputType);
+            outputSchema = inputSchema
+                    .copy()
+                    .withType(outputType)
+                    .setup(outputType);
         } else {
             outputSchema = SelectFunction
                     .createSchema(selectFunctions, parameters.flattenField)
@@ -255,7 +257,7 @@ public class PubSubSource extends Source {
                                 getFailFast(), failuresTag, originalTag))
                         .withOutputTags(outputTag, TupleTagList.of(outputTags)));
         final MCollectionTuple outputTuple = MCollectionTuple
-                .of(outputs.get(outputTag), inputSchema)
+                .of(outputs.get(outputTag), outputSchema)
                 .failure(outputs.get(failuresTag));
 
         if(parameters.outputOriginal) {
@@ -286,7 +288,7 @@ public class PubSubSource extends Source {
         return read;
     }
 
-    private static Schema createOutputSchema(Parameters parameters, Schema schema) {
+    private static Schema createDeserializedInputSchema(Parameters parameters, Schema schema) {
         if(Format.message.equals(parameters.format)) {
             return createMessageSchema().withType(DataType.MESSAGE);
         }
@@ -331,22 +333,23 @@ public class PubSubSource extends Source {
         private final TupleTag<MElement> failuresTag;
         private final TupleTag<MElement> originalTag;
 
-        // for non format
+        // for deserialize message
+        //// for non format
         private final List<Schema.Field> fields;
 
-        // for avro format
-        // https://beam.apache.org/documentation/programming-guide/#user-code-thread-compatibility
+        //// for avro format
+        //// https://beam.apache.org/documentation/programming-guide/#user-code-thread-compatibility
         private final String avroSchemaJson;
         private transient GenericDatumReader<GenericRecord> datumReader;
         private transient BinaryDecoder decoder = null;
 
-        // for protobuf format
+        //// for protobuf format
         private final String descriptorFile;
         private final String messageName;
         private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();
         private static final Map<String, JsonFormat.Printer> printers = new HashMap<>();
 
-        //
+        // for select result output schema
         private final Schema outputSchema;
 
         OutputDoFn(
