@@ -33,7 +33,7 @@ public class BigtableTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(BigtableTransform.class);
 
-    private static class BigtableTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String instanceId;
@@ -68,7 +68,7 @@ public class BigtableTransform extends Transform {
             }
         }
 
-        private void setDefaults(Map<String, Object> templateArgs) {
+        private void setDefaults() {
             if(format == null) {
                 format = BigtableSchemaUtil.Format.bytes;
             }
@@ -159,9 +159,9 @@ public class BigtableTransform extends Transform {
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
 
-        final BigtableTransformParameters parameters = getParameters(BigtableTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
-        parameters.setDefaults(getTemplateArgs());
+        parameters.setDefaults();
 
         final PCollection<MElement> input = inputs
                 .apply("Union", Union.flatten()
@@ -229,7 +229,7 @@ public class BigtableTransform extends Transform {
 
 
         QueryDoFn(
-                final BigtableTransformParameters parameters,
+                final Parameters parameters,
                 final Schema inputSchema,
                 final Schema filterResultSchema,
                 final Boolean failFast,

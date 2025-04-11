@@ -3,6 +3,7 @@ package com.mercari.solution.module.transform;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.coder.ElementCoder;
+import com.mercari.solution.util.gcp.ParameterManagerUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.schema.converter.ElementToRowConverter;
 import com.mercari.solution.util.sql.udf.AggregateFunctions;
@@ -10,11 +11,10 @@ import com.mercari.solution.util.sql.udf.ArrayFunctions;
 import com.mercari.solution.util.sql.udf.MathFunctions;
 import org.apache.beam.sdk.coders.RowCoder;
 import org.apache.beam.sdk.extensions.sql.SqlTransform;
+import org.apache.beam.sdk.extensions.sql.impl.QueryPlanner;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PCollectionTuple;
-import org.apache.beam.sdk.values.Row;
+import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,17 +23,14 @@ import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Transform.Module(name="beamsql")
 public class BeamSQLTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(BeamSQLTransform.class);
 
-    private static class BeamSQLTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String sql;
         private String ddl;
@@ -48,7 +45,7 @@ public class BeamSQLTransform extends Transform {
             }
         }
 
-        private void setDefaults(Map<String,Object> templateArgs) {
+        private void setDefaults(Map<String, String> templateArgs) {
             sql = loadQuery(sql, templateArgs);
             ddl = loadQuery(ddl, templateArgs);
             if(namedParameters == null) {
@@ -59,14 +56,25 @@ public class BeamSQLTransform extends Transform {
             }
         }
 
-        private String loadQuery(String sql, Map<String, Object> templateArgs) {
+        private String loadQuery(String sql, Map<String, String> templateArgs) {
             if(sql == null) {
                 return null;
             }
             String query;
             if(sql.startsWith("gs://")) {
+                LOG.info("sql parameter is GCS path: {}", sql);
                 final String rawQuery = StorageUtil.readString(sql);
                 query = TemplateUtil.executeStrictTemplate(rawQuery, templateArgs);
+            } else if(ParameterManagerUtil.isParameterVersionResource(sql)) {
+                LOG.info("sql parameter is Parameter Manager resource: {}", sql);
+                final ParameterManagerUtil.Version version = ParameterManagerUtil.getParameterVersion(sql);
+                if(version.payload == null) {
+                    throw new IllegalArgumentException("sql resource does not exists for: " + sql);
+                }
+                query = new String(version.payload, StandardCharsets.UTF_8);
+            } else if(sql.startsWith("data:")) {
+                LOG.info("sql parameter is base64 encoded");
+                query = new String(Base64.getDecoder().decode(sql), StandardCharsets.UTF_8);
             } else {
                 if(Files.exists(Paths.get(sql)) && !Files.isDirectory(Paths.get(sql))) {
                     try {
@@ -91,27 +99,52 @@ public class BeamSQLTransform extends Transform {
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
 
-        final BeamSQLTransformParameters parameters = getParameters(BeamSQLTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults(getTemplateArgs());
 
         PCollectionTuple tuple = PCollectionTuple.empty(inputs.getPipeline());
+        PCollectionList<MElement> failures = PCollectionList.empty(inputs.getPipeline());
         for(final Map.Entry<String, MCollection> entry : inputs.asCollectionMap().entrySet()) {
             final Schema schema = entry.getValue().getSchema();
             schema.setup();
-            PCollection<Row> row = entry.getValue()
-                    .apply("ConvertRow" + entry.getKey(), ParDo.of(new ConvertRowDoFn(schema)))
+
+            final TupleTag<Row> outputTag = new TupleTag<>() {};
+            final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+
+            final PCollectionTuple rowTuple = entry.getValue()
+                    .apply("ConvertRow" + entry.getKey(), ParDo
+                            .of(new ConvertRowDoFn(
+                                    getJobName(), getName(), entry.getKey(), schema, getLoggings(), getFailFast(), failuresTag))
+                            .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+
+            PCollection<Row> row = rowTuple
+                    .get(outputTag)
                     .setCoder(RowCoder.of(schema.getRowSchema()))
                     .setRowSchema(schema.getRowSchema());
+
             if(getStrategy() != null) {
-                row = row.apply("WithWindow", getStrategy().createWindow());
+                row = row.apply("WithWindow" + entry.getKey(), getStrategy().createWindow());
             }
             tuple = tuple.and(entry.getKey(), row);
+
+            if(!getFailFast()) {
+                failures = failures
+                        .and(rowTuple.get(failuresTag)
+                        .setCoder(ElementCoder.of(MFailure.schema())));
+            }
         }
 
         SqlTransform transform = SqlTransform.query(parameters.sql);
         transform = switch (parameters.planner) {
-            case zetasql -> transform.withQueryPlannerClass(org.apache.beam.sdk.extensions.sql.zetasql.ZetaSQLQueryPlanner.class);
+            case zetasql -> {
+                try {
+                    final Class<QueryPlanner> clazz = (Class<QueryPlanner>)Class.forName("org.apache.beam.sdk.extensions.sql.zetasql.ZetaSQLQueryPlanner");
+                    yield transform.withQueryPlannerClass(clazz);
+                } catch (final ClassNotFoundException e) {
+                    throw new IllegalStateException("remove comment out zetasql part in pom.xml");
+                }
+            }
             case null, default -> transform.withQueryPlannerClass(org.apache.beam.sdk.extensions.sql.impl.CalciteQueryPlanner.class);
         };
 
@@ -159,10 +192,37 @@ public class BeamSQLTransform extends Transform {
 
     private static class ConvertRowDoFn extends DoFn<MElement, Row> {
 
+        private final String jobName;
+        private final String moduleName;
+        private final String sourceName;
+
         private final Schema schema;
 
-        ConvertRowDoFn(Schema schema) {
+        private final Map<String, Logging> logging;
+
+        private final boolean failFast;
+        private final TupleTag<MElement> failuresTag;
+
+        ConvertRowDoFn(
+                final String jobName,
+                final String moduleName,
+                final String sourceName,
+                //
+                final Schema schema,
+                //
+                final List<Logging> logging,
+                final boolean failFast,
+                final TupleTag<MElement> failuresTag) {
+
+            this.jobName = jobName;
+            this.moduleName = moduleName;
+            this.sourceName = sourceName;
+
             this.schema = schema;
+
+            this.logging = Logging.map(logging);
+            this.failFast = failFast;
+            this.failuresTag = failuresTag;
         }
 
         @Setup
@@ -172,12 +232,25 @@ public class BeamSQLTransform extends Transform {
 
         @ProcessElement
         public void processElement(ProcessContext c) {
-            final MElement element = c.element();
-            if(element == null) {
+            final MElement input = c.element();
+            if(input == null) {
                 return;
             }
-            final Row row = ElementToRowConverter.convert(schema, element);
-            c.output(row);
+
+            try {
+                Logging.log(LOG, logging, "input", input);
+                final Row row = ElementToRowConverter.convert(schema, input);
+                c.output(row);
+            } catch (final Throwable e) {
+                final MFailure failure = MFailure
+                        .of(jobName, moduleName, input.toString(), e, c.timestamp());
+                final String errorMessage = String.format("Failed to convert to row: %s, source: %s, error: %s", input, sourceName, e.getMessage());
+                LOG.error(errorMessage);
+                if(failFast) {
+                    throw new RuntimeException(errorMessage, e);
+                }
+                c.output(failuresTag, failure.toElement(c.timestamp()));
+            }
         }
 
     }

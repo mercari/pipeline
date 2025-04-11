@@ -1,10 +1,7 @@
 package com.mercari.solution.module.sink;
 
 import com.google.gson.JsonObject;
-import com.mercari.solution.module.MCollectionTuple;
-import com.mercari.solution.module.MElement;
-import com.mercari.solution.module.Schema;
-import com.mercari.solution.module.Sink;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.schema.converter.ElementToJsonConverter;
 import freemarker.template.Template;
@@ -27,7 +24,7 @@ public class DebugSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(DebugSink.class);
 
-    private static class DebugSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private LogLevel logLevel;
         private String logTemplate;
@@ -54,7 +51,7 @@ public class DebugSink extends Sink {
             throw new IllegalArgumentException("debug sink module requires inputs parameter");
         }
 
-        final DebugSinkParameters parameters = getParameters(DebugSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.setDefaults();
 
         PCollectionList<Void> voids = PCollectionList.empty(inputs.getPipeline());
@@ -85,7 +82,7 @@ public class DebugSink extends Sink {
                 final String jobName,
                 final String name,
                 final Schema schema,
-                final DebugSinkParameters parameters) {
+                final Parameters parameters) {
 
             this.jobName = jobName;
             this.name = name;
@@ -115,7 +112,12 @@ public class DebugSink extends Sink {
                 json = ElementToJsonConverter.convert(schema, element.asPrimitiveMap());
             } catch (final Throwable e) {
                 json = new JsonObject();
-                json.addProperty("error", e.getMessage());
+                try {
+                    json.addProperty("input", element.toString());
+                } catch (Throwable ee) {
+                    LOG.error("failed to convert text: " + MFailure.convertThrowableMessage(ee));
+                }
+                json.addProperty("error", MFailure.convertThrowableMessage(e));
             }
             if(this.template == null) {
                 final JsonObject output = new JsonObject();

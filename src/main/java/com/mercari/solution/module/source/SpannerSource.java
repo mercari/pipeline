@@ -42,7 +42,7 @@ public class SpannerSource extends Source {
 
     private static final Counter ERROR_COUNTER = Metrics.counter("spanner_source", "error");;
 
-    private static class SpannerSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         // common parameters
         private Source.Mode mode;
@@ -102,13 +102,13 @@ public class SpannerSource extends Source {
 
             public List<String> validate(
                     String name,
-                    SpannerSourceParameters parentParameters) {
+                    Parameters parentParameters) {
 
                 final List<String> errorMessages = new ArrayList<>();
                 return errorMessages;
             }
 
-            public void setDefaults(SpannerSourceParameters parentParameters) {
+            public void setDefaults(Parameters parentParameters) {
 
                 if(this.metadataInstance == null) {
                     this.metadataInstance = parentParameters.instanceId;
@@ -227,7 +227,7 @@ public class SpannerSource extends Source {
     @Override
     public MCollectionTuple expand(PBegin begin) {
 
-        final SpannerSourceParameters parameters = getParameters(SpannerSourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
         parameters.setDefaults();
 
@@ -283,12 +283,12 @@ public class SpannerSource extends Source {
 
         private static final String SQL_SPLITTER = "--SPLITTER--";
 
-        private final SpannerSourceParameters parameters;
-        private final Map<String, Object> templateArgs;
+        private final Parameters parameters;
+        private final Map<String, String> templateArgs;
 
         private Type type;
 
-        QuerySource(final SpannerSourceParameters parameters, final Map<String, Object> templateArgs) {
+        QuerySource(final Parameters parameters, final Map<String, String> templateArgs) {
             this.parameters = parameters;
             this.templateArgs = templateArgs;
         }
@@ -336,10 +336,10 @@ public class SpannerSource extends Source {
 
             private static final Logger LOG = LoggerFactory.getLogger(CreateTransactionFn.class);
 
-            private final SpannerSourceParameters parameters;
+            private final Parameters parameters;
             private final TimestampBound timestampBound;
 
-            public CreateTransactionFn(final SpannerSourceParameters parameters) {
+            public CreateTransactionFn(final Parameters parameters) {
                 this.parameters = parameters;
                 this.timestampBound = toTimestampBound(parameters.timestampBound);
                 LOG.info(String.format("TimestampBound: %s", timestampBound.toString()));
@@ -367,12 +367,12 @@ public class SpannerSource extends Source {
 
             private static final Logger LOG = LoggerFactory.getLogger(QueryPartitionDoFn.class);
 
-            private final SpannerSourceParameters parameters;
+            private final Parameters parameters;
             private final PCollectionView<Transaction> transactionView;
             private final TupleTag<Struct> tagStruct;
 
             private QueryPartitionDoFn(
-                    final SpannerSourceParameters parameters,
+                    final Parameters parameters,
                     final PCollectionView<Transaction> transactionView,
                     final TupleTag<Struct> tagStruct) {
 
@@ -459,13 +459,13 @@ public class SpannerSource extends Source {
 
             private static final Logger LOG = LoggerFactory.getLogger(ReadStructDoFn.class);
 
-            private final SpannerSourceParameters parameters;
+            private final Parameters parameters;
             private final PCollectionView<Transaction> transactionView;
             private transient Spanner spanner;
             private transient BatchClient batchClient;
 
             private ReadStructDoFn(
-                    final SpannerSourceParameters parameters,
+                    final Parameters parameters,
                     final PCollectionView<Transaction> transactionView) {
 
                 this.parameters = parameters;
@@ -515,10 +515,10 @@ public class SpannerSource extends Source {
 
     private static class TableSource extends PTransform<PBegin, PCollection<Struct>> {
 
-        private final SpannerSourceParameters parameters;
+        private final Parameters parameters;
         private Type type;
 
-        TableSource(final SpannerSourceParameters parameters) {
+        TableSource(final Parameters parameters) {
             this.parameters = parameters;
         }
 
@@ -533,7 +533,7 @@ public class SpannerSource extends Source {
             final List<String> columns = type.getStructFields().stream()
                     .map(Type.StructField::getName)
                     .collect(Collectors.toList());
-            final List<SpannerSourceParameters.KeyRangeParameter> keyRanges = parameters.keyRange;
+            final List<Parameters.KeyRangeParameter> keyRanges = parameters.keyRange;
             final KeySet keySet = createKeySet(parameters, type);
 
             SpannerConfig config = SpannerConfig.create()
@@ -559,7 +559,7 @@ public class SpannerSource extends Source {
         }
 
         private static KeySet createKeySet(
-                final SpannerSourceParameters parameters,
+                final Parameters parameters,
                 final Type type) {
 
             if(parameters.keyRange == null) {
@@ -575,7 +575,7 @@ public class SpannerSource extends Source {
                         .collect(Collectors.toList());
 
                 final KeySet.Builder builder = KeySet.newBuilder();
-                for(final SpannerSourceParameters.KeyRangeParameter keyRangeParameter : parameters.keyRange) {
+                for(final Parameters.KeyRangeParameter keyRangeParameter : parameters.keyRange) {
                     final KeyRange.Endpoint startType;
                     if(keyRangeParameter.startType == null) {
                         startType = KeyRange.Endpoint.CLOSED;
@@ -638,9 +638,9 @@ public class SpannerSource extends Source {
 
     private static class ChangeStreamSource extends PTransform<PBegin, PCollection<MMutation>> {
 
-        private final SpannerSourceParameters parameters;
+        private final Parameters parameters;
 
-        ChangeStreamSource(final SpannerSourceParameters parameters) {
+        ChangeStreamSource(final Parameters parameters) {
             this.parameters = parameters;
         }
 
@@ -655,7 +655,7 @@ public class SpannerSource extends Source {
         }
 
         private static SpannerIO.ReadChangeStream createDataChangeRecordSource(
-                final SpannerSourceParameters parameters) {
+                final Parameters parameters) {
 
             final SpannerConfig spannerConfig = SpannerConfig.create()
                     .withHost(ValueProvider.StaticValueProvider.of(SpannerUtil.SPANNER_HOST_BATCH))
@@ -692,7 +692,7 @@ public class SpannerSource extends Source {
 
         private final String jobName;
         private final String moduleName;
-        private final SpannerSourceParameters parameters;
+        private final Parameters parameters;
         private final TupleTag<MElement> outputTag;
         private final TupleTag<MElement> failuresTag;
 
@@ -701,7 +701,7 @@ public class SpannerSource extends Source {
         ViewSource(
                 final String jobName,
                 final String moduleName,
-                final SpannerSourceParameters parameters,
+                final Parameters parameters,
                 final TupleTag<MElement> outputTag,
                 final TupleTag<MElement> failuresTag) {
 
@@ -738,13 +738,13 @@ public class SpannerSource extends Source {
 
             private final String jobName;
             private final String name;
-            private final SpannerSourceParameters parameters;
+            private final Parameters parameters;
             private final TupleTag<MElement> failuresTag;
 
             QueryMapDoFn(
                     final String jobName,
                     final String name,
-                    final SpannerSourceParameters parameters,
+                    final Parameters parameters,
                     final TupleTag<MElement> failuresTag) {
 
                 this.jobName = jobName;

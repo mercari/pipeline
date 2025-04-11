@@ -36,7 +36,7 @@ public class HttpSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(HttpSource.class);
 
-    private static class HttpSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private List<HttpUtil.Request> requests;
         private HttpUtil.Response response;
@@ -98,7 +98,7 @@ public class HttpSource extends Source {
     @Override
     public MCollectionTuple expand(PBegin begin) {
 
-        final HttpSourceParameters parameters = getParameters(HttpSourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
         parameters.setDefaults();
 
@@ -156,7 +156,7 @@ public class HttpSource extends Source {
         private final List<SelectFunction> selectFunctions;
 
         private transient HttpClient client;
-        private transient HttpSourceParameters parameters;
+        private transient Parameters parameters;
 
         HttpCaller(
                 final String name,
@@ -177,7 +177,7 @@ public class HttpSource extends Source {
         public void setup() throws UserCodeExecutionException {
             try {
                 this.client = HttpClient.newBuilder().build();
-                this.parameters = new Gson().fromJson(parametersText, HttpSourceParameters.class);
+                this.parameters = new Gson().fromJson(parametersText, Parameters.class);
                 this.parameters.setDefaults();
                 this.parameters.setup();
 
@@ -204,7 +204,6 @@ public class HttpSource extends Source {
 
                 final Map<String, Object> output = new HashMap<>();
                 final Map<String, Object> params = new HashMap<>();
-                TemplateUtil.setFunctions(params);
                 for(final HttpUtil.Request request : parameters.requests) {
                     final HttpResponse<?> httpResponse = HttpUtil.sendRequest(client, request, params, bodyHandler);
                     final boolean acceptable = parameters.response.acceptableStatusCodes.contains(httpResponse.statusCode());
@@ -231,7 +230,7 @@ public class HttpSource extends Source {
                                 yield switch (responseSchema.getField("body").getFieldType().getType()) {
                                     case element, map, json -> {
                                         jsonObject.add("body", responseJson.getAsJsonObject());
-                                        final Map<String, Object> map = JsonToElementConverter.convert(responseSchema, jsonObject);
+                                        final Map<String, Object> map = JsonToElementConverter.convert(responseSchema.getFields(), jsonObject);
                                         yield map.get("body");
                                     }
                                     default -> responseJson.toString();

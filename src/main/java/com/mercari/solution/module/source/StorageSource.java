@@ -33,7 +33,7 @@ public class StorageSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(StorageSource.class);
 
-    private static class StorageSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String input;
         private List<String> inputs;
@@ -94,7 +94,7 @@ public class StorageSource extends Source {
 
     @Override
     public MCollectionTuple expand(PBegin begin) {
-        final StorageSourceParameters parameters = getParameters(StorageSourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -204,7 +204,7 @@ public class StorageSource extends Source {
     private static ParquetIO.Read createParquetRead(
             final String input,
             final org.apache.avro.Schema readSchema,
-            final StorageSourceParameters parameters) {
+            final Parameters parameters) {
 
         ParquetIO.Read read = ParquetIO
                 .read(readSchema)
@@ -219,7 +219,7 @@ public class StorageSource extends Source {
     }
 
     private static TextIO.Read createTextRead(
-            final StorageSourceParameters parameters,
+            final Parameters parameters,
             final String input) {
         TextIO.Read read = TextIO.read().from(input);
         if(parameters.compression != null) {
@@ -310,9 +310,9 @@ public class StorageSource extends Source {
                 values.put("name", name);
                 values.put("timestamp", DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()));
             } else if(Format.csv.equals(format)) {
-                values = CsvToElementConverter.convert(inputSchema, c.element());
+                values = CsvToElementConverter.convert(inputSchema.getFields(), c.element());
             } else {
-                values = JsonToElementConverter.convert(inputSchema, c.element());
+                values = JsonToElementConverter.convert(inputSchema.getFields(), c.element());
             }
 
             if(timestampAttribute != null) {
@@ -339,7 +339,7 @@ public class StorageSource extends Source {
     private static org.apache.avro.Schema getAvroSchema(
             final String input,
             final Schema inputSchema,
-            final StorageSourceParameters.S3Parameters s3) {
+            final Parameters.S3Parameters s3) {
 
         if(inputSchema != null) {
             return inputSchema.getAvroSchema();
@@ -378,7 +378,7 @@ public class StorageSource extends Source {
     private static org.apache.avro.Schema getParquetSchema(
             final String input,
             final Schema inputSchema,
-            final StorageSourceParameters.S3Parameters s3) {
+            final Parameters.S3Parameters s3) {
 
         if(inputSchema != null) {
             return inputSchema.getAvroSchema();

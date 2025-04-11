@@ -45,7 +45,7 @@ public class BigQuerySource extends Source {
 
     private static final Counter ERROR_COUNTER = Metrics.counter("bigquery_source", "error");;
 
-    private static class BigQuerySourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         // for query read
         private String query;
@@ -164,7 +164,7 @@ public class BigQuerySource extends Source {
     @Override
     public MCollectionTuple expand(PBegin begin) {
 
-        final BigQuerySourceParameters parameters = getParameters(BigQuerySourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
         parameters.setDefaults(begin);
 
@@ -229,8 +229,8 @@ public class BigQuerySource extends Source {
     }
 
     private static KV<org.apache.avro.Schema, BigQueryIO.TypedRead<GenericRecord>> createRead(
-            final BigQuerySourceParameters parameters,
-            final Map<String, Object> templateArgs,
+            final Parameters parameters,
+            final Map<String, String> templateArgs,
             final MPipeline.Runner runner) {
 
         BigQueryIO.TypedRead<GenericRecord> read = BigQueryIO
@@ -327,7 +327,7 @@ public class BigQuerySource extends Source {
 
         private final String jobName;
         private final String moduleName;
-        private final BigQuerySourceParameters parameters;
+        private final Parameters parameters;
         private final TupleTag<MElement> outputTag;
         private final TupleTag<MElement> failuresTag;
 
@@ -336,7 +336,7 @@ public class BigQuerySource extends Source {
         ViewSource(
                 final String jobName,
                 final String moduleName,
-                final BigQuerySourceParameters parameters,
+                final Parameters parameters,
                 final TupleTag<MElement> outputTag,
                 final TupleTag<MElement> failuresTag) {
 
@@ -374,7 +374,7 @@ public class BigQuerySource extends Source {
 
             private final String job;
             private final String name;
-            private final BigQuerySourceParameters parameters;
+            private final Parameters parameters;
             private final TupleTag<MElement> failuresTag;
 
             private transient TableSchema schema;
@@ -382,7 +382,7 @@ public class BigQuerySource extends Source {
             QueryMapDoFn(
                     final String job,
                     final String name,
-                    final BigQuerySourceParameters parameters,
+                    final Parameters parameters,
                     final TupleTag<MElement> failuresTag) {
 
                 this.job = job;
@@ -443,7 +443,7 @@ public class BigQuerySource extends Source {
         }
     }
 
-    private static TableReference createTableReference(final BigQuerySourceParameters parameters) {
+    private static TableReference createTableReference(final Parameters parameters) {
 
         final TableReference tableReference = new TableReference();
         if(parameters.table != null) {

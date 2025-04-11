@@ -45,7 +45,7 @@ public class DeserializeTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(DeserializeTransform.class);
 
-    private static class DeserializeTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private Format format;
         private String field;
@@ -133,7 +133,7 @@ public class DeserializeTransform extends Transform {
                         .withStrategy(getStrategy()));
         final Schema inputSchema = Union.createUnionSchema(inputs);
 
-        final DeserializeTransformParameters parameters = getParameters(DeserializeTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(inputSchema);
         parameters.setDefaults();
 
@@ -156,14 +156,14 @@ public class DeserializeTransform extends Transform {
             final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select.getAsJsonArray(), deserializedSchema.getFields());
             outputSchema = SelectFunction.createSchema(selectFunctions, parameters.flattenField);
             final Select.Transform select = Select
-                    .of(getJobName(), getName(), parameters.filter, selectFunctions, parameters.flattenField, getFailFast(), getOutputFailure(), DataType.ELEMENT);
+                    .of(getJobName(), getName(), parameters.filter, selectFunctions, parameters.flattenField, getLoggings(), getFailFast(), DataType.ELEMENT);
             final PCollectionTuple selected = deserialized
                     .apply("Select", select);
             output = selected.get(select.outputTag);
             failure = selected.has(select.failuresTag) ? selected.get(select.failuresTag) : null;
         } else {
             if(parameters.useFilter()) {
-                final Filter.Transform filter = Filter.of(getJobName(), getName(), parameters.filter, inputSchema, getFailFast());
+                final Filter.Transform filter = Filter.of(getJobName(), getName(), parameters.filter, inputSchema, getLoggings(), getFailFast());
                 final PCollectionTuple filtered = deserialized
                         .apply("Filter", filter);
                 output = filtered.get(filter.outputTag);
@@ -184,7 +184,7 @@ public class DeserializeTransform extends Transform {
     }
 
     private static Schema createDeserializedSchema(
-            final DeserializeTransformParameters parameters,
+            final Parameters parameters,
             final Schema inputSchema) {
 
         final List<Schema.Field> deserializedFields = switch (parameters.format) {
@@ -258,7 +258,7 @@ public class DeserializeTransform extends Transform {
                 final String jobName,
                 final String moduleName,
                 final Schema outputSchema,
-                final DeserializeTransformParameters parameters,
+                final Parameters parameters,
                 final boolean failFast,
                 final boolean outputFailure,
                 final TupleTag<MElement> failuresTag) {

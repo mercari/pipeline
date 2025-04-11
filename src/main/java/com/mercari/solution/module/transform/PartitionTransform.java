@@ -27,7 +27,7 @@ public class PartitionTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(PartitionTransform.class);
 
-    private static class PartitionTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private Boolean exclusive;
         private Boolean union;
@@ -122,7 +122,7 @@ public class PartitionTransform extends Transform {
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
 
-        final PartitionTransformParameters parameters = getParameters(PartitionTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         final Schema inputSchema = Union.createUnionSchema(inputs);
         parameters.validate(inputSchema);
         parameters.setDefaults();
@@ -203,7 +203,7 @@ public class PartitionTransform extends Transform {
         PartitionDoFn(
                 final String jobName,
                 final String name,
-                final PartitionTransformParameters parameters,
+                final Parameters parameters,
                 final List<PartitionSetting> settings,
                 final Schema inputSchema,
                 final TupleTag<MElement> failureTag,
@@ -264,8 +264,7 @@ public class PartitionTransform extends Transform {
                     }
                 }
                 if(!outputed) {
-                    final MElement output = MElement.of(inputSchema, element.asPrimitiveMap(), c.timestamp());
-                    c.output(excludedTag, output);
+                    c.output(excludedTag, element);
                 }
             } catch (final Throwable e) {
                 errorCounter.inc();
