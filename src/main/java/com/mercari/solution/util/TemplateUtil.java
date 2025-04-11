@@ -12,6 +12,7 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -28,7 +29,7 @@ public class TemplateUtil {
 
     public static Template createSafeTemplate(final String name, final String template) {
 
-        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_33);
+        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_34);
         templateConfig.setNumberFormat("computer");
         templateConfig.setTemplateExceptionHandler(new ImputeSameVariablesTemplateExceptionHandler());
         templateConfig.setLogTemplateExceptions(false);
@@ -42,7 +43,7 @@ public class TemplateUtil {
     }
 
     public static Template createStrictTemplate(final String name, final String template) {
-        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_33);
+        final Configuration templateConfig = new Configuration(Configuration.VERSION_2_3_34);
         templateConfig.setNumberFormat("computer");
         templateConfig.setSharedVariable("statics", BeansWrapper.getDefaultInstance().getStaticModels());
         //templateConfig.setObjectWrapper(new CSVWrapper(Configuration.VERSION_2_3_30));
@@ -128,35 +129,19 @@ public class TemplateUtil {
     public static class DateTimeFunctions {
 
         public String formatTimestamp(Long epocMicros) {
-            if(epocMicros == null) {
-                return "";
-            }
-            final Instant timestamp = Instant.ofEpochMilli(epocMicros / 1000L);
-            final LocalDateTime dateTime = getLocalDateTime(timestamp, "UTC");
-            return dateTime.format(DateTimeFormatter.ISO_DATE_TIME);
+            return formatTimestamp(epocMicros, null, null);
         }
 
         public String formatTimestamp(Instant timestamp) {
-            if(timestamp == null) {
-                return "";
-            }
-            return formatTimestamp(DateTimeUtil.toEpochMicroSecond(timestamp));
+            return formatTimestamp(timestamp, null, null);
         }
 
         public String formatTimestamp(Long epocMicros, String pattern) {
-            return formatTimestamp(epocMicros, pattern,"UTC");
+            return formatTimestamp(epocMicros, pattern,null);
         }
 
         public String formatTimestamp(Instant timestamp, String pattern) {
-            return formatTimestamp(timestamp, pattern,"UTC");
-        }
-
-        public String formatTimestamp(Instant timestamp, String pattern, String timezone) {
-            if(timestamp == null) {
-                return "";
-            }
-            final LocalDateTime dateTime = getLocalDateTime(timestamp, timezone);
-            return dateTime.format(DateTimeFormatter.ofPattern(pattern));
+            return formatTimestamp(timestamp, pattern,null);
         }
 
         public String formatTimestamp(Long epocMicros, String pattern, String timezone) {
@@ -165,6 +150,20 @@ public class TemplateUtil {
             }
             final Instant timestamp = DateTimeUtil.toInstant(epocMicros);
             return formatTimestamp(timestamp, pattern, timezone);
+        }
+
+        public String formatTimestamp(Instant timestamp, String pattern, String timezone) {
+            if(timestamp == null) {
+                return "";
+            }
+            final LocalDateTime dateTime = getLocalDateTime(timestamp, timezone);
+            final DateTimeFormatter formatter;
+            if(pattern == null) {
+                formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'");
+            } else {
+                formatter = DateTimeFormatter.ofPattern(pattern);
+            }
+            return dateTime.format(formatter);
         }
 
         public String formatDate(Integer epocDays) {
@@ -225,30 +224,90 @@ public class TemplateUtil {
             return localTime.format(formatter);
         }
 
-        public String currentDate(final String zone) {
-            return currentDate(zone, 0L);
+        public LocalDate currentDate(final String zone) {
+            return currentDate(zone, null, null);
         }
 
-        public String currentDate(final String zone, final Long plusDays) {
-            return currentDate(zone, plusDays, "yyyy-MM-dd");
+        public LocalDate currentDate(final String zone, final Long plusDays) {
+            return currentDate(zone, plusDays, "DAYS");
         }
 
-        public String currentDate(final String zone, final Long plusDays, final String pattern) {
-            final LocalDate localDate = LocalDate.now(ZoneId.of(zone));
-            return DateTimeFormatter.ofPattern(pattern).format(localDate.plusDays(plusDays));
+        public LocalDate currentDate(final String zone, final Long plusAmount, final String unit) {
+            LocalDate localDate;
+            if(zone == null) {
+                localDate = LocalDate.now(ZoneOffset.UTC);
+            } else {
+                localDate = LocalDate.now(ZoneId.of(zone));
+            }
+            if(plusAmount != null && unit != null) {
+                final ChronoUnit chronoUnit = ChronoUnit.valueOf(unit);
+                localDate = localDate.plus(plusAmount, chronoUnit);
+            }
+            return localDate;
         }
 
-        public String currentTime(final String zone) {
-            return currentTime(zone, 0L);
+        public LocalTime currentTime(final String zone) {
+            return currentTime(zone, null, null);
         }
 
-        public String currentTime(final String zone, final Long plusSeconds) {
-            return currentTime(zone, plusSeconds, "HH:mm:ss");
+        public LocalTime currentTime(final String zone, final Long plusSeconds) {
+            return currentTime(zone, plusSeconds, "SECONDS");
         }
 
-        public String currentTime(final String zone, final Long plusSeconds, final String pattern) {
-            final LocalTime localTime = LocalTime.now(ZoneId.of(zone));
-            return DateTimeFormatter.ofPattern(pattern).format(localTime.plusSeconds(plusSeconds));
+        public LocalTime currentTime(final String zone, final Long plusAmount, final String unit) {
+            LocalTime localTime;
+            if(zone == null) {
+                localTime = LocalTime.now(ZoneOffset.UTC);
+            } else {
+                localTime = LocalTime.now(ZoneId.of(zone));
+            }
+            if(plusAmount != null && unit != null) {
+                final ChronoUnit chronoUnit = ChronoUnit.valueOf(unit);
+                localTime = localTime.plus(plusAmount, chronoUnit);
+            }
+            return localTime;
+        }
+
+        public String currentDateTime(final String zone) {
+            return currentDateTime(zone, 0L);
+        }
+
+        public String currentDateTime(final String zone, final Long plusSeconds) {
+            return currentDateTime(zone, plusSeconds, "yyyy-MM-dd'T'HH:mm:ss.SSSSSS");
+        }
+
+        public String currentDateTime(final String zone, final Long plusSeconds, final String pattern) {
+            final LocalDateTime localDateTime = LocalDateTime.now(ZoneId.of(zone));
+            return DateTimeFormatter.ofPattern(pattern).format(localDateTime.plusSeconds(plusSeconds));
+        }
+
+        public Instant currentTimestamp() {
+            return currentTimestamp(null, null, null);
+        }
+
+        public Instant currentTimestamp(final Long plusSeconds) {
+            return currentTimestamp(plusSeconds, ChronoUnit.SECONDS.name(), null);
+        }
+
+        public Instant currentTimestamp(final Long plusAmount, final String unit) {
+            return currentTimestamp(plusAmount, unit, null);
+        }
+
+        public Instant currentTimestamp(final String truncateUnit) {
+            return currentTimestamp(null, null, truncateUnit);
+        }
+
+        public Instant currentTimestamp(final Long plusAmount, final String unit, final String truncateUnit) {
+            LocalDateTime instant = LocalDateTime.now(ZoneOffset.UTC);
+            if(plusAmount != null && unit != null) {
+                final ChronoUnit chronoUnit = ChronoUnit.valueOf(unit);
+                instant = instant.plus(plusAmount, chronoUnit);
+            }
+            if(truncateUnit != null) {
+                final ChronoUnit chronoUnit = ChronoUnit.valueOf(truncateUnit);
+                instant = instant.truncatedTo(chronoUnit);
+            }
+            return instant.toInstant(ZoneOffset.UTC);
         }
 
         public String year(Instant timestamp, String timezone) {
@@ -292,7 +351,11 @@ public class TemplateUtil {
         }
 
         private static LocalDateTime getLocalDateTime(final Instant timestamp, final String timezone) {
-            return LocalDateTime.ofInstant(timestamp, ZoneId.of(timezone));
+            if(timezone == null) {
+                return LocalDateTime.ofInstant(timestamp, ZoneOffset.UTC);
+            } else {
+                return LocalDateTime.ofInstant(timestamp, ZoneId.of(timezone));
+            }
         }
 
     }

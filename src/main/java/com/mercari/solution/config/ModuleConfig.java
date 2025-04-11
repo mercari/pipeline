@@ -27,8 +27,7 @@ public class ModuleConfig implements Serializable {
 
     private String description;
 
-    // template args
-    private Map<String, Object> args;
+    private Map<String, String> args;
 
 
     public String getName() {
@@ -63,6 +62,12 @@ public class ModuleConfig implements Serializable {
         return failFast;
     }
 
+    public void setFailFast(Boolean failFast) {
+        if(failFast != null) {
+            this.failFast = failFast;
+        }
+    }
+
     public Boolean getOutputFailure() {
         return outputFailure;
     }
@@ -75,22 +80,22 @@ public class ModuleConfig implements Serializable {
         return description;
     }
 
-    public void applyTags(final Set<String> pipelineTags) {
-        if(pipelineTags == null || pipelineTags.isEmpty()) {
+    public void applyContext(final String context) {
+        if(context == null || context.isEmpty()) {
             return;
         }
         if(this.tags == null || this.tags.isEmpty()) {
             this.ignore = true;
         } else {
-            this.ignore = pipelineTags.stream().noneMatch(tags::contains);
+            this.ignore = !tags.contains(context);
         }
     }
 
-    public Map<String, Object> getArgs() {
+    public Map<String, String> getArgs() {
         return args;
     }
 
-    public void setArgs(Map<String, Object> args) {
+    public void setArgs(Map<String, String> args) {
         this.args = args;
     }
 

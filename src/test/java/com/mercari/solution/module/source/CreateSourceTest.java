@@ -43,9 +43,8 @@ public class CreateSourceTest {
                 }
                 """;
 
-        final Config config = MPipeline.loadConfig(configJson);
-        final String[] args = new String[]{};
-        final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config, args);
+        final Config config = Config.load(configJson);
+        final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
 
         final MCollection output = outputs.get("create");
 
@@ -105,9 +104,8 @@ public class CreateSourceTest {
                 }
                 """;
 
-        final Config config = MPipeline.loadConfig(configJson);
-        final String[] args = new String[]{};
-        final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config, args);
+        final Config config = Config.load(configJson);
+        final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
 
         final MCollection output = outputs.get("create");
 

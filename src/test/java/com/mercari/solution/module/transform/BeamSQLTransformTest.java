@@ -1,31 +1,283 @@
 package com.mercari.solution.module.transform;
 
-import com.google.gson.JsonObject;
-import com.mercari.solution.config.TransformConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.MPipeline;
+import com.mercari.solution.config.Config;
+import com.mercari.solution.module.MCollection;
+import com.mercari.solution.module.MElement;
+import org.apache.beam.sdk.extensions.sql.meta.provider.pubsub.PubsubTableProvider;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
-import org.apache.beam.sdk.transforms.Create;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.Row;
-import org.joda.time.Instant;
-import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 
-import java.util.Arrays;
-import java.util.Objects;
+import java.util.Map;
 
 public class BeamSQLTransformTest {
 
     private static final double DELTA = 1e-15;
 
-    /*
     @Rule
     public final transient TestPipeline pipeline = TestPipeline.create();
 
+    @Test
+    public void test() throws Exception {
+        final String configJson = """
+                {
+                  "sources": [
+                    {
+                      "name": "create",
+                      "module": "create",
+                      "parameters": {
+                        "elements": [1],
+                        "type": "int64"
+                      }
+                    }
+                  ],
+                  "transforms": [
+                    {
+                      "name": "beamsql",
+                      "module": "beamsql",
+                      "inputs": ["create"],
+                      "parameters": {
+                        "sql": "SELECT '012345' AS user_id, '2024-01-01T00:00:00.123Z' AS client_event_timestamp, 'category1' AS `category`, 1000 AS `count`, true AS `flag`, CAST(12.34 AS DOUBLE) AS `amount`, TIMESTAMP '2024-01-12 12:34:59.123' AS created_at, '111' || '#' || '21' AS insert_id FROM `create`"
+                      }
+                    }
+                  ]
+                }
+                """;
+        final Config config = Config.load(configJson);
+        final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
+
+        final MCollection output = outputs.get("beamsql");
+
+        PAssert.that(output.getCollection()).satisfies(rows -> {
+            int count = 0;
+            for (final MElement row : rows) {
+                System.out.println(row);
+                count++;
+            }
+            System.out.println(count);
+            //Assert.assertEquals(3, count);
+            return null;
+        });
+
+        pipeline.run();
+    }
+
+    @Test
+    public void testSimpleQuery() throws Exception {
+        final String sql1 = """
+                SELECT
+                  *
+                FROM
+                  `create`
+                WHERE
+                  CHAR_LENGTH(user_id) = 0
+                """;
+
+        final String configJson = """
+                {
+                  "sources": [
+                    {
+                      "name": "create",
+                      "module": "create",
+                      "logging": [
+                        { "name": "input", "level": "info" }
+                      ],
+                      "parameters": {
+                        "type": "element",
+                        "elements": [
+                          { "user_id": "a", "amount":  100, "category": "A", "timestamp": "2025-01-01T00:00:01Z" },
+                          { "user_id": "a", "amount":  200, "category": "B", "timestamp": "2025-01-01T00:00:02Z" },
+                          { "user_id": "a", "amount":  300, "category": "C", "timestamp": "2025-01-01T00:00:03Z" },
+                          { "user_id": "a", "amount":  400, "category": "D", "timestamp": "2025-01-01T00:00:04Z" },
+                          { "user_id": "a", "amount":  500, "category": "E", "timestamp": "2025-01-01T00:00:05Z" },
+                          { "user_id": "a", "amount":  600, "category": "F", "timestamp": "2025-01-01T00:00:06Z" },
+                          { "user_id": "a", "amount":  700, "category": "G", "timestamp": "2025-01-01T00:00:07Z" },
+                          { "user_id": "a", "amount":  800, "category": "H", "timestamp": "2025-01-01T00:00:08Z" },
+                          { "user_id": "a", "amount":  900, "category": "I", "timestamp": "2025-01-01T00:00:09Z" },
+                          { "user_id": "a", "amount": 1000, "category": "J", "timestamp": "2025-01-01T00:00:10Z" },
+                          { "user_id": "b", "amount":  100, "category": "A", "timestamp": "2025-01-01T00:00:01Z" },
+                          { "user_id": "b", "amount":  200, "category": "B", "timestamp": "2025-01-01T00:00:02Z" },
+                          { "user_id": "b", "amount":  300, "category": "C", "timestamp": "2025-01-01T00:00:03Z" },
+                          { "user_id": "b", "amount":  400, "category": "D", "timestamp": "2025-01-01T00:00:04Z" },
+                          { "user_id": "b", "amount":  500, "category": "E", "timestamp": "2025-01-01T00:00:05Z" },
+                          { "user_id": "b", "amount":  600, "category": "F", "timestamp": "2025-01-01T00:00:06Z" },
+                          { "user_id": "b", "amount":  700, "category": "G", "timestamp": "2025-01-01T00:00:07Z" },
+                          { "user_id": "b", "amount":  800, "category": "H", "timestamp": "2025-01-01T00:00:08Z" },
+                          { "user_id": "b", "amount":  900, "category": "I", "timestamp": "2025-01-01T00:00:09Z" },
+                          { "user_id": "b", "amount": 1000, "category": "J", "timestamp": "2025-01-01T00:00:10Z" }
+                        ]
+                      },
+                      "schema": {
+                        "fields": [
+                          { "name": "user_id", "type": "string" },
+                          { "name": "amount", "type": "int64" },
+                          { "name": "category", "type": "string" },
+                          { "name": "timestamp", "type": "timestamp" }
+                        ]
+                      },
+                      "timestampAttribute": "timestamp"
+                    }
+                  ],
+                  "transforms": [
+                    {
+                      "name": "beamsql1",
+                      "module": "beamsql",
+                      "inputs": ["create"],
+                      "parameters": {
+                        "sql": "%s"
+                      }
+                    }
+                  ]
+                }
+                """;
+
+        final String configText = String.format(configJson, sql1);
+        new PubsubTableProvider();
+        final Config config = Config.load(configText);
+        final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
+
+        final MCollection output1 = outputs.get("beamsql1");
+
+        PAssert.that(output1.getCollection()).satisfies(rows -> {
+            int count = 0;
+            for (final MElement row : rows) {
+                System.out.println(row);
+                count++;
+            }
+            System.out.println(count);
+            //Assert.assertEquals(3, count);
+            return null;
+        });
+
+        pipeline.run();
+    }
+
+    @Test
+    public void testMatchRecognize() throws Exception {
+
+        final String sql1 = """
+                WITH `Table` AS (
+                  SELECT
+                    user_id,
+                    CAST(amount AS DECIMAL) AS amount,
+                    category,
+                    `timestamp`
+                  FROM `create`
+                )
+                SELECT
+                  user_id,
+                  category_a,
+                  category_b,
+                  category_c,
+                  category_d,
+                  amount_a,
+                  amount_b,
+                  amount_c,
+                  amount_d,
+                  `timestamp`
+                FROM
+                  `Table`
+                MATCH_RECOGNIZE(
+                  PARTITION BY user_id
+                  ORDER BY `timestamp`
+                  MEASURES
+                    A.`timestamp` AS `timestamp`,
+                    A.category AS category_a,
+                    B.category AS category_b,
+                    C.category AS category_c,
+                    FIRST(D.category) AS category_d,
+                    A.amount AS amount_a,
+                    B.amount AS amount_b,
+                    C.amount AS amount_c,
+                    D.amount AS amount_d
+                  PATTERN (A B (D|C))
+                  SUBSET E = (A, B, C, D)
+                  DEFINE
+                    B AS category = 'B',
+                    D AS amount > PREV(D.amount, 1),
+                    C AS category = 'C'
+                ) AS M
+                """;
+
+        final String configJson = """
+                {
+                  "sources": [
+                    {
+                      "name": "create",
+                      "module": "create",
+                      "parameters": {
+                        "type": "element",
+                        "elements": [
+                          { "user_id": "a", "amount":  100, "category": "A", "timestamp": "2025-01-01T00:00:01Z" },
+                          { "user_id": "a", "amount":  200, "category": "B", "timestamp": "2025-01-01T00:00:02Z" },
+                          { "user_id": "a", "amount":  300, "category": "C", "timestamp": "2025-01-01T00:00:03Z" },
+                          { "user_id": "a", "amount":  400, "category": "D", "timestamp": "2025-01-01T00:00:04Z" },
+                          { "user_id": "a", "amount":  500, "category": "E", "timestamp": "2025-01-01T00:00:05Z" },
+                          { "user_id": "a", "amount":  600, "category": "F", "timestamp": "2025-01-01T00:00:06Z" },
+                          { "user_id": "a", "amount":  700, "category": "G", "timestamp": "2025-01-01T00:00:07Z" },
+                          { "user_id": "a", "amount":  800, "category": "H", "timestamp": "2025-01-01T00:00:08Z" },
+                          { "user_id": "a", "amount":  900, "category": "I", "timestamp": "2025-01-01T00:00:09Z" },
+                          { "user_id": "a", "amount": 1000, "category": "J", "timestamp": "2025-01-01T00:00:10Z" },
+                          { "user_id": "b", "amount":  100, "category": "A", "timestamp": "2025-01-01T00:00:01Z" },
+                          { "user_id": "b", "amount":  200, "category": "B", "timestamp": "2025-01-01T00:00:02Z" },
+                          { "user_id": "b", "amount":  300, "category": "C", "timestamp": "2025-01-01T00:00:03Z" },
+                          { "user_id": "b", "amount":  400, "category": "D", "timestamp": "2025-01-01T00:00:04Z" },
+                          { "user_id": "b", "amount":  500, "category": "E", "timestamp": "2025-01-01T00:00:05Z" },
+                          { "user_id": "b", "amount":  600, "category": "F", "timestamp": "2025-01-01T00:00:06Z" },
+                          { "user_id": "b", "amount":  700, "category": "G", "timestamp": "2025-01-01T00:00:07Z" },
+                          { "user_id": "b", "amount":  800, "category": "H", "timestamp": "2025-01-01T00:00:08Z" },
+                          { "user_id": "b", "amount":  900, "category": "I", "timestamp": "2025-01-01T00:00:09Z" },
+                          { "user_id": "b", "amount": 1000, "category": "J", "timestamp": "2025-01-01T00:00:10Z" }
+                        ]
+                      },
+                      "schema": {
+                        "fields": [
+                          { "name": "user_id", "type": "string" },
+                          { "name": "amount", "type": "int64" },
+                          { "name": "category", "type": "string" },
+                          { "name": "timestamp", "type": "timestamp" }
+                        ]
+                      },
+                      "timestampAttribute": "timestamp"
+                    }
+                  ],
+                  "transforms": [
+                    {
+                      "name": "beamsql1",
+                      "module": "beamsql",
+                      "inputs": ["create"],
+                      "parameters": {
+                        "sql": "%s"
+                      }
+                    }
+                  ]
+                }
+                """;
+
+        final String configText = String.format(configJson, sql1);
+        new PubsubTableProvider();
+        final Config config = Config.load(configText);
+        final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
+
+        final MCollection output1 = outputs.get("beamsql1");
+
+        PAssert.that(output1.getCollection()).satisfies(rows -> {
+            int count = 0;
+            for (final MElement row : rows) {
+                System.out.println(row);
+                count++;
+            }
+            System.out.println(count);
+            //Assert.assertEquals(3, count);
+            return null;
+        });
+
+        pipeline.run();
+    }
+
+    /*
     @Test
     public void testMathUDFs() {
         testMathUDFs("zetasql");

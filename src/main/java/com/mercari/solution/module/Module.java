@@ -26,7 +26,7 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
     private transient List<PCollection<?>> waits;
     private List<Logging> loggings;
 
-    private Map<String, Object> templateArgs;
+    private Map<String, String> templateArgs;
     private Boolean failFast;
     private Boolean outputFailure;
     private DataType outputType;
@@ -63,7 +63,7 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
         return waits;
     }
 
-    public Map<String, Object> getTemplateArgs() {
+    public Map<String, String> getTemplateArgs() {
         return templateArgs;
     }
 
@@ -120,7 +120,7 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
 
     protected <ParameterT> ParameterT getParameters(Class<ParameterT> clazz) {
         try {
-            final JsonObject parametersJson = Config.convertConfigJson(parametersText);
+            final JsonObject parametersJson = Config.convertConfigJson(parametersText, Config.Format.json);
             final ParameterT parameters = new Gson().fromJson(parametersJson, clazz);
             if (parameters == null) {
                 throw new IllegalModuleException("parameters must not be empty");

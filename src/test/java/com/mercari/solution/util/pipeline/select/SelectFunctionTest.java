@@ -27,7 +27,10 @@ public class SelectFunctionTest {
                 Schema.Field.of("timestampField", Schema.FieldType.TIMESTAMP),
                 Schema.Field.of("nestedField", Schema.FieldType.element(Schema.builder()
                                 .withField("stringField", Schema.FieldType.STRING)
-                        .build()))
+                        .build())),
+                Schema.Field.of("arrayNestedField", Schema.FieldType.array(Schema.FieldType.element(Schema.builder()
+                        .withField("stringField", Schema.FieldType.STRING)
+                        .build())))
         );
 
         final String config = """
@@ -56,6 +59,13 @@ public class SelectFunctionTest {
                       ] }
                     ] }
                   ] },
+                  { "name": "structEachField", "each": "arrayNestedField", "fields": [
+                    { "name": "enumField" },
+                    { "name": "stringFieldA", "field": "stringField" },
+                    { "name": "intFieldA", "field": "intField" },
+                    { "name": "textFieldA", "func": "hash", "text": "${stringFieldA}" },
+                    { "name": "nestedStringField", "field": "arrayNestedField.stringField" }
+                  ] },
                   { "name": "jsonField", "func": "json", "fields": [
                     { "name": "enumField" },
                     { "name": "stringFieldA", "field": "stringField" },
@@ -77,7 +87,7 @@ public class SelectFunctionTest {
         final JsonArray array = new Gson().fromJson(config, JsonArray.class);
         final List<SelectFunction> selectFunctions = SelectFunction.of(array, inputFields);
 
-        final Schema outputSchema = SelectFunction.createSchema(selectFunctions);
+        final Schema outputSchema = SelectFunction.createSchema(selectFunctions, "structEachField");
         Assert.assertTrue(outputSchema.hasField("longField"));
         Assert.assertTrue(outputSchema.hasField("renameIntField"));
         Assert.assertTrue(outputSchema.hasField("constantStringField"));
@@ -116,6 +126,12 @@ public class SelectFunctionTest {
         values.put("doubleField", 10.10D);
         values.put("enumField", 1);
         values.put("timestampField", Instant.parse("2024-08-30T00:00:00Z").getMillis() * 1000L);
+
+        {
+            final Map<String, Object> nestedArrayFieldValues = new HashMap<>();
+            nestedArrayFieldValues.put("stringField", "Z");
+            values.put("arrayNestedField", List.of(nestedArrayFieldValues));
+        }
 
         final Map<String, Object> nestedFieldValues = new HashMap<>();
         nestedFieldValues.put("stringField", "100");

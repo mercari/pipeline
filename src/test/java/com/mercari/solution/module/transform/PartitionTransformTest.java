@@ -71,7 +71,7 @@ public class PartitionTransformTest {
                 }
                 """;
 
-        final Config config = MPipeline.loadConfig(configJson);
+        final Config config = Config.load(configJson);
         final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
 
         final MCollection output1 = outputs.get("partition.output1");

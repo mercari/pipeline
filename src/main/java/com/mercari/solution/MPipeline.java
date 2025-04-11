@@ -2,10 +2,6 @@ package com.mercari.solution;
 
 import com.mercari.solution.config.*;
 import com.mercari.solution.module.*;
-import com.mercari.solution.util.gcp.ArtifactRegistryUtil;
-import com.mercari.solution.util.gcp.ParameterManagerUtil;
-import com.mercari.solution.util.gcp.PubSubUtil;
-import com.mercari.solution.util.gcp.StorageUtil;
 import com.mercari.solution.util.pipeline.OptionUtil;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
@@ -18,10 +14,6 @@ import org.apache.beam.sdk.transforms.Create;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -35,14 +27,14 @@ public class MPipeline {
         String getConfig();
         void setConfig(String config);
 
-        @Description("Config text body or config resource name.")
-        String getTags();
-        void setTags(String tags);
+        @Description("Context for pipeline job.")
+        String getContext();
+        void setContext(String context);
 
-        @Description("Enable template engine for config")
-        @Default.Boolean(false)
-        Boolean getEnableConfigTemplate();
-        void setEnableConfigTemplate(Boolean enableConfigTemplate);
+        @Description("Config format. json or yaml.")
+        @Default.Enum("unknown")
+        Config.Format getFormat();
+        void setFormat(Config.Format format);
 
     }
 
@@ -70,14 +62,11 @@ public class MPipeline {
         final Runner runner = OptionUtil.getRunner(pipelineOptions);
         LOG.info("Runner: {}", runner);
 
-        final Set<String> tags;
-        if(pipelineOptions.getTags() != null) {
-            tags = new HashSet<>(Arrays.asList(pipelineOptions.getTags().strip().split(",")));
-        } else {
-            tags = new HashSet<>();
-        }
-
-        final Config config = loadConfig(pipelineOptions.getConfig(), tags, args, pipelineOptions.getEnableConfigTemplate());
+        final Config config = Config.load(
+                pipelineOptions.getConfig(),
+                pipelineOptions.getContext(),
+                pipelineOptions.getFormat(),
+                args);
 
         if(Optional.ofNullable(config.getEmpty()).orElse(false)) {
             LOG.info("Empty pipeline");
@@ -86,11 +75,12 @@ public class MPipeline {
             pipeline.run();
             return;
         }
+
         Options.setOptions(pipelineOptions, config.getOptions());
 
         final Pipeline pipeline = Pipeline.create(pipelineOptions);
 
-        final Map<String, MCollection> outputs = apply(pipeline, config, args);
+        final Map<String, MCollection> outputs = apply(pipeline, config);
 
         for(final Map.Entry<String, MCollection> entry : outputs.entrySet()) {
             if(entry.getKey().endsWith(".failures")) {
@@ -103,10 +93,6 @@ public class MPipeline {
     }
 
     public static Map<String, MCollection> apply(final Pipeline pipeline, final Config config) {
-        return apply(pipeline, config, new String[]{});
-    }
-
-    public static Map<String, MCollection> apply(final Pipeline pipeline, final Config config, final String[] args) {
 
         final Map<String, MCollection> outputs = new HashMap<>();
         final Set<String> executedModuleNames = new HashSet<>();
@@ -127,62 +113,6 @@ public class MPipeline {
         }
 
         return outputs;
-    }
-
-    public static Config loadConfig(final String configParam) throws Exception {
-        return loadConfig(configParam, null, new String[0], true);
-    }
-
-    public static Config loadConfig(final String configParam, final Set<String> tags, final String[] args, final Boolean useConfigTemplate) throws Exception {
-        if(configParam == null) {
-            throw new IllegalArgumentException("Parameter config must not be null!");
-        }
-
-        final String content;
-        if(configParam.startsWith("gs://")) {
-            LOG.info("config parameter is GCS path: {}", configParam);
-            content = StorageUtil.readString(configParam);
-        } else if(configParam.startsWith("ar://")) {
-            LOG.info("config parameter is GAR path: {}", configParam);
-            final byte[] bytes = ArtifactRegistryUtil.download(configParam);
-            content = new String(bytes, StandardCharsets.UTF_8);
-        } else if(ParameterManagerUtil.isParameterVersionResource(configParam)) {
-            LOG.info("config parameter is Parameter Manager resource: {}", configParam);
-            final ParameterManagerUtil.Version version = ParameterManagerUtil.getParameterVersion(configParam);
-            content = new String(version.payload, StandardCharsets.UTF_8);
-        } else if(configParam.startsWith("data:")) {
-            LOG.info("config parameter is base64 encoded");
-            content = new String(Base64.getDecoder().decode(configParam.replaceFirst("data:", "")), StandardCharsets.UTF_8);
-        } else if(PubSubUtil.isSubscriptionResource(configParam)) {
-            LOG.info("config parameter is PubSub Subscription: {}", configParam);
-            content = PubSubUtil.getTextMessage(configParam);
-            if(content == null) {
-                final Config config = new Config();
-                config.setEmpty(true);
-                return config;
-            }
-            LOG.info("config content: {}", content);
-        } else  {
-            Path path;
-            try {
-                path = Paths.get(configParam);
-            } catch (final Throwable e) {
-                path = null;
-            }
-            if(path != null && Files.exists(path) && !Files.isDirectory(path)) {
-                LOG.info("config parameter is local file path: {}", configParam);
-                content = Files.readString(path, StandardCharsets.UTF_8);
-            } else {
-                LOG.info("config parameter body: {}", configParam);
-                content = configParam;
-            }
-        }
-
-        if(content == null) {
-            throw new IllegalArgumentException("Content is null for config parameter: " + configParam);
-        }
-
-        return Config.parse(content, tags, args, useConfigTemplate);
     }
 
     private static void setSourceResult(

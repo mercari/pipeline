@@ -83,7 +83,7 @@ public class FilterTransformTest {
                 }
                 """;
 
-        final Config config = MPipeline.loadConfig(configJson);
+        final Config config = Config.load(configJson);
         final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
 
         final MCollection output = outputs.get("filter2");
