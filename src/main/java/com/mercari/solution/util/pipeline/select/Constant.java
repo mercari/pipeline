@@ -34,12 +34,12 @@ public class Constant implements SelectFunction {
 
     public static Constant of(String name, JsonObject jsonObject, boolean ignore) {
         if(!jsonObject.has("type")) {
-            throw new IllegalArgumentException("SelectField constant: " + name + " requires field parameter");
+            throw new IllegalArgumentException("SelectField constant: " + name + " requires type parameter");
         }
         final String type = jsonObject.get("type").getAsString();
 
         if(!jsonObject.has("value")) {
-            throw new IllegalArgumentException("SelectField constant: " + name + " requires field parameter");
+            throw new IllegalArgumentException("SelectField constant: " + name + " requires value parameter");
         }
         final String value = jsonObject.get("value").toString();
 

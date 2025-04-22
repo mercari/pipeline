@@ -7,7 +7,7 @@ import com.mercari.solution.module.Strategy;
 import com.mercari.solution.util.coder.AccumulatorCoder;
 import com.mercari.solution.util.coder.UnionMapCoder;
 import com.mercari.solution.util.pipeline.aggregation.Accumulator;
-import com.mercari.solution.util.pipeline.aggregation.Aggregator;
+import com.mercari.solution.util.pipeline.aggregation.AggregateFunction;
 import com.mercari.solution.util.pipeline.aggregation.Aggregators;
 import org.apache.beam.sdk.coders.*;
 import org.apache.beam.sdk.transforms.*;
@@ -48,7 +48,7 @@ public class Aggregation {
         }
 
         for(final Aggregators aggregators : aggregatorsList) {
-            for(final Aggregator aggregation : aggregators.getAggregators()) {
+            for(final AggregateFunction aggregation : aggregators.getAggregators()) {
                 if(aggregation.ignore()) {
                     continue;
                 }

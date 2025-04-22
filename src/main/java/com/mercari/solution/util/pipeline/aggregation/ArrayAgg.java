@@ -11,7 +11,7 @@ import org.joda.time.Instant;
 import java.io.Serializable;
 import java.util.*;
 
-public class ArrayAgg implements Aggregator {
+public class ArrayAgg implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -20,6 +20,9 @@ public class ArrayAgg implements Aggregator {
     private Order order;
     private List<String> fields;
     private String condition;
+
+    private List<Range> ranges;
+
     private Boolean ignore;
     private Boolean expandOutputName;
 
@@ -33,7 +36,7 @@ public class ArrayAgg implements Aggregator {
 
     public static ArrayAgg of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String condition,
             final Boolean ignore,
             final JsonObject params) {
@@ -49,7 +52,7 @@ public class ArrayAgg implements Aggregator {
             final List<Schema.Field> fs = new ArrayList<>();
             for(JsonElement element : params.get("fields").getAsJsonArray()) {
                 final String fieldName = element.getAsString();
-                final Schema.Field inputField = inputSchema.getField(fieldName);
+                final Schema.Field inputField = Schema.getField(inputFields, fieldName);
                 arrayAgg.inputFields.add(inputField);
                 arrayAgg.fields.add(fieldName);
                 fs.add(Schema.Field.of(inputField.getName(), inputField.getFieldType()));
@@ -58,7 +61,7 @@ public class ArrayAgg implements Aggregator {
             arrayAgg.outputFieldType = Schema.FieldType.array(Schema.FieldType.element(fs).withNullable(true));
         } else if(params.has("field")) {
             final String fieldName = params.get("field").getAsString();
-            final Schema.Field inputField = inputSchema.getField(fieldName);
+            final Schema.Field inputField = Schema.getField(inputFields, fieldName);
             arrayAgg.inputFields.add(inputField);
             arrayAgg.fields.add(fieldName);
             arrayAgg.expandOutputName = false;
@@ -86,7 +89,12 @@ public class ArrayAgg implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     @Override
@@ -118,13 +126,18 @@ public class ArrayAgg implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
         for(final Schema.Field inputField : inputFields) {
             final String key = outputKeyName(inputField.getName());
             final Object value = input.getPrimitiveValue(inputField.getName());
             accumulator.append(key, value);
         }
         return accumulator;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
     }
 
     @Override

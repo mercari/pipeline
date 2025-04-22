@@ -12,7 +12,7 @@ import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Std implements Aggregator {
+public class Std implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -25,6 +25,8 @@ public class Std implements Aggregator {
     private Integer ddof; // Delta Degree of Freedom
     private Boolean outputVar;
     private String condition;
+
+    private List<Range> ranges;
 
     private Boolean ignore;
 
@@ -45,7 +47,7 @@ public class Std implements Aggregator {
 
     public static Std of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String field,
             final String expression,
             final String condition,
@@ -74,19 +76,19 @@ public class Std implements Aggregator {
         std.inputFields = new ArrayList<>();
 
         if(field != null) {
-            std.inputFields.add(Schema.Field.of(field, inputSchema.getField(field).getFieldType()));
+            std.inputFields.add(Schema.Field.of(field, Schema.getField(inputFields, field).getFieldType()));
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                std.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                std.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
         }
         if(params.has("weightField")) {
             std.weightField = params.get("weightField").getAsString();
-            std.inputFields.add(Schema.Field.of(std.weightField, inputSchema.getField(std.weightField).getFieldType()));
+            std.inputFields.add(Schema.Field.of(std.weightField, Schema.getField(inputFields, std.weightField).getFieldType()));
         } else if(params.has("weightExpression")) {
             std.weightExpression = params.get("weightExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(std.weightExpression)) {
-                std.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                std.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
         }
 
@@ -117,7 +119,12 @@ public class Std implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     @Override
@@ -159,12 +166,12 @@ public class Std implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
         final Double inputValue;
         if(field != null) {
             inputValue = input.getAsDouble(field);
         } else {
-            inputValue = Aggregator.eval(this.exp, variables, input);
+            inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
         if(inputValue == null || Double.isNaN(inputValue)) {
             return accumulator;
@@ -173,7 +180,7 @@ public class Std implements Aggregator {
         if(weightField != null) {
             inputWeight = input.getAsDouble(weightField);
         } else if(weightExpression != null) {
-            inputWeight = Aggregator.eval(this.weightExp, weightVariables, input);
+            inputWeight = AggregateFunction.eval(this.weightExp, weightVariables, input);
         } else {
             inputWeight = 1D;
         }
@@ -182,6 +189,11 @@ public class Std implements Aggregator {
         }
 
         return add(accumulator, inputValue, inputWeight);
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
     }
 
     @Override
@@ -219,7 +231,7 @@ public class Std implements Aggregator {
         final Double baseWeight = base.getAsDouble(accumKeyWeightName);
         final Double inputAvg = input.getAsDouble(accumKeyAvgName);
         final Double inputWeight = input.getAsDouble(accumKeyWeightName);
-        final Double avg = Aggregator.avg(baseAvg, baseWeight, inputAvg, inputWeight);
+        final Double avg = AggregateFunction.avg(baseAvg, baseWeight, inputAvg, inputWeight);
         final Double count = baseCount + inputCount;
         final Double weight = Optional.ofNullable(baseWeight).orElse(0D) + Optional.ofNullable(inputWeight).orElse(0D);
         base.put(accumKeyAvgName, avg);
@@ -259,7 +271,7 @@ public class Std implements Aggregator {
 
         final Double prevAvg = accumulator.getAsDouble(accumKeyAvgName);
         final Double prevWeight = Optional.ofNullable(accumulator.getAsDouble(accumKeyWeightName)).orElse(0D);
-        final Double nextAvg = Aggregator.avg(prevAvg, prevWeight, inputValue, inputWeight);
+        final Double nextAvg = AggregateFunction.avg(prevAvg, prevWeight, inputValue, inputWeight);
         final Double nextWeight = prevWeight + Optional.ofNullable(inputWeight).orElse(0D);
         accumulator.put(accumKeyAvgName, nextAvg);
         accumulator.put(accumKeyCountName, Optional.ofNullable(accumulator.getAsDouble(accumKeyCountName)).orElse(0D) + 1D);

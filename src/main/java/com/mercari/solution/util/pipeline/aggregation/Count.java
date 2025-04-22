@@ -10,7 +10,7 @@ import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Count implements Aggregator {
+public class Count implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -19,6 +19,8 @@ public class Count implements Aggregator {
     private String condition;
 
     private Boolean ignore;
+
+    private List<Range> ranges;
 
     private transient Filter.ConditionNode conditionNode;
 
@@ -35,9 +37,13 @@ public class Count implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
     }
 
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
+    }
 
     public static Count of(
             final String name,
@@ -87,16 +93,21 @@ public class Count implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accum, final MElement input) {
-        final Object countPrev = accum.get(name);
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+        final Object countPrev = accumulator.get(name);
         final long countNext;
         if(countPrev == null) {
             countNext = 1L;
         } else {
             countNext = (Long) countPrev + 1L;
         }
-        accum.put(name, countNext);
-        return accum;
+        accumulator.put(name, countNext);
+        return accumulator;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accum, final MElement input) {
+        return addInput(accum, input, null, null);
     }
 
     @Override

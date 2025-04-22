@@ -7,7 +7,7 @@ import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.MFailure;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.coder.ElementCoder;
-import com.mercari.solution.util.pipeline.aggregation.Aggregator;
+import com.mercari.solution.util.pipeline.aggregation.AggregateFunction;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.schema.CalciteSchemaUtil;
 import com.mercari.solution.util.sql.calcite.MemorySchema;
@@ -50,7 +50,7 @@ public class Query {
     private Schema schema;
 
     private List<SelectFunction> select;
-    private List<Aggregator> aggregators;
+    private List<AggregateFunction> aggregateFunctions;
     private Query from;
     private Filter.ConditionNode where;
     private List<String> groupBy;

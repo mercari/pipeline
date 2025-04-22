@@ -12,7 +12,7 @@ import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Avg implements Aggregator {
+public class Avg implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -23,6 +23,8 @@ public class Avg implements Aggregator {
     private String weightField;
     private String weightExpression;
     private String condition;
+
+    private List<Range> ranges;
 
     private Boolean ignore;
 
@@ -40,7 +42,7 @@ public class Avg implements Aggregator {
 
     public static Avg of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String field,
             final String expression,
             final String condition,
@@ -56,22 +58,22 @@ public class Avg implements Aggregator {
 
         avg.inputFields = new ArrayList<>();
         if (field != null) {
-            final Schema.Field inputField = inputSchema.getField(field);
+            final Schema.Field inputField = Schema.getField(inputFields, field);
             avg.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                avg.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                avg.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
         }
 
         if(params.has("weightField")) {
             avg.weightField = params.get("weightField").getAsString();
-            final Schema.Field inputField = inputSchema.getField(avg.weightField);
+            final Schema.Field inputField = Schema.getField(inputFields, avg.weightField);
             avg.inputFields.add(Schema.Field.of(avg.weightField, inputField.getFieldType()));
         } else if(params.has("weightExpression")) {
             avg.weightExpression = params.get("weightExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(avg.weightExpression)) {
-                avg.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                avg.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
         }
 
@@ -94,7 +96,12 @@ public class Avg implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     @Override
@@ -136,25 +143,25 @@ public class Avg implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
         final Double prevAvg = (Double) accumulator.get(name);
         final Double prevWeight = Optional.ofNullable((Double)accumulator.get(weightKeyName)).orElse(0D);
         final Double inputValue;
         if(field != null) {
             inputValue = input.getAsDouble(field);
         } else {
-            inputValue = Aggregator.eval(this.exp, variables, input);
+            inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
         final Double inputWeight;
         if(weightField != null) {
             inputWeight = input.getAsDouble(weightField);
         } else if(weightExpression != null) {
-            inputWeight = Aggregator.eval(this.weightExp, weightVariables, input);
+            inputWeight = AggregateFunction.eval(this.weightExp, weightVariables, input);
         } else {
             inputWeight = 1D;
         }
 
-        final Double avgNext = Aggregator.avg(prevAvg, prevWeight, inputValue, inputWeight);
+        final Double avgNext = AggregateFunction.avg(prevAvg, prevWeight, inputValue, inputWeight);
         accumulator.put(name, avgNext);
         if(inputValue != null) {
             accumulator.put(weightKeyName, prevWeight + inputWeight);
@@ -165,12 +172,17 @@ public class Avg implements Aggregator {
     }
 
     @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
+    }
+
+    @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
         final Double baseAvg = (Double) base.get(name);
         final Double baseWeight = (Double) base.get(weightKeyName);
         final Double inputAvg = (Double) input.get(name);
         final Double inputWeight = (Double) input.get(weightKeyName);
-        final Double avg = Aggregator.avg(baseAvg, baseWeight, inputAvg, inputWeight);
+        final Double avg = AggregateFunction.avg(baseAvg, baseWeight, inputAvg, inputWeight);
         final Double weight = Optional.ofNullable(baseWeight).orElse(0D) + Optional.ofNullable(inputWeight).orElse(0D);
         base.put(name, avg);
         base.put(weightKeyName, weight);

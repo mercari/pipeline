@@ -11,7 +11,7 @@ import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Max implements Aggregator {
+public class Max implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -22,6 +22,9 @@ public class Max implements Aggregator {
     private String condition;
 
     private Boolean opposite;
+
+    private List<Range> ranges;
+
     private Boolean ignore;
 
     private transient Expression exp;
@@ -40,13 +43,18 @@ public class Max implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
 
     public static Max of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String field,
             final String expression,
             final String condition,
@@ -63,12 +71,12 @@ public class Max implements Aggregator {
 
         max.inputFields = new ArrayList<>();
         if (field != null) {
-            final Schema.Field inputField = inputSchema.getField(field);
+            final Schema.Field inputField = Schema.getField(inputFields, field);
             max.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
             max.outputFieldType = inputField.getFieldType();
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                max.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                max.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
             max.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
         }
@@ -113,25 +121,30 @@ public class Max implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
         final Object prevValue = accumulator.get(name);
         final Object inputValue;
         if(field != null) {
             inputValue = input.getPrimitiveValue(field);
         } else {
-            inputValue = Aggregator.eval(this.exp, variables, input);
+            inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
 
-        final Object maxNext = Aggregator.max(prevValue, inputValue, opposite);
+        final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
         accumulator.put(name, maxNext);
         return accumulator;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
     }
 
     @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
         final Object stateValue = base.get(name);
         final Object accumValue = input.get(name);
-        final Object max = Aggregator.max(stateValue, accumValue, opposite);
+        final Object max = AggregateFunction.max(stateValue, accumValue, opposite);
         base.put(name, max);
         return base;
     }

@@ -12,7 +12,7 @@ import org.joda.time.Instant;
 
 import java.util.*;
 
-public class SimpleRegression implements Aggregator {
+public class SimpleRegression implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -25,6 +25,8 @@ public class SimpleRegression implements Aggregator {
     private String weightExpression;
     private Boolean hasIntercept;
     private String condition;
+
+    private List<Range> ranges;
 
     private Boolean ignore;
 
@@ -65,7 +67,7 @@ public class SimpleRegression implements Aggregator {
 
     public static SimpleRegression of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String field,
             final String expression,
             final String condition,
@@ -101,20 +103,20 @@ public class SimpleRegression implements Aggregator {
         regression.inputFields = new ArrayList<>();
 
         if(field != null) {
-            regression.inputFields.add(Schema.Field.of(field, inputSchema.getField(field).getFieldType()));
+            regression.inputFields.add(Schema.Field.of(field, Schema.getField(inputFields, field).getFieldType()));
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                regression.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                regression.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
         }
 
         if(params.has("weightField")) {
             regression.weightField = params.get("weightField").getAsString();
-            regression.inputFields.add(Schema.Field.of(regression.weightField, inputSchema.getField(regression.weightField).getFieldType()));
+            regression.inputFields.add(Schema.Field.of(regression.weightField, Schema.getField(inputFields, regression.weightField).getFieldType()));
         } else if(params.has("weightExpression")) {
             regression.weightExpression = params.get("weightExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(regression.weightExpression)) {
-                regression.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                regression.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
         }
 
@@ -127,7 +129,7 @@ public class SimpleRegression implements Aggregator {
 
         if(params.has("xField")) {
             regression.xField = params.get("xField").getAsString();
-            regression.inputFields.add(Schema.Field.of(regression.xField, inputSchema.getField(regression.xField).getFieldType()));
+            regression.inputFields.add(Schema.Field.of(regression.xField, Schema.getField(inputFields, regression.xField).getFieldType()));
         } else {
             regression.xField = null;
         }
@@ -153,7 +155,12 @@ public class SimpleRegression implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     @Override
@@ -196,13 +203,12 @@ public class SimpleRegression implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
-
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer co) {
         final Double y;
         if(field != null) {
             y = input.getAsDouble(field);
         } else {
-            y = Aggregator.eval(this.exp, variables, input);
+            y = AggregateFunction.eval(this.exp, variables, input);
         }
         final Double x;
         if(xField != null) {
@@ -219,7 +225,7 @@ public class SimpleRegression implements Aggregator {
         if(weightField != null) {
             inputWeight = Optional.ofNullable(input.getAsDouble(weightField)).orElse(0D);
         } else if(weightExpression != null) {
-            inputWeight = Optional.ofNullable(Aggregator.eval(this.weightExp, weightVariables, input)).orElse(0D);
+            inputWeight = Optional.ofNullable(AggregateFunction.eval(this.weightExp, weightVariables, input)).orElse(0D);
         } else {
             inputWeight = 1D;
         }
@@ -269,6 +275,11 @@ public class SimpleRegression implements Aggregator {
         accumulator.put(accumKeySumXYName, sumXY);
 
         return accumulator;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
     }
 
     @Override

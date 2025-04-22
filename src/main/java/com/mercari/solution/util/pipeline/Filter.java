@@ -36,6 +36,40 @@ public class Filter implements Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Filter.class);
 
+    private final String filterJson;
+
+    private transient Filter.ConditionNode conditionNode;
+
+    private Filter(final String filterJson) {
+        this.filterJson = filterJson;
+    }
+
+    public static Filter of(final JsonElement filterJson) {
+        final String filterText = Optional
+                .ofNullable(filterJson)
+                .map(JsonElement::toString)
+                .orElse(null);
+        return new Filter(filterText);
+    }
+
+    public static Filter of(final String filterJson) {
+        return new Filter(filterJson);
+    }
+
+    public void setup() {
+        if(this.filterJson != null) {
+            this.conditionNode = parse(filterJson);
+        }
+    }
+
+    public boolean filter(final MElement element) {
+        return this.filter(element.asPrimitiveMap());
+    }
+
+    public boolean filter(final Map<String, Object> primitiveValues) {
+        return filter(conditionNode, primitiveValues);
+    }
+
     public enum Type implements Serializable {
         AND,
         OR,

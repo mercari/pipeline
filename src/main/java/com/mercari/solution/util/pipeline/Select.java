@@ -4,7 +4,10 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.coder.ElementCoder;
+import com.mercari.solution.util.pipeline.aggregation.Accumulator;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
+import com.mercari.solution.util.pipeline.select.navigation.NavigationFunction;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
 import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -22,6 +25,18 @@ public class Select implements Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Select.class);
 
+    private final List<SelectFunction> selectFunctions;
+
+    public Select(final List<SelectFunction> selectFunctions) {
+        this.selectFunctions = Optional
+                .ofNullable(selectFunctions)
+                .orElseGet(ArrayList::new);
+    }
+
+    public static Select of(final List<SelectFunction> selectFunctions) {
+        return new Select(selectFunctions);
+    }
+
     public static Map<String, Object> apply(
             List<SelectFunction> selectFunctions,
             Map<String, Object> primitiveValues,
@@ -37,61 +52,8 @@ public class Select implements Serializable {
         return primitiveValues;
     }
 
-    public static Select of(
-            final Schema outputSchema,
-            final JsonElement filterJson,
-            final List<SelectFunction> selectFunctions,
-            final String flattenField,
-            final DataType outputType) {
-
-        return new Select(outputSchema, filterJson, selectFunctions, flattenField, outputType);
-    }
-
-    protected final Schema outputSchema;
-    private final String filter;
-    private final List<SelectFunction> selectFunctions;
-    private final String flattenField;
-    protected final DataType outputType;
-
-    private transient Filter.ConditionNode conditionNode;
-
-    public Select(
-            final Schema outputSchema,
-            final JsonElement filterJson,
-            final List<SelectFunction> selectFunctions,
-            final String flattenField,
-            final DataType outputType) {
-
-        this(outputSchema, Optional.ofNullable(filterJson).map(JsonElement::toString).orElse(null), selectFunctions, flattenField, outputType);
-    }
-
-    public Select(
-            final Schema outputSchema,
-            final String filterJson,
-            final List<SelectFunction> selectFunctions,
-            final String flattenField,
-            final DataType outputType) {
-
-        this.outputSchema = outputSchema;
-        this.filter = filterJson;
-        this.selectFunctions = Optional.ofNullable(selectFunctions).orElseGet(ArrayList::new);
-        this.flattenField = flattenField;
-        this.outputType = outputType;
-    }
-
     public void setup() {
-        if(filter != null) {
-            this.conditionNode = Filter.parse(new Gson().fromJson(filter, JsonElement.class));
-        }
         selectFunctions.forEach(SelectFunction::setup);
-    }
-
-    public boolean filter(final MElement element) {
-        return filter(element.asPrimitiveMap());
-    }
-
-    public boolean filter(final Map<String, Object> primitiveValues) {
-        return Filter.filter(conditionNode, primitiveValues);
     }
 
     public Map<String, Object> select(final MElement element, final Instant timestamp) {
@@ -108,80 +70,52 @@ public class Select implements Serializable {
         return SelectFunction.apply(selectFunctions, primitiveValues, timestamp);
     }
 
-    public List<MElement> flatten(final Map<String, Object> primitiveValues, final Instant timestamp) {
-        final List<MElement> outputs = new ArrayList<>();
-        if (flattenField == null) {
-            final MElement output = MElement
-                    .of(outputSchema, primitiveValues, timestamp)
-                    .convert(outputSchema, outputType);
-            outputs.add(output);
-            return outputs;
+    public Map<String, Object> statefulSelect(
+            final MElement input,
+            final Iterable<TimestampedValue<MElement>> buffer,
+            final Instant timestamp,
+            final Integer count) {
+
+        Map<String, Object> values = new HashMap<>();
+        if(selectFunctions.isEmpty()) {
+            return values;
+        }
+        values.putAll(input.asPrimitiveMap());
+
+        int index = count;
+        Accumulator accumulator = Accumulator.of();
+        for(final TimestampedValue<MElement> value : buffer) {
+            final Instant valueTimestamp = value.getTimestamp();
+            final MElement valueElement = value.getValue();
+            for(final SelectFunction selectFunction : selectFunctions) {
+                if(selectFunction.ignore()) {
+                    continue;
+                }
+                if(selectFunction instanceof StatefulFunction statefulFunction) {
+                    accumulator = statefulFunction.addInput(accumulator, valueElement, valueTimestamp, index);
+                }
+            }
+            index = index - 1;
         }
 
-        final List<?> flattenList = Optional
-                .ofNullable((List<?>) primitiveValues.get(flattenField))
-                .orElseGet(ArrayList::new);
-        if (flattenList.isEmpty()) {
-            final Map<String, Object> flattenValues = new HashMap<>(primitiveValues);
-            flattenValues.put(flattenField, null);
-            final MElement output = MElement
-                    .of(outputSchema, flattenValues, timestamp)
-                    .convert(outputSchema, outputType);
-            outputs.add(output);
-        } else {
-            for (final Object value : flattenList) {
-                final Map<String, Object> flattenValues = new HashMap<>(primitiveValues);
-                flattenValues.put(flattenField, value);
-                final MElement output = MElement
-                        .of(outputSchema, flattenValues, timestamp)
-                        .convert(outputSchema, outputType);
-                outputs.add(output);
+        final Map<String, Object> outputs = new HashMap<>();
+        for(final SelectFunction selectFunction : selectFunctions) {
+            if(selectFunction.ignore()) {
+                continue;
             }
+            final Object output = switch (selectFunction) {
+                case StatefulFunction statefulFunction -> statefulFunction.extractOutput(accumulator, outputs);
+                case NavigationFunction navigationFunction -> null; //TODO
+                default -> selectFunction.apply(outputs, timestamp);
+            };
+            outputs.put(selectFunction.getName(), output);
         }
         return outputs;
-    }
-
-    public MElement convert(final MElement element) {
-        if(element == null) {
-            return null;
-        }
-        return element.convert(outputSchema, outputType);
     }
 
     public boolean useSelect() {
         return !selectFunctions.isEmpty();
     }
-
-    public boolean useFilter() {
-        return filter != null;
-    }
-
-    public boolean useFlatten() {
-        return flattenField != null;
-    }
-
-    /*
-    public Schema createSchema(
-            final List<Schema.Field> inputFields,
-            final JsonArray select,
-            final String flattenField,
-            final DataType outputType) {
-
-        final Schema outputSchema;
-        if(select != null && select.isJsonArray()) {
-            final List<SelectFunction> selectFunctions = SelectFunction.of(select, inputFields);
-            outputSchema = SelectFunction.createSchema(selectFunctions, flattenField);
-        } else {
-            outputSchema = Schema.of(inputFields);
-        }
-
-        final DataType type = Optional
-                .ofNullable(outputType)
-                .orElse(DataType.ELEMENT);
-
-        return outputSchema.withType(type);
-    }
-     */
 
     /*
     public Map<String, Object> sql(final List<MElement> elements) {

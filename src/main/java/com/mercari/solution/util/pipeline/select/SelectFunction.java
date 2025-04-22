@@ -5,6 +5,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.aggregation.Accumulator;
+import com.mercari.solution.util.pipeline.select.navigation.NavigationFunction;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
 import org.joda.time.Instant;
 
 import java.io.Serializable;
@@ -43,17 +46,28 @@ public interface SelectFunction extends Serializable {
         scrape,
         generate,
         base64_encode,
-        base64_decode
+        base64_decode,
+        panic;
+
+        public static Func is(String value) {
+            for(final Func func : values()) {
+                if(func.name().equals(value)) {
+                    return func;
+                }
+            }
+            return null;
+        }
     }
 
     static List<SelectFunction> of(final JsonArray selects, final List<Schema.Field> inputFields) {
-        final List<Schema.Field> fields = new ArrayList<>();
-        for(final Schema.Field field : inputFields) {
-            fields.add(field.copy());
-        }
         final List<SelectFunction> selectFunctions = new ArrayList<>();
         if(selects == null || !selects.isJsonArray()) {
             return selectFunctions;
+        }
+
+        final List<Schema.Field> fields = new ArrayList<>();
+        for(final Schema.Field field : inputFields) {
+            fields.add(field.copy());
         }
 
         for(final JsonElement select : selects) {
@@ -79,9 +93,9 @@ public interface SelectFunction extends Serializable {
 
         final Func func;
         if(jsonObject.has("func")) {
-            func = Func.valueOf(jsonObject.get("func").getAsString());
+            func = Func.is(jsonObject.get("func").getAsString());
         } else if(jsonObject.has("op")) {
-            func = Func.valueOf(jsonObject.get("op").getAsString());
+            func = Func.is(jsonObject.get("op").getAsString());
         } else {
             if(jsonObject.size() == 1) {
                 func = Func.pass;
@@ -138,7 +152,8 @@ public interface SelectFunction extends Serializable {
             case generate -> Generate.of(name, jsonObject, inputFields, ignore);
             case base64_encode -> Base64Coder.of(name, jsonObject, inputFields, true, ignore);
             case base64_decode -> Base64Coder.of(name, jsonObject, inputFields, false, ignore);
-            default -> throw new IllegalArgumentException();
+            case panic -> Panic.of(name, jsonObject, inputFields, ignore);
+            case null, default -> StatefulFunction.of(jsonObject, inputFields);
         };
     }
 
@@ -195,7 +210,12 @@ public interface SelectFunction extends Serializable {
             final Map<String, Object> primitiveValues,
             final Instant timestamp) {
 
-        final Map<String, Object> primitiveValues_ = new HashMap<>(primitiveValues);
+        final Map<String, Object> primitiveValues_;
+        if(primitiveValues == null || primitiveValues.isEmpty()){
+            primitiveValues_= new HashMap<>();
+        } else {
+            primitiveValues_= new HashMap<>(primitiveValues);
+        }
         final Map<String, Object> output = new HashMap<>();
         for(final SelectFunction selectFunction : selectFunctions) {
             if(selectFunction.ignore()) {
@@ -206,6 +226,20 @@ public interface SelectFunction extends Serializable {
             output.put(selectFunction.getName(), outputPrimitiveValue);
         }
         return output;
+    }
+
+    static boolean isGrouping(final List<SelectFunction> selectFunctions) {
+        if(selectFunctions == null || selectFunctions.isEmpty()) {
+            return false;
+        }
+        return selectFunctions.stream().anyMatch(func -> func instanceof StatefulFunction || func instanceof NavigationFunction);
+    }
+
+    static boolean isStateful(final List<SelectFunction> selectFunctions) {
+        if(selectFunctions == null || selectFunctions.isEmpty()) {
+            return false;
+        }
+        return selectFunctions.stream().anyMatch(func -> func instanceof StatefulFunction);
     }
 
     static String getStringParameter(final String name, final JsonObject jsonObject, final String field, final String defaultValue) {

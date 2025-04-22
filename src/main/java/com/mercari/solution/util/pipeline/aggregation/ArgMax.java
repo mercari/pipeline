@@ -13,7 +13,7 @@ import org.joda.time.Instant;
 
 import java.util.*;
 
-public class ArgMax implements Aggregator {
+public class ArgMax implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -25,6 +25,8 @@ public class ArgMax implements Aggregator {
     private String comparingField;
     private String comparingExpression;
     private String condition;
+
+    private List<Range> ranges;
 
     private Boolean ignore;
 
@@ -48,22 +50,27 @@ public class ArgMax implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     public static ArgMax of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String condition,
             final Boolean ignore,
             final JsonObject params) {
 
-        return of(name, inputSchema, condition, ignore, params, false);
+        return of(name, inputFields, condition, ignore, params, false);
     }
 
     public static ArgMax of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String condition,
             final Boolean ignore,
             final JsonObject params,
@@ -84,7 +91,7 @@ public class ArgMax implements Aggregator {
                     continue;
                 }
                 argmax.fields.add(f);
-                final Schema.Field inputField = inputSchema.getField(f);
+                final Schema.Field inputField = Schema.getField(inputFields, f);
                 argmax.inputFields.add(Schema.Field.of(f, inputField.getFieldType()));
             }
             argmax.expandOutputName = true;
@@ -92,7 +99,7 @@ public class ArgMax implements Aggregator {
         } else if(params.has("field")) {
             final String f = params.get("field").getAsString();
             argmax.fields.add(f);
-            final Schema.FieldType inputFieldType = inputSchema.getField(f).getFieldType();
+            final Schema.FieldType inputFieldType = Schema.getField(inputFields, f).getFieldType();
             argmax.inputFields.add(Schema.Field.of(f, inputFieldType));
             argmax.expandOutputName = false;
             argmax.outputFieldType = inputFieldType;
@@ -100,7 +107,7 @@ public class ArgMax implements Aggregator {
 
         if(params.has("comparingField")) {
             argmax.comparingField = params.get("comparingField").getAsString();
-            final Schema.Field inputField = inputSchema.getField(argmax.comparingField);
+            final Schema.Field inputField = Schema.getField(inputFields, argmax.comparingField);
             argmax.inputFields.add(Schema.Field.of(argmax.comparingField, inputField.getFieldType()));
         } else {
             argmax.comparingField = null;
@@ -108,7 +115,7 @@ public class ArgMax implements Aggregator {
         if(params.has("comparingExpression")) {
             argmax.comparingExpression = params.get("comparingExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(argmax.comparingExpression)) {
-                argmax.inputFields.add(Schema.Field.of(variable, inputSchema.getField(variable).getFieldType()));
+                argmax.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
             }
         } else {
             argmax.comparingExpression = null;
@@ -164,18 +171,18 @@ public class ArgMax implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(Accumulator accumulator, MElement element) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
         final Object prevComparingValue = accumulator.get(comparingKeyName);
         final Object inputComparingValue;
         if(comparingField != null) {
-            inputComparingValue = element.getPrimitiveValue(comparingField);
+            inputComparingValue = input.getPrimitiveValue(comparingField);
         } else {
-            inputComparingValue = Aggregator.eval(this.comparingExp, comparingVariables, element);
+            inputComparingValue = AggregateFunction.eval(this.comparingExp, comparingVariables, input);
         }
 
-        if(Aggregator.compare(inputComparingValue, prevComparingValue, opposite)) {
+        if(AggregateFunction.compare(inputComparingValue, prevComparingValue, opposite)) {
             for(final String field : this.fields) {
-                final Object fieldValue = element.getPrimitiveValue(field);
+                final Object fieldValue = input.getPrimitiveValue(field);
                 final String accumulatorKeyName = outputKeyName(field);
                 accumulator.put(accumulatorKeyName, fieldValue);
             }
@@ -185,11 +192,16 @@ public class ArgMax implements Aggregator {
     }
 
     @Override
+    public Accumulator addInput(Accumulator accumulator, MElement element) {
+        return addInput(accumulator, element);
+    }
+
+    @Override
     public Accumulator mergeAccumulator(Accumulator base, Accumulator input) {
         final Object prevComparingValue = base.get(comparingKeyName);
         final Object inputComparingValue = input.get(comparingKeyName);
 
-        if(Aggregator.compare(inputComparingValue, prevComparingValue, opposite)) {
+        if(AggregateFunction.compare(inputComparingValue, prevComparingValue, opposite)) {
             for(final String field : fields) {
                 final String accumulatorFieldKeyName = outputKeyName(field);
                 final Object fieldValue = input.get(accumulatorFieldKeyName);

@@ -19,22 +19,14 @@ public class Aggregators implements Serializable {
     private String input;
     private List<String> commonFields;
 
-    private List<Aggregator> aggregators;
+    private List<AggregateFunction> aggregateFunctions;
 
     public String getInput() {
         return input;
     }
 
-    public void setInput(String input) {
-        this.input = input;
-    }
-
-    public List<Aggregator> getAggregators() {
-        return aggregators;
-    }
-
-    public void setAggregators(List<Aggregator> aggregators) {
-        this.aggregators = aggregators;
+    public List<AggregateFunction> getAggregators() {
+        return aggregateFunctions;
     }
 
     public static Aggregators of(
@@ -46,10 +38,10 @@ public class Aggregators implements Serializable {
         final Aggregators aggregators = new Aggregators();
         aggregators.input = input;
         aggregators.commonFields = commonFields;
-        aggregators.aggregators = new ArrayList<>();
+        aggregators.aggregateFunctions = new ArrayList<>();
         for(final JsonElement element : fields) {
-            final Aggregator aggregator = Aggregator.of(element, inputSchema);
-            aggregators.aggregators.add(aggregator);
+            final AggregateFunction aggregateFunction = AggregateFunction.of(element, inputSchema.getFields());
+            aggregators.aggregateFunctions.add(aggregateFunction);
         }
         return aggregators;
     }
@@ -60,19 +52,19 @@ public class Aggregators implements Serializable {
         if(this.input == null) {
             errorMessages.add("aggregation[" + index + "].input must not be null");
         }
-        if(this.aggregators == null) {
+        if(this.aggregateFunctions == null) {
             errorMessages.add("aggregation[" + index + "].fields must not be null");
         } else {
-            for(int fieldIndex=0; fieldIndex<this.aggregators.size(); fieldIndex++) {
-                errorMessages.addAll(aggregators.get(fieldIndex).validate(index, fieldIndex));
+            for(int fieldIndex = 0; fieldIndex<this.aggregateFunctions.size(); fieldIndex++) {
+                errorMessages.addAll(aggregateFunctions.get(fieldIndex).validate(index, fieldIndex));
             }
         }
         return errorMessages;
     }
 
     public Aggregators setup() {
-        for(final Aggregator aggregator : this.aggregators) {
-            aggregator.setup();
+        for(final AggregateFunction aggregateFunction : this.aggregateFunctions) {
+            aggregateFunction.setup();
         }
         return this;
     }
@@ -82,14 +74,14 @@ public class Aggregators implements Serializable {
             final Object primitiveValue = input.getPrimitiveValue(commonField);
             accumulator.put(commonField, primitiveValue);
         }
-        for(final Aggregator aggregator : this.aggregators) {
-            if(aggregator.ignore()) {
+        for(final AggregateFunction aggregateFunction : this.aggregateFunctions) {
+            if(aggregateFunction.ignore()) {
                 continue;
             }
-            if(!aggregator.filter(input)) {
+            if(!aggregateFunction.filter(input)) {
                 continue;
             }
-            accumulator = aggregator.addInput(accumulator, input);
+            accumulator = aggregateFunction.addInput(accumulator, input);
         }
         return accumulator;
     }
@@ -107,11 +99,11 @@ public class Aggregators implements Serializable {
                 }
                 done = true;
             }
-            for(final Aggregator aggregator : aggregators) {
-                if(aggregator.ignore()) {
+            for(final AggregateFunction aggregateFunction : aggregateFunctions) {
+                if(aggregateFunction.ignore()) {
                     continue;
                 }
-                base = aggregator.mergeAccumulator(base, accum);
+                base = aggregateFunction.mergeAccumulator(base, accum);
             }
         }
 
@@ -119,9 +111,9 @@ public class Aggregators implements Serializable {
     }
 
     public Map<String, Object> extractOutput(final Accumulator accumulator, Map<String, Object> values) {
-        for(final Aggregator aggregator : this.aggregators) {
-            final Object output = aggregator.extractOutput(accumulator, values);
-            values.put(aggregator.getName(), output);
+        for(final AggregateFunction aggregateFunction : this.aggregateFunctions) {
+            final Object output = aggregateFunction.extractOutput(accumulator, values);
+            values.put(aggregateFunction.getName(), output);
         }
         return values;
     }

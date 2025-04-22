@@ -10,7 +10,7 @@ import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Last implements Aggregator {
+public class Last implements AggregateFunction {
 
     private List<Schema.Field> inputFields;
     private Schema.FieldType outputFieldType;
@@ -18,6 +18,8 @@ public class Last implements Aggregator {
     private String name;
     private List<String> fields;
     private String condition;
+
+    private List<Range> ranges;
 
     private Boolean opposite;
     private Boolean ignore;
@@ -39,14 +41,19 @@ public class Last implements Aggregator {
 
     @Override
     public Boolean filter(final MElement element) {
-        return Aggregator.filter(conditionNode, element);
+        return AggregateFunction.filter(conditionNode, element);
     }
 
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
+    }
 
     public static Last of(
             final String name,
-            final Schema inputSchema,
+            final List<Schema.Field> inputFields,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final JsonObject params,
             final Boolean opposite) {
@@ -54,6 +61,7 @@ public class Last implements Aggregator {
         final Last last = new Last();
         last.name = name;
         last.condition = condition;
+        last.ranges = ranges;
         last.ignore = ignore;
         last.opposite = opposite;
         last.fields = new ArrayList<>();
@@ -62,7 +70,7 @@ public class Last implements Aggregator {
         if(params.has("fields") && params.get("fields").isJsonArray()) {
             final List<Schema.Field> fs = new ArrayList<>();
             for(JsonElement element : params.get("fields").getAsJsonArray()) {
-                final Schema.Field inputField = inputSchema.getField(element.getAsString());
+                final Schema.Field inputField = Schema.getField(inputFields, element.getAsString());
                 last.inputFields.add(inputField);
                 last.fields.add(element.getAsString());
                 fs.add(Schema.Field.of(inputField.getName(), inputField.getFieldType()));
@@ -70,7 +78,7 @@ public class Last implements Aggregator {
             last.expandOutputName = true;
             last.outputFieldType = Schema.FieldType.element(fs);
         } else if(params.has("field")) {
-            final Schema.Field inputField = inputSchema.getField(params.get("field").getAsString());
+            final Schema.Field inputField = Schema.getField(inputFields, params.get("field").getAsString());
             last.inputFields.add(inputField);
             last.fields.add(params.get("field").getAsString());
             last.expandOutputName = false;
@@ -117,11 +125,11 @@ public class Last implements Aggregator {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
         final Long currentMicros = input.getEpochMillis() * 1000L;
         final Long prevMicros = (Long) accumulator.get(timestampKeyName);
 
-        if(Aggregator.compare(currentMicros, prevMicros, opposite)) {
+        if(AggregateFunction.compare(currentMicros, prevMicros, opposite)) {
             for(final String field : this.fields) {
                 final String accumulatorKeyName = outputKeyName(field);
                 final Object fieldValue = input.getPrimitiveValue(field);
@@ -133,10 +141,15 @@ public class Last implements Aggregator {
     }
 
     @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
+    }
+
+    @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
         final Long timestamp = (Long) base.get(timestampKeyName);
         final Long timestampAccum = (Long) input.get(timestampKeyName);
-        if(Aggregator.compare(timestampAccum, timestamp, opposite)) {
+        if(AggregateFunction.compare(timestampAccum, timestamp, opposite)) {
             for(final String field : fields) {
                 final String accumulatorKeyName = outputKeyName(field);
                 final Object fieldValue = input.get(accumulatorKeyName);

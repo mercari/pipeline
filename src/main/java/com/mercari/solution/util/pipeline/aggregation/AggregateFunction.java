@@ -4,25 +4,17 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
-import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.pipeline.Filter;
-import com.mercari.solution.util.pipeline.select.SelectFunction;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
 import net.objecthunter.exp4j.Expression;
 
-import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.*;
 
 
-public interface Aggregator extends SelectFunction {
+public interface AggregateFunction extends StatefulFunction {
 
-    class Range implements Serializable {
-        public Integer count;
-        public Integer duration;
-        public DateTimeUtil.TimeUnit durationUnit;
-    }
-
-    enum Op {
+    enum Func {
         count,
         max,
         min,
@@ -33,26 +25,26 @@ public interface Aggregator extends SelectFunction {
         sum,
         avg,
         std,
-        regression,
+        simple_regression,
         array_agg,
         any
     }
 
-    Boolean filter(MElement input);
-    List<String> validate(int parent, int index);
     Accumulator addInput(Accumulator accumulator, MElement input);
     Accumulator mergeAccumulator(Accumulator base, Accumulator input);
-    Object extractOutput(Accumulator accumulator, Map<String, Object> values);
 
+    static AggregateFunction of(final JsonElement element, final List<Schema.Field> inputFields) {
+        return of(element, inputFields, new ArrayList<>());
+    }
 
-    static Aggregator of(final JsonElement element, final Schema inputSchema) {
+    static AggregateFunction of(final JsonElement element, final List<Schema.Field> inputFields, final List<Range> ranges) {
         if (element == null || element.isJsonNull() || !element.isJsonObject()) {
             return null;
         }
 
         final JsonObject params = element.getAsJsonObject();
         if (!params.has("op") && !params.has("func")) {
-            throw new IllegalArgumentException("Aggregator requires func or op parameter");
+            throw new IllegalArgumentException("AggregateFunction requires func or op parameter");
         }
 
         final String name;
@@ -90,26 +82,26 @@ public interface Aggregator extends SelectFunction {
             ignore = false;
         }
 
-        final Op op;
+        final Func op;
         if(params.has("op")) {
-            op = Op.valueOf(params.get("op").getAsString());
+            op = Func.valueOf(params.get("op").getAsString());
         } else {
-            op = Op.valueOf(params.get("func").getAsString());
+            op = Func.valueOf(params.get("func").getAsString());
         }
 
         return switch (op) {
             case count -> Count.of(name, condition, ignore);
-            case sum -> Sum.of(name, inputSchema, field, expression, condition, ignore);
-            case max -> Max.of(name, inputSchema, field, expression, condition, ignore, false);
-            case min -> Max.of(name, inputSchema, field, expression, condition, ignore, true);
-            case last -> Last.of(name, inputSchema, condition, ignore, params, false);
-            case first -> Last.of(name, inputSchema, condition, ignore, params, true);
-            case argmax -> ArgMax.of(name, inputSchema, condition, ignore, params);
-            case argmin -> ArgMax.of(name, inputSchema, condition, ignore, params, true);
-            case avg -> Avg.of(name, inputSchema, field, expression, condition, ignore, params);
-            case std -> Std.of(name, inputSchema, field, expression, condition, ignore, params);
-            case regression -> SimpleRegression.of(name, inputSchema, field, expression, condition, ignore, params);
-            case array_agg -> ArrayAgg.of(name, inputSchema, condition, ignore, params);
+            case sum -> Sum.of(name, inputFields, field, expression, condition, ignore);
+            case max -> Max.of(name, inputFields, field, expression, condition, ignore, false);
+            case min -> Max.of(name, inputFields, field, expression, condition, ignore, true);
+            case last -> Last.of(name, inputFields, condition, ranges, ignore, params, false);
+            case first -> Last.of(name, inputFields, condition, ranges, ignore, params, true);
+            case argmax -> ArgMax.of(name, inputFields, condition, ignore, params);
+            case argmin -> ArgMax.of(name, inputFields, condition, ignore, params, true);
+            case avg -> Avg.of(name, inputFields, field, expression, condition, ignore, params);
+            case std -> Std.of(name, inputFields, field, expression, condition, ignore, params);
+            case simple_regression -> SimpleRegression.of(name, inputFields, field, expression, condition, ignore, params);
+            case array_agg -> ArrayAgg.of(name, inputFields, condition, ignore, params);
             default -> throw new IllegalArgumentException("Not supported aggregation op: " + op);
         };
     }
