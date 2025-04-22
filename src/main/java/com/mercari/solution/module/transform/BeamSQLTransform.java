@@ -14,6 +14,7 @@ import org.apache.beam.sdk.extensions.sql.SqlTransform;
 import org.apache.beam.sdk.extensions.sql.impl.QueryPlanner;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -98,10 +99,41 @@ public class BeamSQLTransform extends Transform {
 
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
+                return expand(inputs, errorHandler);
+            }
+        } else {
+            return expand(inputs, null);
+        }
+    }
+
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults(getTemplateArgs());
+
+        final KV<PCollectionTuple, PCollectionList<MElement>> inputsAndFailures = createInput(inputs);
+        final PCollectionTuple tuple = inputsAndFailures.getKey();
+        final PCollectionList<MElement> failures = inputsAndFailures.getValue();
+
+        final PCollection<Row> output = tuple
+                .apply("SQLTransform", createTransform(parameters, errorHandler));
+
+        final Schema outputSchema = Schema.of(output.getSchema());
+        final PCollection<MElement> element = output
+                .apply("ConvertElement", ParDo.of(new ConvertElementDoFn()))
+                .setCoder(ElementCoder.of(outputSchema));
+
+        return MCollectionTuple
+                .of(element, Schema.of(output.getSchema()));
+    }
+
+    private KV<PCollectionTuple,PCollectionList<MElement>> createInput(
+            final MCollectionTuple inputs) {
 
         PCollectionTuple tuple = PCollectionTuple.empty(inputs.getPipeline());
         PCollectionList<MElement> failures = PCollectionList.empty(inputs.getPipeline());
@@ -131,9 +163,16 @@ public class BeamSQLTransform extends Transform {
             if(!getFailFast()) {
                 failures = failures
                         .and(rowTuple.get(failuresTag)
-                        .setCoder(ElementCoder.of(MFailure.schema())));
+                                .setCoder(ElementCoder.of(MFailure.schema())));
             }
         }
+
+        return KV.of(tuple, failures);
+    }
+
+    private SqlTransform createTransform(
+            final Parameters parameters,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         SqlTransform transform = SqlTransform.query(parameters.sql);
         transform = switch (parameters.planner) {
@@ -160,7 +199,7 @@ public class BeamSQLTransform extends Transform {
             transform = transform.withAutoLoading(parameters.autoLoading);
         }
 
-        final PCollection<Row> output = tuple.apply("SQLTransform", transform
+        transform = transform
                 // Math UDFs
                 .registerUdf("MDT_GREATEST_INT64", MathFunctions.GreatestInt64Fn.class)
                 .registerUdf("MDT_GREATEST_FLOAT64", MathFunctions.GreatestFloat64Fn.class)
@@ -178,16 +217,15 @@ public class BeamSQLTransform extends Transform {
                 .registerUdaf("MDT_ARRAY_AGG_DISTINCT_INT64", new AggregateFunctions.ArrayAggDistinctInt64Fn())
                 .registerUdaf("MDT_COUNT_DISTINCT_STRING", new AggregateFunctions.CountDistinctStringFn())
                 .registerUdaf("MDT_COUNT_DISTINCT_FLOAT64", new AggregateFunctions.CountDistinctFloat64Fn())
-                .registerUdaf("MDT_COUNT_DISTINCT_INT64", new AggregateFunctions.CountDistinctInt64Fn())
-        );
+                .registerUdaf("MDT_COUNT_DISTINCT_INT64", new AggregateFunctions.CountDistinctInt64Fn());
 
-        final Schema outputSchema = Schema.of(output.getSchema());
-        final PCollection<MElement> element = output
-                .apply("ConvertElement", ParDo.of(new ConvertElementDoFn()))
-                .setCoder(ElementCoder.of(outputSchema));
+        /*
+        if(errorHandler != null) {
+            transform = transform.withErrorsTransformer(errorHandler);
+        }
+         */
 
-        return MCollectionTuple
-                .of(element, Schema.of(output.getSchema()));
+        return transform;
     }
 
     private static class ConvertRowDoFn extends DoFn<MElement, Row> {

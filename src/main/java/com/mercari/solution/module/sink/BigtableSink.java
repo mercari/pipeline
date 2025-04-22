@@ -8,11 +8,13 @@ import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.schema.*;
 import freemarker.template.Template;
+import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableIO;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableWriteResult;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.slf4j.Logger;
@@ -157,7 +159,20 @@ public class BigtableSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(final MCollectionTuple inputs) {
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
+                return expand(inputs, errorHandler);
+            }
+        } else {
+            return expand(inputs, null);
+        }
+    }
+
+    private MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final ErrorHandler.BadRecordErrorHandler<?> handler) {
+
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
 
@@ -175,9 +190,9 @@ public class BigtableSink extends Sink {
         final PCollectionTuple mutationTuple = input
                 .apply("ToMutation", ParDo
                         .of(new MutationDoFn(
-                            getJobName(), getName(),
-                            parameters, inputSchema,
-                            getLoggings(), getFailFast(), failuresTag))
+                                getJobName(), getName(),
+                                parameters, inputSchema,
+                                getLoggings(), getFailFast(), failuresTag))
                         .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
 
         PCollection<KV<ByteString, Iterable<Mutation>>> mutation = mutationTuple.get(outputTag);
@@ -188,7 +203,8 @@ public class BigtableSink extends Sink {
                     .apply("Batching", ParDo.of(new GroupByKeyDoFn(parameters.maxMutationPerBatchElement)));
         }
 
-        final BigtableIO.Write write = createWrite(parameters);
+        final BigtableIO.Write write = createWrite(parameters, handler);
+
         if(parameters.withWriteResults) {
             final PCollection<MElement> writeResults = mutation
                     .apply("WriteWithResult", write.withWriteResults())
@@ -203,7 +219,8 @@ public class BigtableSink extends Sink {
     }
 
     private static BigtableIO.Write createWrite(
-            final Parameters parameters) {
+            final Parameters parameters,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         BigtableIO.Write write = BigtableIO
                 .write()
@@ -238,6 +255,10 @@ public class BigtableSink extends Sink {
         }
         if(parameters.emulatorHost != null) {
             write = write.withEmulator(parameters.emulatorHost);
+        }
+
+        if(errorHandler != null) {
+            write = write.withErrorHandler(errorHandler);
         }
 
         return write;

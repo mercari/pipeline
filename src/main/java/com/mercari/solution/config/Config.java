@@ -40,6 +40,7 @@ public class Config implements Serializable {
     private List<SourceConfig> sources;
     private List<TransformConfig> transforms;
     private List<SinkConfig> sinks;
+    private List<FailureConfig> failures;
 
     private Boolean empty;
     private String content;
@@ -84,6 +85,10 @@ public class Config implements Serializable {
 
     public List<SinkConfig> getSinks() {
         return sinks;
+    }
+
+    public List<FailureConfig> getFailures() {
+        return failures;
     }
 
     public Boolean getEmpty() {
@@ -220,16 +225,16 @@ public class Config implements Serializable {
         return config;
     }
 
-    public static Config load(final String configParam) throws Exception {
+    public static Config load(final String configParam) throws IOException {
         return load(configParam, null, Format.unknown, new String[0]);
     }
 
-    public static Config load(final String configParam, final String context, final Format format, final String[] args) throws Exception {
+    public static Config load(final String configParam, final String context, final Format format, final String[] args) throws IOException {
         final Map<String, String> templateArgs = extractArgs(args);
         return load(configParam, context, format, templateArgs);
     }
 
-    public static Config load(final String configParam, final String context, final Format format, final Map<String, String> args) throws Exception {
+    public static Config load(final String configParam, final String context, final Format format, final Map<String, String> args) throws IOException {
         if(configParam == null) {
             throw new IllegalModuleException("", "pipeline", List.of("pipeline parameter config must not be null"));
         }
@@ -279,12 +284,12 @@ public class Config implements Serializable {
         return parse(content, context, format, args);
     }
 
-    public static Config parse(final String configText, final String context, final Format format, final String[] args) throws Exception {
+    public static Config parse(final String configText, final String context, final Format format, final String[] args) {
         final Map<String, String> templateArgs = extractArgs(args);
         return parse(configText, context, format, templateArgs);
     }
 
-    public static Config parse(final String configText, final String context, final Format format, final Map<String, String> templateArgs) throws Exception {
+    public static Config parse(final String configText, final String context, final Format format, final Map<String, String> templateArgs) {
         try {
             JsonObject jsonObject = convertConfigJson(configText, format);
             LOG.info("Pipeline config: \n{}", new GsonBuilder().setPrettyPrinting().create().toJson(jsonObject));
@@ -302,12 +307,20 @@ public class Config implements Serializable {
             config.validate();
             config.setDefaults(context, templateArgs);
 
+            final List<FailureConfig> failures = Optional.ofNullable(config.getFailures()).orElseGet(ArrayList::new)
+                    .stream()
+                    .filter(Objects::nonNull)
+                    .peek(c -> c.setArgs(templateArgs))
+                    .peek(c -> c.applyContext(config.system.context))
+                    .collect(Collectors.toList());
+
             final List<SourceConfig> sources = Optional.ofNullable(config.getSources()).orElseGet(ArrayList::new)
                     .stream()
                     .filter(Objects::nonNull)
                     .peek(c -> c.setArgs(templateArgs))
                     .peek(c -> c.applyContext(config.system.context))
                     .peek(c -> c.setFailFast(config.system.failFast))
+                    .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
             final List<TransformConfig> transforms = Optional.ofNullable(config.getTransforms()).orElseGet(ArrayList::new)
                     .stream()
@@ -315,6 +328,7 @@ public class Config implements Serializable {
                     .peek(c -> c.setArgs(templateArgs))
                     .peek(c -> c.applyContext(config.system.context))
                     .peek(c -> c.setFailFast(config.system.failFast))
+                    .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
             final List<SinkConfig> sinks = Optional.ofNullable(config.getSinks()).orElseGet(ArrayList::new)
                     .stream()
@@ -322,6 +336,7 @@ public class Config implements Serializable {
                     .peek(c -> c.setArgs(templateArgs))
                     .peek(c -> c.applyContext(config.system.context))
                     .peek(c -> c.setFailFast(config.system.failFast))
+                    .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
 
             for(final Import i : config.getImports()) {
@@ -334,6 +349,7 @@ public class Config implements Serializable {
                                 .peek(c -> c.setArgs(i.args))
                                 .peek(c -> c.applyContext(config.system.context))
                                 .peek(c -> c.setFailFast(config.system.failFast))
+                                .peek(c -> c.addFailures(failures))
                                 .toList());
                     }
                     if(importConfig.getTransforms() != null) {
@@ -342,6 +358,7 @@ public class Config implements Serializable {
                                 .peek(c -> c.setArgs(i.args))
                                 .peek(c -> c.applyContext(config.system.context))
                                 .peek(c -> c.setFailFast(config.system.failFast))
+                                .peek(c -> c.addFailures(failures))
                                 .toList());
                     }
                     if(importConfig.getSinks() != null) {
@@ -350,6 +367,7 @@ public class Config implements Serializable {
                                 .peek(c -> c.setArgs(i.args))
                                 .peek(c -> c.applyContext(config.system.context))
                                 .peek(c -> c.setFailFast(config.system.failFast))
+                                .peek(c -> c.addFailures(failures))
                                 .toList());
                     }
                 }
@@ -362,6 +380,7 @@ public class Config implements Serializable {
             config.sources = sources;
             config.transforms = transforms;
             config.sinks = sinks;
+            config.failures = failures;
 
             config.content = jsonObject.toString();
 

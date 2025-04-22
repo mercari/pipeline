@@ -6,8 +6,10 @@ import com.mercari.solution.MPipeline;
 import com.mercari.solution.config.Config;
 import com.mercari.solution.config.ModuleConfig;
 import com.mercari.solution.util.pipeline.OptionUtil;
+import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 
@@ -28,6 +30,7 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
 
     private Map<String, String> templateArgs;
     private Boolean failFast;
+    private List<FailureSink> failureSinks;
     private Boolean outputFailure;
     private DataType outputType;
 
@@ -71,6 +74,10 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
         return failFast;
     }
 
+    public List<FailureSink> getFailureSinks() {
+        return failureSinks;
+    }
+
     public Boolean getOutputFailure() {
         return outputFailure;
     }
@@ -81,6 +88,10 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
 
     public MPipeline.Runner getRunner() {
         return runner;
+    }
+
+    public boolean hasFailures() {
+        return failureSinks != null && !failureSinks.isEmpty();
     }
 
     protected void setup(
@@ -110,6 +121,10 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
         this.failFast = Optional
                 .ofNullable(config.getFailFast())
                 .orElseGet(() -> !OptionUtil.isStreaming(options));
+        this.failureSinks = Optional
+                .ofNullable(config.getFailures())
+                .map(l -> l.stream().map(ll -> FailureSink.create(ll, config, options)).toList())
+                .orElseGet(ArrayList::new);
         this.outputFailure = Optional
                 .ofNullable(config.getOutputFailure())
                 .orElse(false);
@@ -130,6 +145,16 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
             throw e;
         } catch (final Throwable e) {
             throw new IllegalModuleException("Illegal parameters for class: " + clazz, e);
+        }
+    }
+
+    protected ErrorHandler.BadRecordErrorHandler<?> registerErrorHandler(final PInput input) {
+        if(hasFailures()) {
+            final Pipeline pipeline = input.getPipeline();
+            final FailureSink.FailureSinks failureSinks = FailureSink.merge(getFailureSinks());
+            return pipeline.registerBadRecordErrorHandler(failureSinks);
+        } else {
+            return null;
         }
     }
 

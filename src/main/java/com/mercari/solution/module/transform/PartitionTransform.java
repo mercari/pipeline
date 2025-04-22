@@ -3,6 +3,7 @@ package com.mercari.solution.module.transform;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
+import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.Union;
@@ -11,6 +12,8 @@ import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -121,6 +124,18 @@ public class PartitionTransform extends Transform {
 
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
+                return expand(inputs, errorHandler);
+            }
+        } else {
+            return expand(inputs, null);
+        }
+    }
+
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         final Schema inputSchema = Union.createUnionSchema(inputs);
@@ -157,7 +172,7 @@ public class PartitionTransform extends Transform {
         final Schema outputSchema = Union.createUnionSchema(outputSchemas);
 
         final TupleTag<MElement> defaultOutputTag = new TupleTag<>() {};
-        final TupleTag<MElement> failureTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failureTag = new TupleTag<>() {};
         final TupleTag<MElement> excludedTag = new TupleTag<>() {};
 
         outputTags.add(failureTag);
@@ -168,12 +183,15 @@ public class PartitionTransform extends Transform {
                         .of(new PartitionDoFn(getJobName(), getName(), parameters, settings, inputSchema, failureTag, excludedTag, getFailFast()))
                         .withOutputTags(defaultOutputTag, TupleTagList.of(outputTags)));
 
+        if(errorHandler != null) {
+            errorHandler.addErrorCollection(outputs.get(failureTag));
+        }
+
         final PCollection<MElement> defaultOutput = outputs.get(defaultOutputTag);
         final PCollection<MElement> excludedOutput = outputs.get(excludedTag);
         MCollectionTuple tuple = MCollectionTuple
                 .of(defaultOutput, outputSchema)
-                .and("excluded", excludedOutput, inputSchema)
-                .failure(outputs.get(failureTag));;
+                .and("excluded", excludedOutput, inputSchema);
 
         if (!parameters.union) {
             for (final PartitionSetting setting : settings) {
@@ -194,7 +212,7 @@ public class PartitionTransform extends Transform {
         private final Boolean union;
         private final List<PartitionSetting> settings;
         private final Schema inputSchema;
-        private final TupleTag<MElement> failureTag;
+        private final TupleTag<BadRecord> failureTag;
         private final TupleTag<MElement> excludedTag;
         private final boolean failFast;
 
@@ -206,7 +224,7 @@ public class PartitionTransform extends Transform {
                 final Parameters parameters,
                 final List<PartitionSetting> settings,
                 final Schema inputSchema,
-                final TupleTag<MElement> failureTag,
+                final TupleTag<BadRecord> failureTag,
                 final TupleTag<MElement> excludedTag,
                 final boolean failFast) {
 
@@ -268,12 +286,14 @@ public class PartitionTransform extends Transform {
                 }
             } catch (final Throwable e) {
                 errorCounter.inc();
+
+                String errorMessage = FailureUtil.convertThrowableMessage(e);
+                LOG.error("Failed to execute partition for input: {} error: {}", element, errorMessage);
                 if(failFast) {
-                    throw new RuntimeException("partition module " + name + " failed to execute partition for element: " + element, e);
+                    throw new IllegalStateException(errorMessage, e);
                 }
-                final MFailure failure = MFailure.of(jobName, name, element.toString(), e, c.timestamp());
-                c.output(failureTag, failure.toElement(c.timestamp()));
-                LOG.error("Failed to execute partition for element: {}, cause: {}", element, failure.getError());
+                final BadRecord badRecord = FailureUtil.createBadRecord(element, "Failed to execute partition", e);
+                c.output(failureTag, badRecord);
             }
         }
     }

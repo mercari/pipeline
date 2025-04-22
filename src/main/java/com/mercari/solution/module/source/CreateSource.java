@@ -6,6 +6,7 @@ import com.mercari.solution.module.*;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.pipeline.Select;
+import com.mercari.solution.util.pipeline.Unnest;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.schema.converter.JsonToElementConverter;
 import org.apache.beam.sdk.coders.Coder;
@@ -46,7 +47,6 @@ public class CreateSource extends Source {
         private Long rate;
         private DateTimeUtil.TimeUnit rateUnit;
 
-        private JsonElement filter;
         private JsonArray select;
         private String flattenField;
 
@@ -139,36 +139,26 @@ public class CreateSource extends Source {
         parameters.validate(getName(), getSchema());
         parameters.setDefaults(begin);
 
-        final DataType outputType = Optional
-                .ofNullable(getOutputType())
-                .orElse(DataType.ELEMENT);
-
         final Schema.FieldType elementFieldType = switch (parameters.elementType) {
             case element -> Schema.FieldType.element(getSchema());
             default -> Schema.FieldType.type(parameters.elementType);
         };
-        final Schema elementSchema = createElementSchema(elementFieldType);
-        final Schema outputSchema;
-        final List<SelectFunction> selectFunctions;
-        if(parameters.select == null || parameters.select.isEmpty()) {
-            selectFunctions = new ArrayList<>();
-            outputSchema = elementSchema;
-        } else {
-            selectFunctions = SelectFunction.of(parameters.select, elementSchema.getFields());
-            outputSchema = SelectFunction.createSchema(selectFunctions, parameters.flattenField);
-        }
+        final Schema outputSchema = createOutputSchema(parameters);
 
         final TupleTag<MElement> outputTag = new TupleTag<>() {};
         final TupleTag<MElement> failuresTag = new TupleTag<>() {};
 
+        final Schema elementSchema = createElementSchema(elementFieldType);
+        final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, elementSchema.getFields());
+
         final long elementSize = calculateElementSize(parameters);
         final PCollectionTuple outputs;
         if(parameters.rate > 0) {
-            final DoFn<Long, MElement> elementDoFn = new SequenceElementDoFn(
+            final DoFn<Long, MElement> elementDoFn = new StreamingElementDoFn(
                     getJobName(), getName(),
                     elementFieldType, parameters, getTimestampAttribute(), getLoggings(),
-                    outputSchema, parameters.filter, selectFunctions, parameters.flattenField, outputType,
-                    getFailFast(), failuresTag);
+                    outputSchema, selectFunctions, parameters.flattenField,
+                    outputTag, failuresTag, getFailFast());
             GenerateSequence generateSequence = GenerateSequence
                     .from(0)
                     .withRate(parameters.rate, DateTimeUtil.getDuration(parameters.rateUnit, 1L));
@@ -177,61 +167,189 @@ public class CreateSource extends Source {
             }
             outputs = begin
                     .apply("GenerateSequence", generateSequence)
-                    .apply("Element", ParDo
+                    .apply("CreateElement", ParDo
                             .of(elementDoFn)
                             .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
         } else {
-            final DoFn<Long, MElement> elementDoFn;
-            if(elementSize > 0) {
-                elementDoFn = new BatchElementDoFn(
-                        getJobName(), getName(),
-                        elementFieldType, parameters, getTimestampAttribute(), elementSize, getLoggings(),
-                        outputSchema, parameters.filter, selectFunctions, parameters.flattenField, outputType,
-                        getFailFast(), failuresTag);
-            } else {
-                elementDoFn = new BatchElementDoFn(
-                        getJobName(), getName(),
-                        elementFieldType, parameters, getTimestampAttribute(), elementSize, getLoggings(),
-                        outputSchema, parameters.filter, selectFunctions, parameters.flattenField, outputType,
-                        getFailFast(), failuresTag);
-            }
-            final String nameSuffix = getTimestampAttribute() != null ? "WithTimestamp" : "";
+            final DoFn<Long, MElement> elementDoFn = new BatchElementDoFn(
+                    getJobName(), getName(),
+                    elementFieldType, parameters, getTimestampAttribute(), elementSize, getLoggings(),
+                    outputSchema, selectFunctions, parameters.flattenField,
+                    outputTag, failuresTag, getFailFast());
             outputs = begin
                     .apply("Seed", Create.of(0L).withCoder(VarLongCoder.of()))
-                    .apply("Element" + nameSuffix, ParDo
+                    .apply("CreateElement", ParDo
                             .of(elementDoFn)
                             .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
         }
 
-        outputSchema.withType(outputType);
         return MCollectionTuple
                 .of(outputs.get(outputTag), outputSchema)
                 .failure(outputs.get(failuresTag));
     }
 
-    @DoFn.BoundedPerElement
-    public static class BatchElementDoFn extends DoFn<Long, MElement> {
+    private Schema createOutputSchema(final Parameters parameters) {
+        final Schema.FieldType elementFieldType = switch (parameters.elementType) {
+            case element -> Schema.FieldType.element(getSchema());
+            default -> Schema.FieldType.type(parameters.elementType);
+        };
+        final Schema elementSchema = createElementSchema(elementFieldType);
+        final Schema outputSchema;
+        if(parameters.select == null || parameters.select.isEmpty()) {
+            outputSchema = elementSchema;
+        } else {
+            final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, elementSchema.getFields());
+            outputSchema = SelectFunction.createSchema(selectFunctions);
+        }
+
+        final DataType outputType = Optional
+                .ofNullable(getOutputType())
+                .orElse(DataType.ELEMENT);
+
+        return outputSchema.withType(outputType);
+    }
+
+    public static class ElementDoFn extends DoFn<Long, MElement> {
 
         private final String jobName;
         private final String moduleName;
 
+        private final Schema.FieldType elementFieldType;
+
         private final List<String> elements;
         private final String from;
+
         private final Integer interval;
         private final DateTimeUtil.TimeUnit intervalUnit;
         private final String timestampAttribute;
-        private final Schema.FieldType elementFieldType;
+
+        private final Schema outputSchema;
+        private final Select select;
+        private final Unnest unnest;
+
+        private final Map<String, Logging> logging;
+
+        protected final TupleTag<MElement> outputTag;
+        protected final TupleTag<MElement> failuresTag;
+        private final boolean failFast;
+
+        ElementDoFn(
+                final String jobName,
+                final String moduleName,
+                //
+                final Schema.FieldType elementFieldType,
+                final Parameters parameters,
+                final String timestampAttribute,
+                //
+                final Schema outputSchema,
+                final List<SelectFunction> selectFunctions,
+                final String flattenField,
+                //
+                final List<Logging> logging,
+                final TupleTag<MElement> outputTag,
+                final TupleTag<MElement> failuresTag,
+                final boolean failFast) {
+
+            this.jobName = jobName;
+            this.moduleName = moduleName;
+
+            this.elementFieldType = elementFieldType;
+
+            this.elements = new ArrayList<>();
+            if(parameters.elements.isJsonArray()) {
+                for(final JsonElement element : parameters.elements) {
+                    this.elements.add(element.toString());
+                }
+            }
+            this.from = parameters.from;
+            this.interval = parameters.interval;
+            this.intervalUnit = parameters.intervalUnit;
+            this.timestampAttribute = timestampAttribute;
+
+            this.outputSchema = outputSchema;
+            this.select = Select.of(selectFunctions);
+            this.unnest = Unnest.of(flattenField);
+
+            this.logging = Logging.map(logging);
+            this.outputTag = outputTag;
+            this.failuresTag = failuresTag;
+            this.failFast = failFast;
+        }
+
+        public void setup() {
+            select.setup();
+            unnest.setup();
+        }
+
+        public void process(
+                final long index,
+                final org.joda.time.Instant timestamp,
+                final OutputReceiver<MElement> outputReceiver,
+                final OutputReceiver<MElement> failureReceiver) {
+
+            try {
+                // generate element
+                final Object elementValue;
+                if (!elements.isEmpty()) {
+                    elementValue = createElements(elementFieldType, elements, index);
+                } else {
+                    elementValue = createElement(elementFieldType, from, interval, intervalUnit, index);
+                }
+                Map<String, Object> map = createElement(elementFieldType, elementValue, index);
+
+                // select
+                if (select.useSelect()) {
+                    map = select.select(map, timestamp);
+                }
+
+                // with timestamp
+                final org.joda.time.Instant eventTime;
+                if (timestampAttribute != null) {
+                    final Object timestampValue = map.get(timestampAttribute);
+                    eventTime = DateTimeUtil.toJodaInstant(timestampValue);
+                } else {
+                    eventTime = timestamp;
+                }
+
+                // unnest
+                final List<MElement> outputs = new ArrayList<>();
+                if(unnest.useUnnest()) {
+                    final List<Map<String, Object>> list = unnest.unnest(map);
+                    outputs.addAll(MElement.ofList(list, eventTime));
+                } else {
+                    outputs.add(MElement.of(map, eventTime));
+                }
+
+                // output
+                for(final MElement output : outputs) {
+                    final MElement output_ = output.convert(outputSchema);
+                    if (timestampAttribute != null) {
+                        outputReceiver.outputWithTimestamp(output_, eventTime);
+                    } else {
+                        outputReceiver.output(output_);
+                    }
+                    Logging.log(LOG, logging, "output", output);
+                }
+            } catch (final Throwable e) {
+                //errorCounter.inc();
+                final MFailure failure = MFailure
+                        .of(jobName, moduleName, "position: " + index, e, timestamp);
+                final String errorMessage = String.format("Failed to execute create element for index: %d, error: %s", index, e.getMessage());
+                LOG.error(errorMessage);
+                if(failFast) {
+                    throw new RuntimeException(errorMessage, e);
+                }
+                failureReceiver.output(failure.toElement(timestamp));
+            }
+        }
+    }
+
+    @DoFn.BoundedPerElement
+    public static class BatchElementDoFn extends ElementDoFn {
 
         private final long size;
         private final boolean enableSplit;
         private final Integer splitSize;
-
-        private final Select select;
-
-        private final Map<String, Logging> logging;
-
-        private final boolean failFast;
-        private final TupleTag<MElement> failuresTag;
 
         BatchElementDoFn(
                 final String jobName,
@@ -244,49 +362,32 @@ public class CreateSource extends Source {
                 final List<Logging> logging,
                 //
                 final Schema outputSchema,
-                final JsonElement filterJson,
                 final List<SelectFunction> selectFunctions,
                 final String flattenField,
-                final DataType outputType,
                 //
-                final boolean failFast,
-                final TupleTag<MElement> failuresTag) {
+                final TupleTag<MElement> outputTag,
+                final TupleTag<MElement> failuresTag,
+                final boolean failFast) {
 
-            this.jobName = jobName;
-            this.moduleName = moduleName;
-
-            this.elementFieldType = elementFieldType;
-            this.elements = new ArrayList<>();
-            if(parameters.elements.isJsonArray()) {
-                for(final JsonElement element : parameters.elements) {
-                    this.elements.add(element.toString());
-                }
-            }
-            this.from = parameters.from;
-            this.interval = parameters.interval;
-            this.intervalUnit = parameters.intervalUnit;
-            this.timestampAttribute = timestampAttribute;
+            super(jobName, moduleName,
+                    elementFieldType, parameters, timestampAttribute,
+                    outputSchema, selectFunctions, flattenField,
+                    logging, outputTag, failuresTag, failFast);
 
             this.size = elementSize;
             this.splitSize = parameters.splitSize;
             this.enableSplit = true;
-
-            this.select = Select.of(outputSchema, filterJson, selectFunctions, flattenField, outputType);
-
-            this.logging = Logging.map(logging);
-
-            this.failFast = failFast;
-            this.failuresTag = failuresTag;
         }
 
         @Setup
         public void setup() {
-            select.setup();
+            super.setup();
         }
 
         @ProcessElement
         public void processElement(
                 final ProcessContext c,
+                final MultiOutputReceiver outputReceivers,
                 final RestrictionTracker<OffsetRange, Long> tracker) {
 
             final OffsetRange offsetRange = tracker.currentRestriction();
@@ -295,46 +396,9 @@ public class CreateSource extends Source {
             }
             long position = offsetRange.getFrom();
             while (tracker.tryClaim(position)) {
-                try {
-                    final Object elementValue;
-                    if (!elements.isEmpty()) {
-                        elementValue = createElements(elementFieldType, elements, position);
-                    } else {
-                        elementValue = createElement(elementFieldType, from, interval, intervalUnit, position);
-                    }
-                    Map<String, Object> map = createElement(elementFieldType, elementValue, position);
-
-                    if (select.useSelect()) {
-                        map = select.select(map, c.timestamp());
-                    }
-
-                    if (timestampAttribute != null) {
-                        final Object timestampValue = map.get(timestampAttribute);
-                        final org.joda.time.Instant eventTime = DateTimeUtil.toJodaInstant(timestampValue);
-                        MElement output = MElement.builder(map).withEventTime(eventTime).build();
-                        output = select.convert(output);
-                        c.outputWithTimestamp(output, eventTime);
-                        Logging.log(LOG, logging, "output", output);
-                    } else {
-                        MElement output = MElement.of(map, c.timestamp());
-                        output = select.convert(output);
-                        c.output(output);
-                        Logging.log(LOG, logging, "output", output);
-                    }
-                    position++;
-                } catch (final Throwable e) {
-                    //errorCounter.inc();
-                    final MFailure failure = MFailure
-                            .of(jobName, moduleName, "position: " + position, e, c.timestamp());
-                    final String errorMessage = String.format("Failed to execute create batch element for position: %d, error: %s", position, e.getMessage());
-                    LOG.error(errorMessage);
-                    if(failFast) {
-                        throw new RuntimeException(errorMessage, e);
-                    }
-                    c.output(failuresTag, failure.toElement(c.timestamp()));
-                }
+                super.process(position, c.timestamp(), outputReceivers.get(outputTag), outputReceivers.get(failuresTag));
+                position++;
             }
-
         }
 
         @GetInitialRestriction
@@ -387,25 +451,9 @@ public class CreateSource extends Source {
 
     }
 
-    private static class SequenceElementDoFn extends DoFn<Long, MElement> {
+    private static class StreamingElementDoFn extends ElementDoFn {
 
-        private final String jobName;
-        private final String moduleName;
-
-        private final Schema.FieldType elementFieldType;
-        private final List<String> elements;
-        private final String from;
-        private final Integer interval;
-        private final DateTimeUtil.TimeUnit intervalUnit;
-        private final String timestampAttribute;
-
-        private final Select select;
-        private final Map<String, Logging> logging;
-
-        private final boolean failFast;
-        private final TupleTag<MElement> failuresTag;
-
-        SequenceElementDoFn(
+        StreamingElementDoFn(
                 final String jobName,
                 final String moduleName,
                 //
@@ -415,79 +463,34 @@ public class CreateSource extends Source {
                 final List<Logging> logging,
                 //
                 final Schema outputSchema,
-                final JsonElement filterJson,
                 final List<SelectFunction> selectFunctions,
                 final String flattenField,
-                final DataType outputType,
                 //
-                final boolean failFast,
-                final TupleTag<MElement> failuresTag) {
+                final TupleTag<MElement> outputTag,
+                final TupleTag<MElement> failuresTag,
+                final boolean failFast) {
 
-            this.jobName = jobName;
-            this.moduleName = moduleName;
-
-            this.elementFieldType = elementFieldType;
-            this.elements = new ArrayList<>();
-            for(final JsonElement element : parameters.elements) {
-                this.elements.add(element.toString());
-            }
-            this.from = parameters.from;
-            this.interval = parameters.interval;
-            this.intervalUnit = parameters.intervalUnit;
-            this.timestampAttribute = timestampAttribute;
-
-            this.select = Select.of(outputSchema, filterJson, selectFunctions, flattenField, outputType);
-            this.logging = Logging.map(logging);
-
-            this.failFast = failFast;
-            this.failuresTag = failuresTag;
+            super(jobName, moduleName,
+                    elementFieldType, parameters, timestampAttribute,
+                    outputSchema, selectFunctions, flattenField,
+                    logging, outputTag, failuresTag, failFast);
         }
 
         @Setup
         public void setup() {
-            select.setup();
+            super.setup();
         }
 
         @ProcessElement
-        public void processElement(final ProcessContext c) {
-            final long sequence = c.element();
-            try {
-                final Object value;
-                if (!elements.isEmpty()) {
-                    value = createElements(elementFieldType, elements, sequence);
-                } else {
-                    value = createElement(elementFieldType, from, interval, intervalUnit, sequence);
-                }
-                Map<String, Object> map = createElement(elementFieldType, value, sequence);
+        public void processElement(
+                final ProcessContext c,
+                final MultiOutputReceiver outputReceivers) {
 
-                if (select.useSelect()) {
-                    map = select.select(map, c.timestamp());
-                }
-
-                if (timestampAttribute != null) {
-                    final Object eventTimestampValue = map.get(timestampAttribute);
-                    final org.joda.time.Instant eventTimestamp = DateTimeUtil.toJodaInstant(eventTimestampValue);
-                    MElement output = MElement.builder(map).withEventTime(eventTimestamp).build();
-                    output = select.convert(output);
-                    c.outputWithTimestamp(output, eventTimestamp);
-                    Logging.log(LOG, logging, "output", output);
-                } else {
-                    MElement output = MElement.of(map, c.timestamp());
-                    output = select.convert(output);
-                    c.output(output);
-                    Logging.log(LOG, logging, "output", output);
-                }
-            } catch (final Throwable e) {
-                //errorCounter.inc();
-                final MFailure failure = MFailure
-                        .of(jobName, moduleName, "sequence: " + sequence, e, c.timestamp());
-                final String errorMessage = String.format("Failed to execute create sequence element for sequence: %d, error: %s", sequence, e.getMessage());
-                LOG.error(errorMessage);
-                if(failFast) {
-                    throw new RuntimeException(errorMessage, e);
-                }
-                c.output(failuresTag, failure.toElement(c.timestamp()));
+            final Long sequence = c.element();
+            if(sequence == null) {
+                return;
             }
+            super.process(sequence, c.timestamp(), outputReceivers.get(outputTag), outputReceivers.get(failuresTag));
         }
 
     }

@@ -27,6 +27,7 @@ import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
@@ -163,6 +164,18 @@ public class BigQuerySource extends Source {
 
     @Override
     public MCollectionTuple expand(PBegin begin) {
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(begin)) {
+                return expand(begin, errorHandler);
+            }
+        } else {
+            return expand(begin, null);
+        }
+    }
+
+    private MCollectionTuple expand(
+            final PBegin begin,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
@@ -174,10 +187,18 @@ public class BigQuerySource extends Source {
         return switch (parameters.mode) {
             case batch -> {
                 final KV<org.apache.avro.Schema, BigQueryIO.TypedRead<GenericRecord>> schemaAndRead = createRead(
-                        parameters, getTemplateArgs(), getRunner());
+                        parameters, getTemplateArgs(), getRunner(), errorHandler);
                 final org.apache.avro.Schema outputAvroSchema = schemaAndRead.getKey();
+                if(outputAvroSchema == null) {
+                    throw new IllegalModuleException("Could not create schema from bigquery source");
+                }
+                final BigQueryIO.TypedRead<GenericRecord> read = schemaAndRead.getValue();
+                if(read == null) {
+                    throw new IllegalModuleException("Could not create BigQueryIO.Read");
+                }
+
                 final PCollection<GenericRecord> records = begin
-                        .apply("ReadBigQuery", schemaAndRead.getValue())
+                        .apply("ReadBigQuery", read)
                         .setCoder(AvroCoder.of(outputAvroSchema));
 
                 final Schema outputSchema = Schema.of(outputAvroSchema);
@@ -187,7 +208,7 @@ public class BigQuerySource extends Source {
 
                 if(getTimestampAttribute() != null) {
                     if(!outputSchema.hasField(getTimestampAttribute())) {
-                        throw new IllegalArgumentException("BigQuery source module: " + getName() + " is specified timestampAttribute: " + getTimestampAttribute() + ", but not found in input schema: " + outputAvroSchema);
+                        throw new IllegalModuleException("BigQuery source module: " + getName() + " is specified timestampAttribute: " + getTimestampAttribute() + ", but not found in input schema: " + outputAvroSchema);
                     }
                 }
 
@@ -231,7 +252,8 @@ public class BigQuerySource extends Source {
     private static KV<org.apache.avro.Schema, BigQueryIO.TypedRead<GenericRecord>> createRead(
             final Parameters parameters,
             final Map<String, String> templateArgs,
-            final MPipeline.Runner runner) {
+            final MPipeline.Runner runner,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         BigQueryIO.TypedRead<GenericRecord> read = BigQueryIO
                 .read(SchemaAndRecord::getRecord)
@@ -252,7 +274,7 @@ public class BigQuerySource extends Source {
                 LOG.info("query parameter is Parameter Manager resource: {}", parameters.query);
                 final ParameterManagerUtil.Version version = ParameterManagerUtil.getParameterVersion(parameters.query);
                 if(version.payload == null) {
-                    throw new IllegalArgumentException("query resource does not exists for: " + parameters.query);
+                    throw new IllegalModuleException("query resource does not exists for: " + parameters.query);
                 }
                 query = new String(version.payload, StandardCharsets.UTF_8);
             } else {
@@ -282,8 +304,11 @@ public class BigQuerySource extends Source {
             final BigQueryIO.TypedRead.Method method = Optional
                     .ofNullable(parameters.method)
                     .orElseGet(() -> BigQueryUtil.getPreferReadMethod(tableSchema));
-
             read = read.withMethod(method);
+
+            if(errorHandler != null) {
+                read = read.withErrorHandler(errorHandler);
+            }
 
             return KV.of(avroSchema, read.withCoder(AvroGenericCoder.of(avroSchema)));
         } else if(parameters.table != null || (parameters.datasetId != null)) {
@@ -305,6 +330,10 @@ public class BigQuerySource extends Source {
                     .orElse(BigQueryIO.TypedRead.Method.DIRECT_READ);
             read = read.withMethod(method);
 
+            if(errorHandler != null) {
+                read = read.withErrorHandler(errorHandler);
+            }
+
             return switch (runner) {
                 case direct -> {
                     final TableSchema tableSchema = BigQueryUtil.getTableSchemaFromTable(tableReference);
@@ -319,7 +348,7 @@ public class BigQuerySource extends Source {
                 default -> throw new IllegalArgumentException();
             };
         } else {
-            throw new IllegalArgumentException("bigquery module support only query or table");
+            throw new IllegalModuleException("bigquery module support only query or table");
         }
     }
 

@@ -1,36 +1,28 @@
 package com.mercari.solution.config;
 
 import com.google.gson.JsonObject;
-import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.Logging;
+import com.mercari.solution.module.Strategy;
 
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-public class ModuleConfig implements Serializable {
+public class FailureConfig implements Serializable {
 
     private String name;
     private String module;
     private JsonObject parameters;
 
     private Set<String> tags;
-    private Set<String> waits;
     private List<Logging> loggings;
 
     private Boolean ignore;
-    private Boolean failFast;
-    private Boolean outputFailure;
-    private List<FailureConfig> failures;
-
-    private DataType outputType;
-
-    private String description;
 
     private Map<String, String> args;
 
+    private Strategy strategy;
 
     public String getName() {
         return name;
@@ -48,10 +40,6 @@ public class ModuleConfig implements Serializable {
         return tags;
     }
 
-    public Set<String> getWaits() {
-        return waits;
-    }
-
     public List<Logging> getLoggings() {
         return loggings;
     }
@@ -60,26 +48,8 @@ public class ModuleConfig implements Serializable {
         return ignore;
     }
 
-    public Boolean getFailFast() {
-        return failFast;
-    }
-
-    public void setFailFast(Boolean failFast) {
-        if(failFast != null) {
-            this.failFast = failFast;
-        }
-    }
-
-    public Boolean getOutputFailure() {
-        return outputFailure;
-    }
-
-    public DataType getOutputType() {
-        return outputType;
-    }
-
-    public String getDescription() {
-        return description;
+    public Map<String, String> getArgs() {
+        return args;
     }
 
     public void applyContext(final String context) {
@@ -93,23 +63,12 @@ public class ModuleConfig implements Serializable {
         }
     }
 
-    public Map<String, String> getArgs() {
-        return args;
-    }
-
     public void setArgs(Map<String, String> args) {
         this.args = args;
     }
 
-    public List<FailureConfig> getFailures() {
-        return failures;
-    }
-
-    public void addFailures(final List<FailureConfig> failures) {
-        if(this.failures == null) {
-            this.failures = new ArrayList<>();
-        }
-        this.failures.addAll(failures);
+    public Strategy getStrategy() {
+        return strategy;
     }
 
 }

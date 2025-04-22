@@ -13,6 +13,7 @@ import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.io.WriteFilesResult;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
@@ -32,7 +33,7 @@ public class StorageSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(StorageSink.class);
 
-    private static class StorageSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String output;
         private WriteFormat format;
@@ -117,8 +118,20 @@ public class StorageSink extends Sink {
 
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
+                return expand(inputs, errorHandler);
+            }
+        } else {
+            return expand(inputs, null);
+        }
+    }
 
-        final StorageSinkParameters parameters = getParameters(StorageSinkParameters.class);
+    private MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -167,10 +180,10 @@ public class StorageSink extends Sink {
 
         final WriteFilesResult writeFilesResult;
         if(TemplateUtil.isTemplateText(object)) {
-            final FileIO.Write<String, KV<String, MElement>> write = createDynamicWrite(parameters);
+            final FileIO.Write<String, KV<String, MElement>> write = createDynamicWrite(parameters, errorHandler);
             writeFilesResult = withKey.apply(label + "Dynamic", write.via(sink));
         } else {
-            final FileIO.Write<Void, KV<String, MElement>> write = createWrite(parameters);
+            final FileIO.Write<Void, KV<String, MElement>> write = createWrite(parameters, errorHandler);
             writeFilesResult = withKey.apply(label, write.via(sink));
         }
 
@@ -183,7 +196,10 @@ public class StorageSink extends Sink {
                 .done(PDone.in(inputs.getPipeline()));
     }
 
-    private static FileIO.Write<Void, KV<String, MElement>> createWrite(final StorageSinkParameters parameters) {
+    private static FileIO.Write<Void, KV<String, MElement>> createWrite(
+            final Parameters parameters,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+
         final String bucket = getBucket(parameters.output);
         final String object = getObject(parameters.output);
         final String suffix = parameters.suffix;
@@ -209,10 +225,18 @@ public class StorageSink extends Sink {
         if(parameters.noSpilling) {
             write = write.withNoSpilling();
         }
+
+        if(errorHandler != null) {
+            write = write.withBadRecordErrorHandler(errorHandler);
+        }
+
         return write;
     }
 
-    private static FileIO.Write<String, KV<String, MElement>> createDynamicWrite(final StorageSinkParameters parameters) {
+    private static FileIO.Write<String, KV<String, MElement>> createDynamicWrite(
+            final Parameters parameters,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+
         final String bucket = getBucket(parameters.output);
         final String suffix = parameters.suffix;
         final Integer numShards = parameters.numShards;
@@ -236,6 +260,11 @@ public class StorageSink extends Sink {
         if(parameters.compression != null) {
             write = write.withCompression(parameters.compression);
         }
+
+        if(errorHandler != null) {
+            write = write.withBadRecordErrorHandler(errorHandler);
+        }
+
         return write;
     }
 

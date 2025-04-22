@@ -32,7 +32,7 @@ public class BigtableSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(BigtableSource.class);
 
-    private static class BigtableSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String instanceId;
@@ -143,7 +143,7 @@ public class BigtableSource extends Source {
             private String metadataTableId;
             private String startTime;
 
-            public List<String> validate(BigtableSourceParameters parentParameters) {
+            public List<String> validate(Parameters parentParameters) {
                 final List<String> errorMessages = new ArrayList<>();
                 if(this.changeStreamName == null) {
                     errorMessages.add("parameters.changeStream.changeStreamName must not be null");
@@ -151,7 +151,7 @@ public class BigtableSource extends Source {
                 return errorMessages;
             }
 
-            public void setDefaults(BigtableSourceParameters parentParameters) {
+            public void setDefaults(Parameters parentParameters) {
                 if(this.metadataProjectId == null) {
                     this.metadataProjectId = parentParameters.projectId;
                 }
@@ -174,69 +174,80 @@ public class BigtableSource extends Source {
 
     @Override
     public MCollectionTuple expand(PBegin begin) {
-        final BigtableSourceParameters parameters = getParameters(BigtableSourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getMode());
         parameters.setDefaults();
         parameters.setup();
 
-        switch (getMode()) {
-            case batch -> {
-                final BigtableIO.Read read = createRead(parameters);
-                final PCollection<com.google.bigtable.v2.Row> rows = begin
-                        .apply("Read", read);
-
-                final PCollection<MElement> output;
-                Schema outputSchema;
-                switch (parameters.outputType) {
-                    case row -> {
-                        output = rows
-                                .apply("ConvertRow", ParDo.of(new RowToRowElementDoFn(
-                                        parameters, getTimestampAttribute())));
-                        if(parameters.withRowKey) {
-                            if(parameters.columns.isEmpty()) {
-                                outputSchema = Schema.builder()
-                                        .withField(parameters.rowKeyField, Schema.FieldType.STRING)
-                                        .build();
-                            } else {
-                                outputSchema = Schema.builder(BigtableSchemaUtil.createSchema(parameters.columns))
-                                        .withField(parameters.rowKeyField, Schema.FieldType.STRING)
-                                        .build();
-                            }
-                        } else {
-                            outputSchema = BigtableSchemaUtil.createSchema(parameters.columns);
-                        }
-                        if(parameters.withFirstTimestamp) {
-                            outputSchema = Schema.builder(outputSchema).withField(parameters.firstTimestampField, Schema.FieldType.TIMESTAMP).build();
-                        }
-                        if(parameters.withLastTimestamp) {
-                            outputSchema = Schema.builder(outputSchema).withField(parameters.lastTimestampField, Schema.FieldType.TIMESTAMP).build();
-                        }
-                    }
-                    case cell -> {
-                        output = rows
-                                .apply("ConvertCell", ParDo.of(new RowToCellElementDoFn()));
-                        outputSchema = BigtableSchemaUtil.createCellSchema();
-                    }
-                    default -> throw new IllegalArgumentException();
-                }
-
-                return MCollectionTuple
-                        .of(output, outputSchema);
-            }
-            case changeDataCapture -> {
-                final BigtableIO.ReadChangeStream read = createReadChangeStreams(parameters);
-                final PCollection<KV<ByteString, ChangeStreamMutation>> mutations = begin
-                        .apply("ReadChangeStream", read);
-                final PCollection<MElement> output = mutations
-                        .apply("Convert", ParDo.of(new ChangeStreamToElementDoFn(getSchema())));
-                return MCollectionTuple.of(output, getSchema());
-            }
+        return switch (getMode()) {
+            case batch -> expandBatch(begin, parameters);
+            case changeDataCapture -> expandChangeStream(begin, parameters);
             default -> throw new IllegalArgumentException("Not supported mode: " + getMode());
+        };
+    }
+
+    private MCollectionTuple expandBatch(
+            final PBegin begin,
+            final Parameters parameters) {
+
+        final BigtableIO.Read read = createRead(parameters);
+        final PCollection<com.google.bigtable.v2.Row> rows = begin
+                .apply("Read", read);
+
+        final PCollection<MElement> output;
+        Schema outputSchema;
+        switch (parameters.outputType) {
+            case row -> {
+                output = rows
+                        .apply("ConvertRow", ParDo.of(new RowToRowElementDoFn(
+                                parameters, getTimestampAttribute())));
+                if(parameters.withRowKey) {
+                    if(parameters.columns.isEmpty()) {
+                        outputSchema = Schema.builder()
+                                .withField(parameters.rowKeyField, Schema.FieldType.STRING)
+                                .build();
+                    } else {
+                        outputSchema = Schema.builder(BigtableSchemaUtil.createSchema(parameters.columns))
+                                .withField(parameters.rowKeyField, Schema.FieldType.STRING)
+                                .build();
+                    }
+                } else {
+                    outputSchema = BigtableSchemaUtil.createSchema(parameters.columns);
+                }
+                if(parameters.withFirstTimestamp) {
+                    outputSchema = Schema.builder(outputSchema).withField(parameters.firstTimestampField, Schema.FieldType.TIMESTAMP).build();
+                }
+                if(parameters.withLastTimestamp) {
+                    outputSchema = Schema.builder(outputSchema).withField(parameters.lastTimestampField, Schema.FieldType.TIMESTAMP).build();
+                }
+            }
+            case cell -> {
+                output = rows
+                        .apply("ConvertCell", ParDo.of(new RowToCellElementDoFn()));
+                outputSchema = BigtableSchemaUtil.createCellSchema();
+            }
+            default -> throw new IllegalArgumentException();
         }
+
+        return MCollectionTuple
+                .of(output, outputSchema);
+    }
+
+    private MCollectionTuple expandChangeStream(
+            final PBegin begin,
+            final Parameters parameters) {
+
+        final BigtableIO.ReadChangeStream read = createReadChangeStreams(parameters);
+        final PCollection<KV<ByteString, ChangeStreamMutation>> mutations = begin
+                .apply("ReadChangeStream", read);
+        final PCollection<MElement> output = mutations
+                .apply("Convert", ParDo.of(new ChangeStreamToElementDoFn(getSchema())));
+        return MCollectionTuple.of(output, getSchema());
     }
 
     private static BigtableIO.Read createRead(
-            BigtableSourceParameters parameters) {
+            Parameters parameters) {
+
         BigtableIO.Read read = BigtableIO.read()
                 .withProjectId(parameters.projectId)
                 .withInstanceId(parameters.instanceId)
@@ -262,7 +273,7 @@ public class BigtableSource extends Source {
     }
 
     private static BigtableIO.ReadChangeStream createReadChangeStreams(
-            final BigtableSourceParameters parameters) {
+            final Parameters parameters) {
 
         BigtableIO.ReadChangeStream readChangeStream = BigtableIO.readChangeStream()
                 .withProjectId(parameters.projectId)
@@ -297,7 +308,7 @@ public class BigtableSource extends Source {
 
 
         RowToRowElementDoFn(
-                final BigtableSourceParameters parameters,
+                final Parameters parameters,
                 final String timestampAttribute) {
 
             this.columns = BigtableSchemaUtil.toMap(parameters.columns);

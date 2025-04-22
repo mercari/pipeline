@@ -26,6 +26,7 @@ import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +49,7 @@ public class PubSubSink extends Sink {
     private static final String ATTRIBUTE_NAME_EVENT_TIME = "__timestamp";
     private static final String ATTRIBUTE_NAME_TOPIC = "__topic";
 
-    private static class PubSubSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String topic;
         private Format format;
@@ -118,8 +119,20 @@ public class PubSubSink extends Sink {
 
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
+                return expand(inputs, errorHandler);
+            }
+        } else {
+            return expand(inputs, null);
+        }
+    }
 
-        final PubSubSinkParameters parameters = getParameters(PubSubSinkParameters.class);
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
 
         final Schema inputSchema = Union.createUnionSchema(inputs);
         final Schema outputSchema;
@@ -152,7 +165,7 @@ public class PubSubSink extends Sink {
                                         inputSchema, outputSchema, inputNames,
                                         failureTag, getFailFast()))
                                 .withOutputTags(outputTag, TupleTagList.of(failureTag)));
-                final PubsubIO.Write<PubsubMessage> write = createWrite(parameters);
+                final PubsubIO.Write<PubsubMessage> write = createWrite(parameters, errorHandler);
                 final PCollection<MElement> failure = messages.get(failureTag);
                 messages.get(outputTag).apply("Publish_" + inputName, write);
                 failures.add(failure);
@@ -179,7 +192,7 @@ public class PubSubSink extends Sink {
                                     failureTag, getFailFast()))
                             .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
-            final PubsubIO.Write<PubsubMessage> write = createWrite(parameters);
+            final PubsubIO.Write<PubsubMessage> write = createWrite(parameters, errorHandler);
             return MCollectionTuple
                     .done(messages.get(outputTag).apply("Publish", write))
                     .failure(messages.get(failureTag));
@@ -195,7 +208,7 @@ public class PubSubSink extends Sink {
 
         private final String jobName;
         private final String name;
-        private final PubSubSinkParameters parameters;
+        private final Parameters parameters;
         private final Schema outputSchema;
         private final List<String> inputNames;
 
@@ -216,7 +229,7 @@ public class PubSubSink extends Sink {
         OutputDoFn(
                 final String jobName,
                 final String name,
-                final PubSubSinkParameters parameters,
+                final Parameters parameters,
                 final Schema inputSchema,
                 final Schema outputSchema,
                 final List<String> inputNames,
@@ -452,8 +465,10 @@ public class PubSubSink extends Sink {
 
     }
 
+    private static PubsubIO.Write<PubsubMessage> createWrite(
+            final Parameters parameters,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
-    private static PubsubIO.Write<PubsubMessage> createWrite(PubSubSinkParameters parameters) {
         PubsubIO.Write<PubsubMessage> write;
         if(TemplateUtil.isTemplateText(parameters.topic)) {
             write = PubsubIO.writeMessagesDynamic().to(topicFunction);
@@ -474,6 +489,11 @@ public class PubSubSink extends Sink {
         if (parameters.maxBatchBytesSize != null) {
             write = write.withMaxBatchBytesSize(parameters.maxBatchBytesSize);
         }
+
+        if(errorHandler != null) {
+            write = write.withErrorHandler(errorHandler);
+        }
+
         return write;
     }
 

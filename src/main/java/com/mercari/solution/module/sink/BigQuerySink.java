@@ -21,6 +21,7 @@ import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.apache.beam.sdk.values.Row;
 import org.joda.time.Duration;
@@ -37,7 +38,7 @@ public class BigQuerySink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(BigQuerySink.class);
 
-    private static class BigQuerySinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String datasetId;
@@ -196,12 +197,34 @@ public class BigQuerySink extends Sink {
 
     @Override
     public MCollectionTuple expand(final MCollectionTuple inputs) {
-        if(inputs.size() == 0) {
-            throw new IllegalArgumentException("bigquery sink module requires input parameter");
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
+                return expand(inputs, errorHandler);
+            }
+        } else {
+            return expand(inputs, null);
         }
-        final BigQuerySinkParameters parameters = getParameters(BigQuerySinkParameters.class);
+    }
+
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(inputs);
         parameters.setDefaults(inputs, getRunner());
+
+        final Schema inputSchema = Union.createUnionSchema(inputs, getUnion());
+
+        final WriteResult writeResult = write(inputs, parameters, errorHandler);
+
+        return createOutputs(inputs, writeResult, parameters, inputSchema);
+    }
+
+    private WriteResult write(
+            final MCollectionTuple inputs,
+            final Parameters parameters,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         final PCollection<MElement> elements = inputs
                 .apply("Union", Union.flatten()
@@ -211,7 +234,6 @@ public class BigQuerySink extends Sink {
         final boolean isStreaming = OptionUtil.isStreaming(inputs);
 
         final Schema inputSchema = Union.createUnionSchema(inputs, getUnion());
-
 
         //final TableSchema destinationTableSchema = TemplateUtil.isTemplateText(parameters.table) ? null : BigQueryUtil.getTableSchemaFromTable(parameters.getTableReference());
         /*
@@ -227,13 +249,13 @@ public class BigQuerySink extends Sink {
         final BigQueryUtil.WriteFormat writeDataType = Optional
                 .ofNullable(parameters.writeFormat)
                 .orElseGet(() -> BigQueryUtil.getPreferWriteFormat(parameters.method, isStreaming));
-        final WriteResult writeResult = switch (writeDataType) {
+        return switch (writeDataType) {
             case row -> {
                 BigQueryIO.Write<Row> write = BigQueryIO
                         .<Row>write()
                         .useBeamSchema();
                 final SerializableFunction<Row, String> destinationFunction = createDestinationFunction(inputSchema, parameters.table, templateVariables);
-                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction);
+                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction, errorHandler);
                 yield elements
                         .apply("ConvertToRow", ParDo.of(new ToRowDoFn(inputSchema)))
                         .setCoder(RowCoder.of(inputSchema.getRow().getSchema()))
@@ -245,7 +267,7 @@ public class BigQuerySink extends Sink {
                         .withAvroSchemaFactory(TableRowToAvroConverter::convertSchema)
                         .useAvroLogicalTypes();
                 final SerializableFunction<GenericRecord, String> destinationFunction = createDestinationFunction(inputSchema, parameters.table, templateVariables);
-                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction);
+                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction, errorHandler);
                 yield elements
                         .apply("ConvertToAvro", ParDo.of(new ToAvroDoFn(inputSchema)))
                         .setCoder(AvroCoder.of(inputSchema.getAvro().getSchema()))
@@ -258,7 +280,7 @@ public class BigQuerySink extends Sink {
                         .withAvroSchemaFactory(TableRowToAvroConverter::convertSchema)
                         .useAvroLogicalTypes();
                 final SerializableFunction<MElement, String> destinationFunction = createDestinationFunction(inputSchema, parameters.table, templateVariables);
-                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction);
+                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction, errorHandler);
                 yield elements
                         .apply("WriteAvroFile", write);
             }
@@ -266,16 +288,23 @@ public class BigQuerySink extends Sink {
                 BigQueryIO.Write<TableRow> write = BigQueryIO
                         .writeTableRows();
                 final SerializableFunction<TableRow, String> destinationFunction = createDestinationFunction(inputSchema, parameters.table, templateVariables);
-                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction);
+                write = applyParameters(write, parameters, insertTableSchema, isStreaming, destinationFunction, errorHandler);
                 yield elements
                         .apply("ConvertToTableRow", ParDo.of(new ToTableRowDoFn(inputSchema)))
                         .apply("WriteTableRow", write);
             }
         };
+    }
+
+    private MCollectionTuple createOutputs(
+            final MCollectionTuple inputs,
+            final WriteResult writeResult,
+            final Parameters parameters,
+            final Schema inputSchema) {
 
         final boolean isStreamingInsert =
                 BigQueryIO.Write.Method.STREAMING_INSERTS.equals(parameters.method)
-                        || (BigQueryIO.Write.Method.DEFAULT.equals(parameters.method) && isStreaming);
+                        || (BigQueryIO.Write.Method.DEFAULT.equals(parameters.method) && OptionUtil.isStreaming(inputs));
         final boolean isStorageApiInsert =
                 BigQueryIO.Write.Method.STORAGE_WRITE_API.equals(parameters.method)
                         || BigQueryIO.Write.Method.STORAGE_API_AT_LEAST_ONCE.equals(parameters.method);
@@ -512,10 +541,11 @@ public class BigQuerySink extends Sink {
 
     private static <InputT> BigQueryIO.Write<InputT> applyParameters(
             final BigQueryIO.Write<InputT> base,
-            final BigQuerySinkParameters parameters,
+            final Parameters parameters,
             final Schema tableSchema,
             final boolean isStreaming,
-            final SerializableFunction<InputT, String> destinationFunction) {
+            final SerializableFunction<InputT, String> destinationFunction,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         final String table = parameters.table;
 
@@ -627,6 +657,10 @@ public class BigQuerySink extends Sink {
                     }
                 }
             }
+        }
+
+        if(errorHandler != null) {
+            write = write.withErrorHandler(errorHandler);
         }
 
         return write;
@@ -770,7 +804,7 @@ public class BigQuerySink extends Sink {
         public DynamicDestinationFunc(
                 final Schema tableSchema,
                 final SerializableFunction<T, String> destinationFunction,
-                final BigQuerySinkParameters parameters) {
+                final Parameters parameters) {
 
             this.tableSchema = tableSchema;
             this.destinationFunction = destinationFunction;

@@ -130,6 +130,14 @@ public class MElement implements Serializable {
     public static MElement of(int index, DataType dataType, Object value, long epochMillis) {
         return new MElement(index, dataType, value, epochMillis);
     }
+    public static List<MElement> ofList(List<Map<String, Object>> list, org.joda.time.Instant timestamp) {
+        final List<MElement> elements = new ArrayList<>();
+        for(final Map<String, Object> values : list) {
+            final MElement output = MElement.of(values, timestamp);
+            elements.add(output);
+        }
+        return elements;
+    }
 
     public static Builder builder() {
         return new Builder();
@@ -156,6 +164,10 @@ public class MElement implements Serializable {
     }
 
     //
+    public MElement convert(final Schema schema) {
+        return convert(schema, schema.getType());
+    }
+
     public MElement convert(final Schema schema, final DataType dataType) {
         return switch (dataType) {
             case ELEMENT -> switch (type) {

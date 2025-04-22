@@ -7,10 +7,13 @@ import com.google.gson.JsonObject;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.util.JsonFormat;
 import com.mercari.solution.module.*;
+import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.gcp.PubSubUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
+import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.pipeline.Select;
+import com.mercari.solution.util.pipeline.Unnest;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.MessageSchemaUtil;
@@ -28,6 +31,8 @@ import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
+import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
@@ -35,6 +40,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
@@ -56,6 +62,7 @@ public class PubSubSource extends Source {
         private Format format;
         private AdditionalFieldsParameters additionalFields;
         private Boolean outputOriginal;
+        private String charset;
 
         private JsonElement filter;
         private JsonArray select;
@@ -114,6 +121,14 @@ public class PubSubSource extends Source {
                 errorMessages.addAll(additionalFields.validate());
             }
 
+            if(charset != null) {
+                try {
+                    final Charset c = Charset.forName(charset);
+                } catch (Throwable e) {
+                    errorMessages.add("failed to set charset: " + charset + ", cause: " + e.getMessage());
+                }
+            }
+
             if(!errorMessages.isEmpty()) {
                 throw new IllegalModuleException(errorMessages);
             }
@@ -131,6 +146,9 @@ public class PubSubSource extends Source {
             }
             if(outputOriginal == null) {
                 outputOriginal = false;
+            }
+            if(charset == null) {
+                charset = StandardCharsets.UTF_8.name();
             }
         }
 
@@ -203,7 +221,7 @@ public class PubSubSource extends Source {
             }
             PubSubUtil.createSubscription(pubsub, parameters.topic, parameters.subscription);
         }
-         */
+        */
 
         if(parameters.seek != null) {
             try {
@@ -218,11 +236,22 @@ public class PubSubSource extends Source {
             }
         }
 
-        final PubsubIO.Read<PubsubMessage> read = createRead(parameters, getTimestampAttribute());
-        final PCollection<PubsubMessage> pubsubMessages = begin.apply("Read", read);
+        if(hasFailures()) {
+            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(begin)) {
+                return expand(begin, parameters, errorHandler);
+            }
+        } else {
+            return expand(begin, parameters, null);
+        }
+    }
+
+    private MCollectionTuple expand(
+            final PBegin begin,
+            final Parameters parameters,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         final TupleTag<MElement> outputTag = new TupleTag<>() {};
-        final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
         final TupleTag<MElement> originalTag = new TupleTag<>() {};
 
         final DataType outputType = Optional
@@ -232,7 +261,7 @@ public class PubSubSource extends Source {
         final Schema inputSchema = createDeserializedInputSchema(parameters, getSchema());
         final Schema outputSchema;
         final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, inputSchema.getFields());
-        if(selectFunctions.isEmpty()) {
+        if (selectFunctions.isEmpty()) {
             outputSchema = inputSchema
                     .copy()
                     .withType(outputType)
@@ -245,22 +274,28 @@ public class PubSubSource extends Source {
 
         final List<TupleTag<?>> outputTags = new ArrayList<>();
         outputTags.add(failuresTag);
-        if(parameters.outputOriginal) {
+        if (parameters.outputOriginal) {
             outputTags.add(originalTag);
         }
 
-        final PCollectionTuple outputs = pubsubMessages
+        final PCollectionTuple outputs = begin
+                .apply("Read", createRead(parameters, getTimestampAttribute(), errorHandler))
                 .apply("Format", ParDo
                         .of(new OutputDoFn(getJobName(), getName(),
                                 inputSchema, outputSchema, parameters,
                                 outputType, getLoggings(), selectFunctions,
                                 getFailFast(), failuresTag, originalTag))
                         .withOutputTags(outputTag, TupleTagList.of(outputTags)));
-        final MCollectionTuple outputTuple = MCollectionTuple
-                .of(outputs.get(outputTag), outputSchema)
-                .failure(outputs.get(failuresTag));
 
-        if(parameters.outputOriginal) {
+        if(errorHandler != null) {
+            final PCollection<BadRecord> failures = outputs.get(failuresTag);
+            errorHandler.addErrorCollection(failures);
+        }
+
+        final MCollectionTuple outputTuple = MCollectionTuple
+                .of(outputs.get(outputTag), outputSchema);
+
+        if (parameters.outputOriginal) {
             final Schema originalSchema = createMessageSchema().withType(DataType.MESSAGE);
             return outputTuple
                     .and("original", outputs.get(originalTag), originalSchema);
@@ -271,7 +306,9 @@ public class PubSubSource extends Source {
 
     private static PubsubIO.Read<PubsubMessage> createRead(
             final Parameters parameters,
-            final String timestampAttribute) {
+            final String timestampAttribute,
+            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+
         PubsubIO.Read<PubsubMessage> read = PubsubIO.readMessagesWithAttributesAndMessageIdAndOrderingKey();
         if (parameters.topic != null) {
             read = read.fromTopic(parameters.topic);
@@ -285,6 +322,11 @@ public class PubSubSource extends Source {
         if (timestampAttribute != null) {
             read = read.withTimestampAttribute(timestampAttribute);
         }
+
+        if(errorHandler != null) {
+            read = read.withErrorHandler(errorHandler);
+        }
+
         return read;
     }
 
@@ -326,11 +368,16 @@ public class PubSubSource extends Source {
 
         private final Map<String, Logging> loggings;
         private final DataType outputType;
+
+        private final Filter filter;
         private final Select select;
+        private final Unnest unnest;
+
+        private final String charset;
 
         private final boolean failFast;
         private final boolean outputOriginal;
-        private final TupleTag<MElement> failuresTag;
+        private final TupleTag<BadRecord> failuresTag;
         private final TupleTag<MElement> originalTag;
 
         // for deserialize message
@@ -365,7 +412,7 @@ public class PubSubSource extends Source {
                 final List<SelectFunction> selectFunctions,
                 // failures
                 final boolean failFast,
-                final TupleTag<MElement> failuresTag,
+                final TupleTag<BadRecord> failuresTag,
                 final TupleTag<MElement> originalTag) {
 
             this.jobName = jobName;
@@ -375,7 +422,11 @@ public class PubSubSource extends Source {
             this.outputType = outputType;
             this.loggings = Logging.map(loggings);
 
-            this.select = Select.of(outputSchema, parameters.filter, selectFunctions, parameters.flattenField, outputType);
+            this.filter = Filter.of(parameters.filter);
+            this.select = Select.of(selectFunctions);
+            this.unnest = Unnest.of(parameters.flattenField);
+
+            this.charset = parameters.charset;
 
             this.failFast = failFast;
             this.outputOriginal = parameters.outputOriginal;
@@ -445,7 +496,7 @@ public class PubSubSource extends Source {
                     c.output(originalTag, element);
                 }
                 final Map attributes = message.getAttributeMap();
-                if(!select.filter(attributes)) {
+                if(!filter.filter(attributes)) {
                     return;
                 }
                 final MElement output = switch (format) {
@@ -459,13 +510,13 @@ public class PubSubSource extends Source {
                 c.output(output);
             } catch (final Throwable e) {
                 ERROR_COUNTER.inc();
-                String errorMessage = MFailure.convertThrowableMessage(e);
+                String errorMessage = FailureUtil.convertThrowableMessage(e);
                 LOG.error("pubsub source parse error: {}, {} for message: {}", e, errorMessage, message);
                 if(failFast) {
                     throw new IllegalStateException(errorMessage, e);
                 }
-                final MFailure failureElement = createFailureElement(c, message, e);
-                c.output(failuresTag, failureElement.toElement(c.timestamp()));
+                final BadRecord badRecord = FailureUtil.createBadRecord(message, "", e);
+                c.output(failuresTag, badRecord);
             }
         }
 
@@ -616,6 +667,26 @@ public class PubSubSource extends Source {
             }
             return MFailure
                     .of(jobName, moduleName, input.toString(), e, c.timestamp());
+        }
+
+        private String createInputJson(
+                final ProcessContext c,
+                final PubsubMessage message,
+                final Throwable e) {
+
+
+            final JsonObject input = new JsonObject();
+            input.addProperty("messageId", message.getMessageId());
+            input.addProperty("orderingKey", message.getOrderingKey());
+            input.addProperty("topic", message.getTopic());
+            if(message.getAttributeMap() != null) {
+                final JsonObject attributes = new JsonObject();
+                for(final Map.Entry<String, String> entry : message.getAttributeMap().entrySet()) {
+                    attributes.addProperty(entry.getKey(), entry.getValue());
+                }
+                input.add("attributes", attributes);
+            }
+            return input.toString();
         }
     }
 
