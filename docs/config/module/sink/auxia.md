@@ -165,14 +165,8 @@ sources:
       - value: '{"user_id": "u000003", "event_name": "pay", "client_event_timestamp": "2025-04-01T00:02:00Z", "amount": 500 }'
   schema:
     fields:
-      - name: user_id
-        type: string
-      - name: client_event_timestamp
-        type: timestamp
-      - name: event_name
-        type: string
-      - name: amount
-        type: int64
+      - name: value
+        type: json
 sinks:
   name: auxia_sink
   module: auxia
