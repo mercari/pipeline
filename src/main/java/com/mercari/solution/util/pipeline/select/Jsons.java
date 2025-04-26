@@ -67,18 +67,20 @@ public class Jsons implements SelectFunction {
             nestedInputFields.addAll(selectFunction.getInputFields());
         }
 
-        final String mode;
-        if(jsonObject.has("mode") && jsonObject.get("mode").isJsonPrimitive()) {
-            mode = jsonObject.get("mode").getAsString();
-        } else {
-            mode = "nullable";
-        }
-
         final String eachField;
         if(jsonObject.has("each") && jsonObject.get("each").isJsonPrimitive()) {
             eachField = jsonObject.get("each").getAsString();
         } else {
             eachField = null;
+        }
+
+        final String mode;
+        if(jsonObject.has("mode") && jsonObject.get("mode").isJsonPrimitive()) {
+            mode = jsonObject.get("mode").getAsString();
+        } else if(eachField != null) {
+            mode = "repeated";
+        } else {
+            mode = "nullable";
         }
 
         final Schema.FieldType fieldType = Schema.FieldType.STRING;

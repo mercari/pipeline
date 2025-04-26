@@ -88,9 +88,12 @@ public class Struct implements SelectFunction {
         final String mode;
         if(jsonObject.has("mode") && jsonObject.get("mode").isJsonPrimitive()) {
             mode = jsonObject.get("mode").getAsString();
+        } else if(eachField != null) {
+            mode = "repeated";
         } else {
             mode = "nullable";
         }
+
 
         final Schema.FieldType fieldType = Schema.FieldType.element(outputSchema);
         final Schema.FieldType outputFieldType = switch (mode) {
@@ -150,8 +153,8 @@ public class Struct implements SelectFunction {
             }
 
             final Object eachValue = ElementSchemaUtil.getValue(input, eachFieldPath);
-            final List<Object> eachValues = switch (eachValue) {
-                case List list -> list;
+            final List<?> eachValues = switch (eachValue) {
+                case List<?> list -> list;
                 case String s -> {
                     try {
                         final JsonElement json = new Gson().fromJson(s, JsonElement.class);
@@ -169,8 +172,9 @@ public class Struct implements SelectFunction {
                         throw new RuntimeException("Failed to parse each field values: " + s, e);
                     }
                 }
+                case Map<?,?> map -> List.of(map);
                 case null -> new ArrayList<>();
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Illegal each value: " + eachValue);
             };
 
             final List<Map<String, Object>> outputs = new ArrayList<>();
@@ -195,7 +199,8 @@ public class Struct implements SelectFunction {
             return outputs;
         } else {
             final Map<String, Object> newInput = new HashMap<>(input);
-            return SelectFunction.apply(selectFunctions, newInput, timestamp);
+            final Map<String, Object> output = SelectFunction.apply(selectFunctions, newInput, timestamp);
+            return output;
         }
     }
 

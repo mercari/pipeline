@@ -58,6 +58,8 @@ public class BigtableSchemaUtilTest {
         Assert.assertEquals("abc", value);
     }
 
+    // remove hadoop serialize format
+    /*
     @Test
     public void testToByteStringHadoop() {
         final Schema schema = Schema.builder()
@@ -108,5 +110,6 @@ public class BigtableSchemaUtilTest {
         Assert.assertEquals(10L, child.get("longField"));
         Assert.assertEquals(List.of("A", "B", "C"), child.get("stringArrayField"));
     }
+     */
 
 }

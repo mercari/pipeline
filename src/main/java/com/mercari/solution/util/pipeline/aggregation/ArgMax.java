@@ -193,7 +193,7 @@ public class ArgMax implements AggregateFunction {
 
     @Override
     public Accumulator addInput(Accumulator accumulator, MElement element) {
-        return addInput(accumulator, element);
+        return addInput(accumulator, element, null, null);
     }
 
     @Override
