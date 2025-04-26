@@ -394,6 +394,22 @@
       <artifactId>beam-sdks-java-io-parquet</artifactId>
     </dependency>
 
+    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-kafka -->
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-kafka</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-iceberg</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-managed</artifactId>
+    </dependency>
+
     <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-rrio -->
     <dependency>
       <groupId>org.apache.beam</groupId>
@@ -665,6 +681,13 @@
       <artifactId>jakarta.servlet-api</artifactId>
       <version>${jakarta-servlet.version}</version>
       <scope>provided</scope>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/io.modelcontextprotocol.sdk/mcp -->
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp</artifactId>
+      <version>0.8.1</version>
     </dependency>
 
   </dependencies>

@@ -41,7 +41,7 @@ public class HttpTransform extends Transform {
 
     public static class Parameters implements Serializable {
 
-        private Auth.Parameters auth;
+        //private Auth.Parameters auth;
         private HttpUtil.Request request;
         private List<HttpUtil.Request> requests;
         private HttpUtil.Response response;
@@ -73,9 +73,9 @@ public class HttpTransform extends Transform {
                 errorMessages.addAll(this.retry.validate());
             }
 
-            if(auth != null) {
-                errorMessages.addAll(this.auth.validate(""));
-            }
+            //if(auth != null) {
+            //    errorMessages.addAll(this.auth.validate(""));
+            //}
 
             if(!errorMessages.isEmpty()) {
                 throw new IllegalModuleException(errorMessages);
@@ -344,6 +344,7 @@ public class HttpTransform extends Transform {
         final Schema inputSchema = Union.createUnionSchema(inputs);
 
         final PCollection<KV<Map<String, Object>, MElement>> inputWithParams;
+        /*
         if(parameters.auth != null || !getSideInputs().isEmpty()) {
 
             final Map<String, PCollectionView<?>> views = new HashMap<>();
@@ -374,6 +375,11 @@ public class HttpTransform extends Transform {
             inputWithParams = input
                     .apply("EmptyAuth", WithKeys.of(new HashMap<>()));
         }
+
+         */
+
+        inputWithParams = input
+                .apply("EmptyAuth", WithKeys.of(new HashMap<>()));
 
         final HttpCaller caller = new HttpCaller(
                 getName(), getParametersText(), inputSchema, selectFunctions, responseSchema, outputSchema, getLoggings());
