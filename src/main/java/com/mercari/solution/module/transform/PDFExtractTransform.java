@@ -11,6 +11,7 @@ import com.mercari.solution.util.gcp.StorageUtil;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Reshuffle;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
@@ -50,7 +51,7 @@ public class PDFExtractTransform extends Transform {
     private static final String FIELD_NAME_ERROR_PAGE = "ErrorPageCount";
     private static final String FIELD_NAME_ERROR_MESSAGE = "ErrorMessage";
 
-    private static class PDFExtractTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String field;
         private String prefix;
@@ -75,8 +76,11 @@ public class PDFExtractTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        final PDFExtractTransformParameters parameters = getParameters(PDFExtractTransformParameters.class);
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -104,17 +108,18 @@ public class PDFExtractTransform extends Transform {
         }
 
         final TupleTag<MElement> outputTag = new TupleTag<>() {};
-        final TupleTag<MElement> failureTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failureTag = new TupleTag<>() {};
 
         final PCollectionTuple outputs = input
-                .apply(ParDo.of(new PDFExtractDoFn(
-                        getJobName(), getName(), failureTag, getFailFast(),
-                        parameters, selectFunctions, isContentFieldString))
+                .apply(ParDo
+                        .of(new PDFExtractDoFn(
+                                parameters, selectFunctions, isContentFieldString, getFailFast(), failureTag))
                         .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
+        errorHandler.addError(outputs.get(failureTag));
+
         return MCollectionTuple
-                .of(outputs.get(outputTag), outputSchema)
-                .failure(outputs.get(failureTag));
+                .of(outputs.get(outputTag), outputSchema);
     }
 
     private static Schema createPdfSchema(String prefix) {
@@ -141,37 +146,31 @@ public class PDFExtractTransform extends Transform {
 
     private static class PDFExtractDoFn extends DoFn<MElement, MElement> {
 
-        private final String jobName;
-        private final String name;
-        private final TupleTag<MElement> failureTag;
-        private final boolean failFast;
-
         private final String field;
         private final String prefix;
         private final List<SelectFunction> selectFunctions;
         private final boolean isContentFieldString;
 
+        private final boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
+
         private transient PDFTextStripper stripper;
         private transient Storage storage;
 
         PDFExtractDoFn(
-                final String jobName,
-                final String moduleName,
-                final TupleTag<MElement> failureTag,
-                final boolean failFast,
-                final PDFExtractTransformParameters parameters,
+                final Parameters parameters,
                 final List<SelectFunction> selectFunctions,
-                final boolean isContentFieldString) {
-
-            this.jobName = jobName;
-            this.name = moduleName;
-            this.failureTag = failureTag;
-            this.failFast = failFast;
+                final boolean isContentFieldString,
+                final boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
 
             this.field = parameters.field;
             this.prefix = parameters.prefix;
             this.selectFunctions = selectFunctions;
             this.isContentFieldString = isContentFieldString;
+
+            this.failureTag = failureTag;
+            this.failFast = failFast;
         }
 
         @Setup
@@ -242,14 +241,8 @@ public class PDFExtractTransform extends Transform {
 
                 c.output(output);
             } catch (final Throwable e) {
-                //errorCounter.inc();
-                final MFailure failure = MFailure.of(jobName, name, input.toString(), e, c.timestamp());
-                if(failFast) {
-                    throw new RuntimeException("pdfExtract module " + name + " failed to execute partition for element: " + input + ", pdfContent: " + pdfContent, e);
-                }
-
-                c.output(failureTag, failure.toElement(c.timestamp()));
-                LOG.error("Failed to execute pdfExtract for element: {}, pdfContent: {}, cause: {}", input, pdfContent, failure.getError());
+                final BadRecord badRecord = processError("Failed to extract pdf message: " + pdfContent, input, e, failFast);
+                c.output(failureTag, badRecord);
             }
         }
 

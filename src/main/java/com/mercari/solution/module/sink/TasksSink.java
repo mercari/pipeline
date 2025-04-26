@@ -29,7 +29,7 @@ public class TasksSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(TasksSink.class);
 
-    private static class TasksSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String queue;
         private Format format;
@@ -66,13 +66,15 @@ public class TasksSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
 
         if(true) {
             throw new NotImplementedException("Not Implemented tasks sink module");
         }
 
-        final TasksSinkParameters parameters = getParameters(TasksSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         if (parameters == null) {
             throw new IllegalArgumentException("tasks sink module parameters must not be empty!");
         }

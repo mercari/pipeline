@@ -2,6 +2,8 @@ package com.mercari.solution.config.options;
 
 import com.google.dataflow.v1beta3.FlexTemplateRuntimeEnvironment;
 import com.google.dataflow.v1beta3.LaunchFlexTemplateParameter;
+import com.google.dataflow.v1beta3.LaunchTemplateParameters;
+import com.google.dataflow.v1beta3.RuntimeEnvironment;
 import com.mercari.solution.config.Options;
 import org.apache.beam.sdk.extensions.gcp.options.GcpOptions;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -325,6 +327,27 @@ public class DataflowOptions implements Serializable {
         }
     }
 
+    public static LaunchTemplateParameters createLaunchTemplateParameter(
+            final Map<String, String> parameters,
+            final Options options) {
+
+        final LaunchTemplateParameters.Builder builder = LaunchTemplateParameters.newBuilder();
+        builder.putAllParameters(parameters);
+        if(options != null) {
+            if(options.getJobName() != null) {
+                builder.setJobName(options.getJobName());
+            }
+            if(options.getDataflow() != null) {
+                if(options.getDataflow().update != null) {
+                    builder.setUpdate(options.getDataflow().update);
+                }
+                final RuntimeEnvironment environment = createRuntimeEnvironment(options.getDataflow());
+                builder.setEnvironment(environment);
+            }
+        }
+        return builder.build();
+    }
+
     public static LaunchFlexTemplateParameter createLaunchFlexTemplateParameter(
             final String templatePath,
             final Map<String, String> parameters,
@@ -346,6 +369,44 @@ public class DataflowOptions implements Serializable {
             }
         }
 
+        return builder.build();
+    }
+
+    private static RuntimeEnvironment createRuntimeEnvironment(final DataflowOptions dataflow) {
+        final RuntimeEnvironment.Builder builder = RuntimeEnvironment.newBuilder();
+        if(dataflow.tempLocation != null) {
+            builder.setTempLocation(dataflow.tempLocation);
+        }
+        if(dataflow.serviceAccount != null) {
+            builder.setServiceAccountEmail(dataflow.serviceAccount);
+        }
+        if(dataflow.network != null) {
+            builder.setNetwork(dataflow.network);
+        }
+        if(dataflow.subnetwork != null) {
+            builder.setSubnetwork(dataflow.subnetwork);
+        }
+        if(dataflow.workerRegion != null) {
+            builder.setWorkerRegion(dataflow.workerRegion);
+        }
+        if(dataflow.workerZone != null) {
+            builder.setWorkerZone(dataflow.workerZone);
+        }
+        if(dataflow.workerMachineType != null) {
+            builder.setMachineType(dataflow.workerMachineType);
+        }
+        if(dataflow.numWorkers != null) {
+            builder.setNumWorkers(dataflow.numWorkers);
+        }
+        if(dataflow.maxNumWorkers != null) {
+            builder.setMaxWorkers(dataflow.maxNumWorkers);
+        }
+        if(dataflow.experiments != null && !dataflow.experiments.isEmpty()) {
+            builder.addAllAdditionalExperiments(dataflow.experiments);
+        }
+        if(dataflow.enableStreamingEngine != null) {
+            builder.setEnableStreamingEngine(dataflow.enableStreamingEngine);
+        }
         return builder.build();
     }
 

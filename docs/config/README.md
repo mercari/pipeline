@@ -8,6 +8,13 @@ In the Config file, four modules, `options`, `sources`, `transforms`, and `sinks
 
 ```JSON:config
 {
+  "args": {
+    "xxx": "yyy"
+  },
+  "system": {
+    "context": "xxx",
+    "failures": {...}
+  },
   "options": [
     {...}
   ],
@@ -18,6 +25,9 @@ In the Config file, four modules, `options`, `sources`, `transforms`, and `sinks
     {...}
   ],
   "sinks": [
+    {...}
+  ],
+  "failures": [
     {...}
   ]
 }
@@ -56,7 +66,7 @@ The common settings of the three types of modules are as follows.
 | parameters         | required | required  | required |
 | inputs             | -        | required  | required |
 | sideInputs         | -        | optional  | optional |
-| wait               | -        | optional  | optional |
+| waits              | -        | optional  | optional |
 | schema             | optional | -         | optional |
 | strategy           | -        | optional  | optional |
 | timestampAttribute | optional | -         | -        |

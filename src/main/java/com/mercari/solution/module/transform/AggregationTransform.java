@@ -10,9 +10,8 @@ import com.mercari.solution.util.pipeline.aggregation.Aggregators;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import org.apache.beam.sdk.coders.*;
 import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.*;
@@ -21,9 +20,7 @@ import java.util.*;
 @Transform.Module(name="aggregation")
 public class AggregationTransform extends Transform {
 
-    private static final Logger LOG = LoggerFactory.getLogger(AggregationTransform.class);
-
-    private static class AggregateTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private List<String> groupFields;
         private JsonElement filter;
@@ -120,10 +117,12 @@ public class AggregationTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
         final Map<String, Schema> inputSchemas = inputs.getAllSchemaAsMap();
-        final AggregateTransformParameters parameters = getParameters(AggregateTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
 
         Strategy strategy = getStrategy();
         if(strategy.isDefault() && (parameters.window != null || parameters.trigger != null)) {
@@ -166,8 +165,16 @@ public class AggregationTransform extends Transform {
             outputSchema = SelectFunction.createSchema(selectFunctions, parameters.flattenField);
         }
 
-        final PCollection<KV<String, MElement>> formatted = aggregated
-                .apply("Format", ParDo.of(new FormatDoFn(outputSchema, filterJson, selectFunctions)))
+        final TupleTag<KV<String,MElement>> outputTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
+
+        final PCollectionTuple postProcessed = aggregated
+                .apply("Format", ParDo
+                        .of(new FormatDoFn(outputSchema, filterJson, selectFunctions, getFailFast(), failuresTag))
+                        .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+
+        final PCollection<KV<String, MElement>> formatted = postProcessed
+                .get(outputTag)
                 .setCoder(KvCoder.of(StringUtf8Coder.of(), ElementCoder.of(outputSchema)));
 
         final PCollection<MElement> limited;
@@ -180,25 +187,35 @@ public class AggregationTransform extends Transform {
                     .apply("Values", Values.create());
         }
 
+        errorHandler.addError(postProcessed.get(failuresTag));
+
         return MCollectionTuple.of(limited, outputSchema);
     }
 
-    private static class FormatDoFn extends DoFn<KV<String,Map<String,Object>>, KV<String,MElement>> {
+    private static class FormatDoFn extends DoFn<KV<String, Map<String, Object>>, KV<String, MElement>> {
 
         private final Schema schema;
         private final String filterJson;
         private final List<SelectFunction> selectFunctions;
+
+        protected final boolean failFast;
+        protected final TupleTag<BadRecord> failuresTag;
 
         private transient Filter.ConditionNode conditionNode;
 
         FormatDoFn(
                 final Schema schema,
                 final String filterJson,
-                final List<SelectFunction> selectFunctions) {
+                final List<SelectFunction> selectFunctions,
+                final boolean failFast,
+                final TupleTag<BadRecord> failuresTag) {
 
             this.schema = schema;
             this.filterJson = filterJson;
             this.selectFunctions = selectFunctions;
+
+            this.failFast = failFast;
+            this.failuresTag = failuresTag;
         }
 
         @Setup
@@ -214,13 +231,23 @@ public class AggregationTransform extends Transform {
 
         @ProcessElement
         public void processElement(ProcessContext c) {
-            final Map<String,Object> values = c.element().getValue();
-            if(conditionNode != null && !Filter.filter(conditionNode, values)) {
+            final KV<String, Map<String,Object>> input = c.element();
+            if(input == null) {
                 return;
             }
-            final Map<String,Object> result = Select.apply(selectFunctions, values, c.timestamp());
-            final MElement output = MElement.of(schema, result, c.timestamp());
-            c.output(KV.of(c.element().getKey(), output));
+            final String groupKey = input.getKey();
+            final Map<String, Object> values = input.getValue();
+            try {
+                if(conditionNode != null && !Filter.filter(conditionNode, values)) {
+                    return;
+                }
+                final Map<String,Object> result = Select.apply(selectFunctions, values, c.timestamp());
+                final MElement output = MElement.of(schema, result, c.timestamp());
+                c.output(KV.of(input.getKey(), output));
+            } catch (final Throwable e) {
+                final BadRecord badRecord = processError("Failed to process aggregation select with group key: " + groupKey, values, e, failFast);
+                c.output(failuresTag, badRecord);
+            }
         }
 
     }

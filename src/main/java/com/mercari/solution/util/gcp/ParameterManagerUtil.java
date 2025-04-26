@@ -1,6 +1,7 @@
 package com.mercari.solution.util.gcp;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.util.DateTimeUtil;
 
@@ -12,7 +13,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -191,6 +194,45 @@ public class ParameterManagerUtil {
             final String responseText = res.body();
             final JsonObject responseJson = new Gson().fromJson(responseText, JsonObject.class);
             return Version.of(responseJson);
+        } catch (IOException | URISyntaxException | InterruptedException e) {
+            throw new RuntimeException("Failed to get parameter version: " + endpoint, e);
+        }
+    }
+
+    public static List<Version> listParameterVersions(final String name, final String filter) {
+        try(final HttpClient client = HttpClient.newHttpClient()) {
+            return listParameterVersions(client, name, filter);
+        }
+    }
+
+    public static List<Version> listParameterVersions(final HttpClient client, final String parent, final String filter) {
+        String endpoint = String.format("%s/%s/%s", ENDPOINT, "v1", parent);
+        if(filter != null) {
+            endpoint = endpoint + "?filter=" + filter;
+        }
+        try {
+            final String accessToken = IAMUtil.getAccessToken().getTokenValue();
+            final HttpRequest req = HttpRequest.newBuilder()
+                    .uri(new URI(endpoint))
+                    .header("Authorization", "Bearer " + accessToken)
+                    .GET()
+                    .build();
+            final HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
+            if(res.statusCode() >= 400) {
+                throw new RuntimeException("Failed to get parameter version: " + endpoint + ", status: " + res.statusCode() + ", body: " + res.body());
+            }
+
+            final String responseText = res.body();
+            final JsonObject responseJson = new Gson().fromJson(responseText, JsonObject.class);
+            if(!responseJson.has("parameterVersions")) {
+                throw new RuntimeException("Failed to list parameter version:s " + endpoint);
+            }
+            List<Version> versions = new ArrayList<>();
+            for(final JsonElement element : responseJson.getAsJsonArray("parameterVersions")) {
+                final Version version = Version.of(element.getAsJsonObject());
+                versions.add(version);
+            }
+            return versions;
         } catch (IOException | URISyntaxException | InterruptedException e) {
             throw new RuntimeException("Failed to get parameter version: " + endpoint, e);
         }

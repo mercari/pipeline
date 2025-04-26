@@ -116,7 +116,9 @@ public class CopyFileSink extends Sink {
 
 
     @Override
-    public MCollectionTuple expand(final MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
         final CopyFileSinkParameters parameters = getParameters(CopyFileSinkParameters.class);
         parameters.validate();
         parameters.setDefaults();
@@ -140,8 +142,7 @@ public class CopyFileSink extends Sink {
                         .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
         return MCollectionTuple
-                .of(input.get(outputTag), createOutputSchema())
-                .failure(input.get(failureTag));
+                .of(input.get(outputTag), createOutputSchema());
     }
 
     private static class CopyDoFn extends DoFn<MElement, MElement> {

@@ -52,9 +52,10 @@ public abstract class Sink extends Module<MCollectionTuple> {
             final @NonNull SinkConfig config,
             final Module properties,
             final PipelineOptions options,
-            final List<MCollection> waits) {
+            final List<MCollection> waits,
+            final MErrorHandler errorHandler) {
 
-        super.setup(config, options, waits);
+        super.setup(config, options, waits, errorHandler);
         this.schema = config.getSchema();
         this.strategy = Optional
                 .ofNullable(config.getStrategy())
@@ -68,7 +69,8 @@ public abstract class Sink extends Module<MCollectionTuple> {
     public static @NonNull Sink create(
             final @NonNull SinkConfig config,
             final @NonNull PipelineOptions options,
-            final @NonNull List<MCollection> waits) {
+            final @NonNull List<MCollection> waits,
+            final @NonNull MErrorHandler errorHandler) {
 
         return Optional.ofNullable(sinks.get(config.getModule())).map(clazz -> {
             final Sink module;
@@ -78,7 +80,7 @@ public abstract class Sink extends Module<MCollectionTuple> {
                 throw new RuntimeException("Failed to instantiate sinks module: " + config.getModule() + ", class: " + clazz, e);
             }
             final Module properties = module.getClass().getAnnotation(Module.class);
-            module.setup(config, properties, options, waits);
+            module.setup(config, properties, options, waits, errorHandler);
             return module;
         }).orElseThrow(() -> new IllegalArgumentException("Not supported sinks module: " + config.getModule()));
     }

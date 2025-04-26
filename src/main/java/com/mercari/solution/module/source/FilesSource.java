@@ -8,23 +8,21 @@ import org.apache.beam.sdk.io.fs.*;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Source.Module(name="files")
 public class FilesSource extends Source {
 
-    private static final Logger LOG = LoggerFactory.getLogger(FilesSource.class);
-
-    private static class FilesSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String pattern;
         private List<String> patterns;
@@ -70,9 +68,11 @@ public class FilesSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
-        final FilesSourceParameters parameters = getParameters(FilesSourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -101,7 +101,7 @@ public class FilesSource extends Source {
         }
 
         final TupleTag<MElement> outputTag = new TupleTag<>(){};
-        final TupleTag<MElement> failureTag = new TupleTag<>(){};
+        final TupleTag<BadRecord> failureTag = new TupleTag<>(){};
 
         final String filterText = Optional
                 .ofNullable(parameters.filter)
@@ -115,7 +115,7 @@ public class FilesSource extends Source {
                     .apply("Filter", ParDo.of(new FilterDoFn(filterText)))
                     .apply("ReadMatches", FileIO.readMatches())
                     .apply("Format", ParDo
-                            .of(new FileWithStorageDoFn(getJobName(), getName(), getFailFast(), failureTag))
+                            .of(new FileWithStorageDoFn(getFailFast(), failureTag))
                             .withOutputTags(outputTag, TupleTagList.of(failureTag)));
         } else {
             outputs = metadata
@@ -124,9 +124,9 @@ public class FilesSource extends Source {
                             .withOutputTags(outputTag, TupleTagList.of(failureTag)));
         }
 
-        return MCollectionTuple
-                .of(outputs.get(outputTag), outputSchema)
-                .failure(outputs.get(failureTag));
+        errorHandler.addError(outputs.get(failureTag));
+
+        return MCollectionTuple.of(outputs.get(outputTag), outputSchema);
     }
 
     private static class FileDoFn extends DoFn<MatchResult.Metadata, MElement> {
@@ -134,14 +134,14 @@ public class FilesSource extends Source {
         private final Schema schema = createFileSchema();
         private final String filter;
         private final Boolean failFast;
-        private final TupleTag<MElement> failureTag;
+        private final TupleTag<BadRecord> failureTag;
 
         private transient Filter.ConditionNode conditionNode;
 
         FileDoFn(
                 final String filterText,
                 final Boolean failFast,
-                final TupleTag<MElement> failureTag) {
+                final TupleTag<BadRecord> failureTag) {
 
             this.filter = filterText;
             this.failFast = failFast;
@@ -206,19 +206,13 @@ public class FilesSource extends Source {
 
     private static class FileWithStorageDoFn extends DoFn<FileIO.ReadableFile, MElement> {
 
-        private final String jobName;
-        private final String module;
         private final Boolean failFast;
-        private final TupleTag<MElement> failureTag;
+        private final TupleTag<BadRecord> failureTag;
 
         FileWithStorageDoFn(
-                final String jobName,
-                final String module,
                 final Boolean failFast,
-                final TupleTag<MElement> failureTag) {
+                final TupleTag<BadRecord> failureTag) {
 
-            this.jobName = jobName;
-            this.module = module;
             this.failFast = failFast;
             this.failureTag = failureTag;
         }
@@ -230,19 +224,19 @@ public class FilesSource extends Source {
                 return;
             }
 
-            final MatchResult.Metadata metadata = readableFile.getMetadata();
             try {
+                final MatchResult.Metadata metadata = readableFile.getMetadata();
                 final MElement file = builder(metadata)
                         .withBytes("content", readableFile.readFullyAsBytes())
                         .withString("compression", readableFile.getCompression().name())
                         .build();
                 c.output(file);
             } catch (final Throwable e) {
-                if(failFast) {
-                    throw new RuntimeException(e);
-                }
-                final MFailure failure = MFailure.of(jobName, module, readableFile.toString(), e, c.timestamp());
-                c.output(failure.toElement(c.timestamp()));
+                final Map<String, Object> values = Map.of(
+                        "file", readableFile.toString()
+                );
+                final BadRecord badRecord = processError("Failed to convert file with storage", values, e, failFast);
+                c.output(failureTag, badRecord);
             }
 
         }

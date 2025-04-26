@@ -21,7 +21,6 @@ import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.*;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.apache.beam.sdk.values.Row;
 import org.joda.time.Duration;
@@ -89,7 +88,7 @@ public class BigQuerySink extends Sink {
 
         private void validate(MCollectionTuple inputs) {
             if(this.table == null && this.datasetId == null) {
-                throw new IllegalModuleException("BigQuery output module requires datasetId, tableId parameter!");
+                throw new IllegalModuleException("parameters.datasetId, tableId is missing");
             }
         }
 
@@ -158,14 +157,14 @@ public class BigQuerySink extends Sink {
                     }
                 } else {
                     if(!OptionUtil.isStreaming(input)) {
-                        LOG.warn("triggeringFrequencySecond must not be set in batch mode");
+                        LOG.warn("parameters.triggeringFrequencySecond must not be set in batch mode");
                         this.triggeringFrequencySecond = null;
                     }
                 }
                 if(this.numStorageWriteApiStreams == null) {
                     if(!BigQueryIO.Write.Method.FILE_LOADS.equals(this.method)
                             && OptionUtil.isStreaming(input)) {
-                        LOG.warn("numStorageWriteApiStreams must be set when using storage write api");
+                        LOG.warn("parameters.numStorageWriteApiStreams must be set when using storage write api");
                         this.autoSharding = true;
                     }
                 }
@@ -195,20 +194,10 @@ public class BigQuerySink extends Sink {
         retryTransientErrors
     }
 
-    @Override
-    public MCollectionTuple expand(final MCollectionTuple inputs) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
-                return expand(inputs, errorHandler);
-            }
-        } else {
-            return expand(inputs, null);
-        }
-    }
 
     public MCollectionTuple expand(
             final MCollectionTuple inputs,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(inputs);
@@ -224,7 +213,7 @@ public class BigQuerySink extends Sink {
     private WriteResult write(
             final MCollectionTuple inputs,
             final Parameters parameters,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final PCollection<MElement> elements = inputs
                 .apply("Union", Union.flatten()
@@ -358,12 +347,10 @@ public class BigQuerySink extends Sink {
 
         if(result == null) {
             return MCollectionTuple
-                    .done(PDone.in(inputs.getPipeline()))
-                    .failure(failure);
+                    .done(PDone.in(inputs.getPipeline()));
         } else {
             return MCollectionTuple
-                    .of(result, resultSchema)
-                    .failure(failure);
+                    .of(result, resultSchema);
         }
     }
 
@@ -545,7 +532,7 @@ public class BigQuerySink extends Sink {
             final Schema tableSchema,
             final boolean isStreaming,
             final SerializableFunction<InputT, String> destinationFunction,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final String table = parameters.table;
 
@@ -659,9 +646,12 @@ public class BigQuerySink extends Sink {
             }
         }
 
+        /*
         if(errorHandler != null) {
             write = write.withErrorHandler(errorHandler);
         }
+         */
+        errorHandler.apply(write);
 
         return write;
     }

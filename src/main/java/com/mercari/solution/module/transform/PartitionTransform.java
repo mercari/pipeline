@@ -3,20 +3,14 @@ package com.mercari.solution.module.transform;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
-import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
-import org.apache.beam.sdk.metrics.Counter;
-import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -27,8 +21,6 @@ import java.util.Optional;
 
 @Transform.Module(name="partition")
 public class PartitionTransform extends Transform {
-
-    private static final Logger LOG = LoggerFactory.getLogger(PartitionTransform.class);
 
     private static class Parameters implements Serializable {
 
@@ -122,20 +114,10 @@ public class PartitionTransform extends Transform {
 
     }
 
-    @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
-                return expand(inputs, errorHandler);
-            }
-        } else {
-            return expand(inputs, null);
-        }
-    }
 
     public MCollectionTuple expand(
             final MCollectionTuple inputs,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         final Schema inputSchema = Union.createUnionSchema(inputs);
@@ -184,7 +166,7 @@ public class PartitionTransform extends Transform {
                         .withOutputTags(defaultOutputTag, TupleTagList.of(outputTags)));
 
         if(errorHandler != null) {
-            errorHandler.addErrorCollection(outputs.get(failureTag));
+            errorHandler.addError(outputs.get(failureTag));
         }
 
         final PCollection<MElement> defaultOutput = outputs.get(defaultOutputTag);
@@ -216,8 +198,6 @@ public class PartitionTransform extends Transform {
         private final TupleTag<MElement> excludedTag;
         private final boolean failFast;
 
-        private final Counter errorCounter;
-
         PartitionDoFn(
                 final String jobName,
                 final String name,
@@ -238,7 +218,7 @@ public class PartitionTransform extends Transform {
             this.excludedTag = excludedTag;
             this.failFast = failFast;
 
-            this.errorCounter = Metrics.counter(name, "partition_error");
+            //this.errorCounter = Metrics.counter(name, "partition_error");
         }
 
         @Setup
@@ -251,8 +231,8 @@ public class PartitionTransform extends Transform {
 
         @ProcessElement
         public void processElement(ProcessContext c) {
-            final MElement element = c.element();
-            if(element == null) {
+            final MElement input = c.element();
+            if(input == null) {
                 return;
             }
 
@@ -262,12 +242,12 @@ public class PartitionTransform extends Transform {
                     if (setting.conditionNode == null) {
                         continue;
                     }
-                    if (Filter.filter(setting.conditionNode, inputSchema, element)) {
+                    if (Filter.filter(setting.conditionNode, inputSchema, input)) {
                         final MElement result;
                         if(setting.selectFunctions.isEmpty()) {
-                            result = MElement.of(setting.schema, element.asPrimitiveMap(), c.timestamp());
+                            result = MElement.of(setting.schema, input.asPrimitiveMap(), c.timestamp());
                         } else {
-                            final Map<String, Object> values = SelectFunction.apply(setting.selectFunctions, element, c.timestamp());
+                            final Map<String, Object> values = SelectFunction.apply(setting.selectFunctions, input, c.timestamp());
                             result = MElement.of(setting.schema, values, c.timestamp());
                         }
                         if(union) {
@@ -282,17 +262,10 @@ public class PartitionTransform extends Transform {
                     }
                 }
                 if(!outputed) {
-                    c.output(excludedTag, element);
+                    c.output(excludedTag, input);
                 }
             } catch (final Throwable e) {
-                errorCounter.inc();
-
-                String errorMessage = FailureUtil.convertThrowableMessage(e);
-                LOG.error("Failed to execute partition for input: {} error: {}", element, errorMessage);
-                if(failFast) {
-                    throw new IllegalStateException(errorMessage, e);
-                }
-                final BadRecord badRecord = FailureUtil.createBadRecord(element, "Failed to execute partition", e);
+                final BadRecord badRecord = processError("Failed to process partition", input, e, failFast);
                 c.output(failureTag, badRecord);
             }
         }

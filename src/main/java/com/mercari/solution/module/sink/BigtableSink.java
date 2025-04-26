@@ -8,13 +8,12 @@ import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.schema.*;
 import freemarker.template.Template;
-import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableIO;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableWriteResult;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.slf4j.Logger;
@@ -159,19 +158,9 @@ public class BigtableSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(final MCollectionTuple inputs) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
-                return expand(inputs, errorHandler);
-            }
-        } else {
-            return expand(inputs, null);
-        }
-    }
-
-    private MCollectionTuple expand(
+    public MCollectionTuple expand(
             final MCollectionTuple inputs,
-            final ErrorHandler.BadRecordErrorHandler<?> handler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
@@ -185,7 +174,7 @@ public class BigtableSink extends Sink {
                         .withStrategy(getStrategy()));
 
         final TupleTag<KV<ByteString, Iterable<Mutation>>> outputTag = new TupleTag<>() {};
-        final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
 
         final PCollectionTuple mutationTuple = input
                 .apply("ToMutation", ParDo
@@ -203,7 +192,9 @@ public class BigtableSink extends Sink {
                     .apply("Batching", ParDo.of(new GroupByKeyDoFn(parameters.maxMutationPerBatchElement)));
         }
 
-        final BigtableIO.Write write = createWrite(parameters, handler);
+        final BigtableIO.Write write = createWrite(parameters, errorHandler);
+
+        errorHandler.addError(mutationTuple.get(failuresTag));
 
         if(parameters.withWriteResults) {
             final PCollection<MElement> writeResults = mutation
@@ -220,7 +211,7 @@ public class BigtableSink extends Sink {
 
     private static BigtableIO.Write createWrite(
             final Parameters parameters,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         BigtableIO.Write write = BigtableIO
                 .write()
@@ -257,9 +248,7 @@ public class BigtableSink extends Sink {
             write = write.withEmulator(parameters.emulatorHost);
         }
 
-        if(errorHandler != null) {
-            write = write.withErrorHandler(errorHandler);
-        }
+        errorHandler.apply(write);
 
         return write;
     }
@@ -280,7 +269,7 @@ public class BigtableSink extends Sink {
         private final Map<String, Logging> logging;
 
         private final boolean failFast;
-        private final TupleTag<MElement> failuresTag;
+        private final TupleTag<BadRecord> failuresTag;
 
         private transient org.apache.avro.Schema avroSchema;
 
@@ -296,7 +285,7 @@ public class BigtableSink extends Sink {
                 //
                 final List<Logging> logging,
                 final boolean failFast,
-                final TupleTag<MElement> failuresTag) {
+                final TupleTag<BadRecord> failuresTag) {
 
             this.jobName = jobName;
             this.moduleName = moduleName;
@@ -362,14 +351,8 @@ public class BigtableSink extends Sink {
                     Logging.log(LOG, logging, "output", input);
                 }
             } catch (final Throwable e) {
-                final MFailure failure = MFailure
-                        .of(jobName, moduleName, input.toString(), e, c.timestamp());
-                final String errorMessage = String.format("Failed to convert input %s, error: %s", input, e.getMessage());
-                LOG.error(errorMessage);
-                if(failFast) {
-                    throw new RuntimeException(errorMessage, e);
-                }
-                c.output(failuresTag, failure.toElement(c.timestamp()));
+                final BadRecord badRecord = processError("Failed to convert to bigtable cells", input, e, failFast);
+                c.output(failuresTag, badRecord);
             }
         }
 
@@ -413,7 +396,7 @@ public class BigtableSink extends Sink {
                     c.output(KV.of(key, mutations));
                 }
             } catch (final Throwable e) {
-
+                ERROR_COUNTER.inc();
             }
 
         }

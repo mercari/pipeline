@@ -4,7 +4,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
-import com.mercari.solution.module.MFailure;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.pipeline.aggregation.AggregateFunction;
@@ -353,6 +352,7 @@ public class Query {
                         c.output(output);
                     }
                 } catch (final Throwable e) {
+                    /*
                     String errorMessage = MFailure.convertThrowableMessage(e);
                     LOG.error("SQL query error: {}, {} for input: {} from: {}", e, errorMessage, element, source);
                     if(failFast) {
@@ -363,6 +363,8 @@ public class Query {
                     //    c.output(failuresTag, failureElement.toElement(c.timestamp()));
                     //}
                     c.output(failuresTag, failure.toElement(c.timestamp()));
+
+                     */
                 }
 
             }

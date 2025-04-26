@@ -1,23 +1,17 @@
 package com.mercari.solution.module.sink;
 
-import com.mercari.solution.module.MCollectionTuple;
-import com.mercari.solution.module.MElement;
-import com.mercari.solution.module.Schema;
-import com.mercari.solution.module.Sink;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.pipeline.Union;
 import freemarker.template.Template;
-import org.apache.beam.sdk.metrics.Counter;
-import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Reshuffle;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.HashMap;
@@ -28,11 +22,7 @@ import java.util.Set;
 @Sink.Module(name="files")
 public class FilesSink extends Sink {
 
-    private static final Logger LOG = LoggerFactory.getLogger(FilesSink.class);
-
-    private static final Counter ERROR_COUNTER = Metrics.counter("files", "error");
-
-    private static class FilesSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String source;
         private String destination;
@@ -56,9 +46,11 @@ public class FilesSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
-        final FilesSinkParameters parameters = getParameters(FilesSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -73,7 +65,7 @@ public class FilesSink extends Sink {
         }
 
         final TupleTag<MElement> outputTag = new TupleTag<>(){};
-        final TupleTag<MElement> failureTag = new TupleTag<>(){};
+        final TupleTag<BadRecord> failureTag = new TupleTag<>(){};
 
         final PCollectionTuple outputs = input
                 .apply("WriteFile", ParDo
@@ -81,8 +73,7 @@ public class FilesSink extends Sink {
                         .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
         return MCollectionTuple
-                .of(outputs.get(outputTag), createOutputSchema())
-                .failure(outputs.get(failureTag));
+                .of(outputs.get(outputTag), createOutputSchema());
     }
 
     private static class CopyDoFn extends DoFn<MElement, MElement> {
@@ -95,8 +86,8 @@ public class FilesSink extends Sink {
         private final String destination;
         private final Map<String, String> attributes;
 
-        private final TupleTag<MElement> failureTag;
         private final Boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
 
         private transient Template templateSource;
         private transient Template templateDestination;
@@ -108,9 +99,9 @@ public class FilesSink extends Sink {
                 final String jobName,
                 final String name,
                 final Schema inputSchema,
-                final FilesSinkParameters parameters,
+                final Parameters parameters,
                 final Boolean failFast,
-                final TupleTag<MElement> failureTag) {
+                final TupleTag<BadRecord> failureTag) {
 
             this.jobName = jobName;
             this.name = name;
@@ -120,8 +111,8 @@ public class FilesSink extends Sink {
             this.destination = parameters.destination;
             this.attributes = parameters.attributes;
 
-            this.failureTag = failureTag;
             this.failFast = failFast;
+            this.failureTag = failureTag;
         }
 
         @Setup
@@ -144,6 +135,11 @@ public class FilesSink extends Sink {
             for(final Map.Entry<String, String> entry : attributes.entrySet()) {
                 this.templateArgs.addAll(TemplateUtil.extractTemplateArgs(entry.getValue(), inputSchema));
             }
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+
         }
 
 

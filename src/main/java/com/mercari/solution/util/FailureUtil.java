@@ -34,6 +34,14 @@ public class FailureUtil {
     }
 
     public static BadRecord createBadRecord(
+            final Map<String, Object> primitiveValues,
+            final String description,
+            final Throwable e) {
+
+        return createBadRecord(MElement.of(primitiveValues, Instant.now()), description, e);
+    }
+
+    public static BadRecord createBadRecord(
             final MElement input,
             final String description,
             final Throwable e) {

@@ -1,16 +1,11 @@
 package com.mercari.solution.module.transform;
 
 import com.google.common.collect.Lists;
-import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.pipeline.Union;
-import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.values.*;
-import org.checkerframework.checker.nullness.qual.NonNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.*;
@@ -18,9 +13,7 @@ import java.util.*;
 @Transform.Module(name="compare")
 public class CompareTransform extends Transform {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CompareTransform.class);
-
-    private static class CompareTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private List<String> outputs;
         private List<String> primaryKeyFields;
@@ -46,8 +39,11 @@ public class CompareTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        final CompareTransformParameters parameters = getParameters(CompareTransformParameters.class);
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
         parameters.setDefaults();
 

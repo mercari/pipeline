@@ -27,7 +27,7 @@ public class FirestoreSource extends Source {
 
     private static final Pattern PATTERN_CONDITION = Pattern.compile("(.+?)(s*>=s*|s*<=s*|s*=s*|s*>s*|s*<s*)(.+)");
 
-    private static class FirestoreSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String databaseId;
@@ -91,12 +91,13 @@ public class FirestoreSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
-        final FirestoreSourceParameters parameters = getParameters(FirestoreSourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults(begin);
-
 
         final String parent = createParent(parameters);
         final PCollection<MElement> output;
@@ -181,7 +182,7 @@ public class FirestoreSource extends Source {
 
     }
 
-    private static String createParent(FirestoreSourceParameters parameters) {
+    private static String createParent(Parameters parameters) {
         final String databaseRootName = FirestoreUtil
                 .createDatabaseRootName(parameters.projectId, parameters.databaseId);
         return databaseRootName + "/documents" + parameters.parent;
@@ -189,7 +190,7 @@ public class FirestoreSource extends Source {
 
     private StructuredQuery createQuery(
             final Schema schema,
-            final FirestoreSourceParameters parameters) {
+            final Parameters parameters) {
 
         StructuredQuery.CollectionSelector.Builder selectorBuilder = StructuredQuery.CollectionSelector
                 .newBuilder()

@@ -2,6 +2,7 @@ package com.mercari.solution.module.transform;
 
 import com.mercari.solution.module.MCollectionTuple;
 import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.MErrorHandler;
 import com.mercari.solution.module.Transform;
 import com.mercari.solution.module.Transform.Module;
 import com.mercari.solution.util.pipeline.Union;
@@ -13,7 +14,10 @@ import org.apache.beam.sdk.values.PCollection;
 public class ExampleTransform extends Transform {
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
         final PCollection<MElement> output = inputs
                 .apply("Union", Union.flatten()
                         .withWaits(getWaits())

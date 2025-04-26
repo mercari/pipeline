@@ -13,10 +13,9 @@ import com.mercari.solution.util.schema.converter.ElementToOnnxConverter;
 import com.mercari.solution.util.schema.converter.OnnxToElementConverter;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
 import org.checkerframework.checker.nullness.qual.NonNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.*;
@@ -25,9 +24,7 @@ import java.util.*;
 @Transform.Module(name="onnx")
 public class ONNXTransform extends Transform {
 
-    private static final Logger LOG = LoggerFactory.getLogger(ONNXTransform.class);
-
-    private static class OnnxTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private ModelParameter model;
         private List<InferenceParameter> inferences;
@@ -274,9 +271,11 @@ public class ONNXTransform extends Transform {
 
     @NonNull
     @Override
-    public MCollectionTuple expand(@NonNull MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            @NonNull MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
 
-        final OnnxTransformParameters parameters = getParameters(OnnxTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(new HashMap<>()); // TODO
         parameters.setDefaults();
 
@@ -303,7 +302,8 @@ public class ONNXTransform extends Transform {
             inferenceSettings.add(inference.toSetting(outputMediumSchema.getFields()));
         }
 
-        final TupleTag<MElement> failureTag = new TupleTag<>() {};
+        final TupleTag<MElement> dummyTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failureTag = new TupleTag<>() {};
         final TupleTagList tupleTagList = TupleTagList.of(new ArrayList<>(outputTags));
 
         final PCollectionTuple outputs = inputs
@@ -314,16 +314,17 @@ public class ONNXTransform extends Transform {
                                 getJobName(), getName(), model, inferenceSettings, parameters.bufferSize,
                                 inputs.getAllInputs(), outputSchemas,
                                 outputTags, failureTag, getFailFast()))
-                        .withOutputTags(failureTag, tupleTagList));
+                        .withOutputTags(dummyTag, tupleTagList));
 
-        MCollectionTuple outputTuple = MCollectionTuple.of(outputs.get(outputTags.get(0)), outputSchemas.get(0));
+        MCollectionTuple outputTuple = MCollectionTuple.empty(inputs.getPipeline());
         for(int i=0; i<inputNames.size(); i++) {
             outputTuple = outputTuple
                     .and(inputNames.get(i), outputs.get(outputTags.get(i)), outputSchemas.get(i));
         }
 
-        return outputTuple
-                .failure(outputs.get(failureTag));
+        errorHandler.addError(outputs.get(failureTag));
+
+        return outputTuple;
     }
 
     private static class InferenceDoFn extends DoFn<MElement, MElement> {
@@ -342,7 +343,7 @@ public class ONNXTransform extends Transform {
         private final List<List<MappingParameter>> mappingsList;
 
         private final List<TupleTag<MElement>> outputTags;
-        private final TupleTag<MElement> failureTag;
+        private final TupleTag<BadRecord> failureTag;
         private final boolean failFast;
 
         private transient OrtEnvironment environment;
@@ -360,7 +361,7 @@ public class ONNXTransform extends Transform {
                 final List<String> inputNames,
                 final List<Schema> outputSchemas,
                 final List<TupleTag<MElement>> outputTags,
-                final TupleTag<MElement> failureTag,
+                final TupleTag<BadRecord> failureTag,
                 final boolean failFast) {
 
             this.jobName = jobName;
@@ -437,11 +438,10 @@ public class ONNXTransform extends Transform {
          */
 
         @ProcessElement
-        public void processElement(
-                final ProcessContext c) {
+        public void processElement(final ProcessContext c) {
 
-            final MElement element = c.element();
-            if(element == null) {
+            final MElement input = c.element();
+            if(input == null) {
                 return;
             }
 
@@ -453,14 +453,10 @@ public class ONNXTransform extends Transform {
                     buffer.clear();
                 }
                  */
-                inference(c, List.of(element));
+                inference(c, List.of(input));
             } catch (final Throwable e) {
-                if(failFast) {
-                    throw new RuntimeException("Failed to inference onnx for input: " + element, e);
-                }
-                final MFailure failure = MFailure.of(jobName, name, element.toString(), e, c.timestamp());
-                c.output(failureTag, failure.toElement(c.timestamp()));
-                LOG.error("Failed to inference onnx for input: {}, cause: {}", failure.getInput(), failure.getError());
+                final BadRecord badRecord = processError("Failed to inference onnx", input, e, failFast);
+                c.output(failureTag, badRecord);
             }
         }
 

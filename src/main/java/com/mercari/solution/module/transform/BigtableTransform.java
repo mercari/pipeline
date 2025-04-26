@@ -19,8 +19,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.tools.Planner;
 import org.joda.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.sql.PreparedStatement;
@@ -30,8 +28,6 @@ import java.util.*;
 
 @Transform.Module(name="bigtable")
 public class BigtableTransform extends Transform {
-
-    private static final Logger LOG = LoggerFactory.getLogger(BigtableTransform.class);
 
     private static class Parameters implements Serializable {
 
@@ -157,7 +153,9 @@ public class BigtableTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();

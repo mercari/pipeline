@@ -33,7 +33,7 @@ public class SpannerSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(SpannerSink.class);
 
-    private static class SpannerSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String instanceId;
@@ -136,8 +136,11 @@ public class SpannerSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        final SpannerSinkParameters parameters = getParameters(SpannerSinkParameters.class);
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.setDefaults();
         //parameters.validate(, sample.getDataType(), sample.getIsTuple());
 
@@ -167,11 +170,12 @@ public class SpannerSink extends Sink {
 
         private static final Logger LOG = LoggerFactory.getLogger(SpannerWriteSingle.class);
 
-        private final SpannerSinkParameters parameters;
+        private final Parameters parameters;
         private final Schema inputSchema;
 
-        private SpannerWriteSingle(final SpannerSinkParameters parameters,
-                                   final Schema inputSchema) {
+        private SpannerWriteSingle(
+                final Parameters parameters,
+                final Schema inputSchema) {
 
             this.parameters = parameters;
             this.inputSchema = inputSchema;
@@ -203,11 +207,11 @@ public class SpannerSink extends Sink {
 
         private static final Logger LOG = LoggerFactory.getLogger(SpannerWriteMulti.class);
 
-        private final SpannerSinkParameters parameters;
+        private final Parameters parameters;
         private final List<PCollection<?>> waits;
 
         private SpannerWriteMulti(
-                final SpannerSinkParameters parameters,
+                final Parameters parameters,
                 final List<PCollection<?>> waits) {
 
             this.parameters = parameters;
@@ -322,7 +326,7 @@ public class SpannerSink extends Sink {
         private PCollection<String> executeDDLs(
                 final Pipeline pipeline,
                 final List<PCollection<?>> waits,
-                final SpannerSinkParameters parameters,
+                final Parameters parameters,
                 final Map<String, List<String>> pedigree,
                 final Map<String, org.apache.avro.Schema> avroSchemas) {
 
@@ -521,7 +525,7 @@ public class SpannerSink extends Sink {
 
     public static class SpannerWriteMutations extends PTransform<PCollection<Mutation>, PCollectionTuple> {
 
-        private final SpannerSinkParameters parameters;
+        private final Parameters parameters;
         private final List<PCollection<?>> waitsPCollections;
 
         private final Map<String, Type> types;
@@ -540,7 +544,7 @@ public class SpannerSink extends Sink {
         }
 
         SpannerWriteMutations(
-                final SpannerSinkParameters parameters,
+                final Parameters parameters,
                 final List<PCollection<?>> waits,
                 final boolean failFast) {
 
@@ -673,7 +677,7 @@ public class SpannerSink extends Sink {
     }
 
     private static SpannerIO.Write createWrite(
-            final SpannerSinkParameters parameters,
+            final Parameters parameters,
             final boolean failFast) {
 
         SpannerIO.Write write = SpannerIO.write()
@@ -748,7 +752,7 @@ public class SpannerSink extends Sink {
 
 
         FailedMutationConvertDoFn(
-                final SpannerSinkParameters parameters) {
+                final Parameters parameters) {
 
             this.schema = createFailureSchema(parameters.flattenFailures);
             this.childSchema = createFailureMutationSchema();

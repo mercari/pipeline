@@ -100,6 +100,17 @@ public class ElementSchemaUtil {
                         throw new IllegalArgumentException("Failed to get field: " + field + ", value: " + str);
                     }
                 }
+                case List<?> l -> {
+                    final List<Object> list = new ArrayList<>();
+                    for (final Object child : l) {
+                        final Object childValue = switch (child) {
+                            case Map<?, ?> map -> getValue(map, fields[1]);
+                            default -> throw new IllegalArgumentException("Illegal nested field: " + field + ", value of array: " + child);
+                        };
+                        list.add(childValue);
+                    }
+                    yield list;
+                }
                 case null -> null;
                 default -> throw new IllegalArgumentException("Illegal nested field: " + field + ", value: " + value);
             };

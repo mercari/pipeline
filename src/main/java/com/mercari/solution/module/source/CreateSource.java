@@ -16,6 +16,7 @@ import org.apache.beam.sdk.io.range.OffsetRange;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker;
 import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
@@ -133,7 +134,9 @@ public class CreateSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName(), getSchema());
@@ -146,7 +149,7 @@ public class CreateSource extends Source {
         final Schema outputSchema = createOutputSchema(parameters);
 
         final TupleTag<MElement> outputTag = new TupleTag<>() {};
-        final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
 
         final Schema elementSchema = createElementSchema(elementFieldType);
         final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, elementSchema.getFields());
@@ -183,9 +186,7 @@ public class CreateSource extends Source {
                             .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
         }
 
-        return MCollectionTuple
-                .of(outputs.get(outputTag), outputSchema)
-                .failure(outputs.get(failuresTag));
+        return MCollectionTuple.of(outputs.get(outputTag), outputSchema);
     }
 
     private Schema createOutputSchema(final Parameters parameters) {
@@ -230,7 +231,7 @@ public class CreateSource extends Source {
         private final Map<String, Logging> logging;
 
         protected final TupleTag<MElement> outputTag;
-        protected final TupleTag<MElement> failuresTag;
+        protected final TupleTag<BadRecord> failuresTag;
         private final boolean failFast;
 
         ElementDoFn(
@@ -247,7 +248,7 @@ public class CreateSource extends Source {
                 //
                 final List<Logging> logging,
                 final TupleTag<MElement> outputTag,
-                final TupleTag<MElement> failuresTag,
+                final TupleTag<BadRecord> failuresTag,
                 final boolean failFast) {
 
             this.jobName = jobName;
@@ -285,7 +286,7 @@ public class CreateSource extends Source {
                 final long index,
                 final org.joda.time.Instant timestamp,
                 final OutputReceiver<MElement> outputReceiver,
-                final OutputReceiver<MElement> failureReceiver) {
+                final OutputReceiver<BadRecord> failureReceiver) {
 
             try {
                 // generate element
@@ -331,15 +332,11 @@ public class CreateSource extends Source {
                     Logging.log(LOG, logging, "output", output);
                 }
             } catch (final Throwable e) {
-                //errorCounter.inc();
-                final MFailure failure = MFailure
-                        .of(jobName, moduleName, "position: " + index, e, timestamp);
-                final String errorMessage = String.format("Failed to execute create element for index: %d, error: %s", index, e.getMessage());
-                LOG.error(errorMessage);
-                if(failFast) {
-                    throw new RuntimeException(errorMessage, e);
-                }
-                failureReceiver.output(failure.toElement(timestamp));
+                final Map<String, Object> values = Map.of(
+                        "index", index
+                );
+                final BadRecord badRecord = processError("Failed to execute create element for index: " + index, values, e, failFast);
+                failureReceiver.output(badRecord);
             }
         }
     }
@@ -366,7 +363,7 @@ public class CreateSource extends Source {
                 final String flattenField,
                 //
                 final TupleTag<MElement> outputTag,
-                final TupleTag<MElement> failuresTag,
+                final TupleTag<BadRecord> failuresTag,
                 final boolean failFast) {
 
             super(jobName, moduleName,
@@ -467,7 +464,7 @@ public class CreateSource extends Source {
                 final String flattenField,
                 //
                 final TupleTag<MElement> outputTag,
-                final TupleTag<MElement> failuresTag,
+                final TupleTag<BadRecord> failuresTag,
                 final boolean failFast) {
 
             super(jobName, moduleName,

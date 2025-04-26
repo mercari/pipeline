@@ -27,16 +27,11 @@ import org.apache.avro.io.BinaryDecoder;
 import org.apache.avro.io.DecoderFactory;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
-import org.apache.beam.sdk.metrics.Counter;
-import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -46,10 +41,6 @@ import java.util.*;
 
 @Source.Module(name="pubsub")
 public class PubSubSource extends Source {
-
-    private static final Logger LOG = LoggerFactory.getLogger(PubSubSource.class);
-
-    private static final Counter ERROR_COUNTER = Metrics.counter("pubsub_source", "error");;
 
     private static class Parameters implements Serializable {
 
@@ -207,7 +198,9 @@ public class PubSubSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(begin, getSchema());
@@ -235,20 +228,6 @@ public class PubSubSource extends Source {
                 throw new IllegalArgumentException("Failed to seek subscription: " + parameters.subscription, e);
             }
         }
-
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(begin)) {
-                return expand(begin, parameters, errorHandler);
-            }
-        } else {
-            return expand(begin, parameters, null);
-        }
-    }
-
-    private MCollectionTuple expand(
-            final PBegin begin,
-            final Parameters parameters,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
 
         final TupleTag<MElement> outputTag = new TupleTag<>() {};
         final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
@@ -287,10 +266,7 @@ public class PubSubSource extends Source {
                                 getFailFast(), failuresTag, originalTag))
                         .withOutputTags(outputTag, TupleTagList.of(outputTags)));
 
-        if(errorHandler != null) {
-            final PCollection<BadRecord> failures = outputs.get(failuresTag);
-            errorHandler.addErrorCollection(failures);
-        }
+        errorHandler.addError(outputs.get(failuresTag));
 
         final MCollectionTuple outputTuple = MCollectionTuple
                 .of(outputs.get(outputTag), outputSchema);
@@ -307,7 +283,7 @@ public class PubSubSource extends Source {
     private static PubsubIO.Read<PubsubMessage> createRead(
             final Parameters parameters,
             final String timestampAttribute,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         PubsubIO.Read<PubsubMessage> read = PubsubIO.readMessagesWithAttributesAndMessageIdAndOrderingKey();
         if (parameters.topic != null) {
@@ -323,9 +299,7 @@ public class PubSubSource extends Source {
             read = read.withTimestampAttribute(timestampAttribute);
         }
 
-        if(errorHandler != null) {
-            read = read.withErrorHandler(errorHandler);
-        }
+        errorHandler.apply(read);
 
         return read;
     }

@@ -364,7 +364,7 @@ public class GeminiUtil {
         }
 
         private static Map<String, Object> toPrimitiveMap(final JsonObject jsonObject) {
-            return JsonToElementConverter.convert(generateContentRequestSchema, jsonObject);
+            return JsonToElementConverter.convert(generateContentRequestSchema.getFields(), jsonObject);
         }
     }
 

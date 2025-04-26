@@ -38,7 +38,7 @@ public class JdbcSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcSource.class);
 
-    private static class JdbcSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String url;
         private String driver;
@@ -182,9 +182,11 @@ public class JdbcSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
-        final JdbcSourceParameters parameters = getParameters(JdbcSourceParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         if(parameters.user == null) {
             final String serviceAccount = DataflowOptions.getServiceAccount(begin.getPipeline().getOptions());//.as(DataflowPipelineOptions.class).getServiceAccount();
             LOG.info("Using worker service account: '{}' for database user", serviceAccount);
@@ -293,12 +295,12 @@ public class JdbcSource extends Source {
 
         private static final String DUMMY_FIELD = "Dummy_String_Field_";
 
-        private final JdbcSourceParameters parameters;
+        private final Parameters parameters;
 
         private final String outputSchemaString;
 
         private JdbcBatchQuerySource(
-                final JdbcSourceParameters parameters,
+                final Parameters parameters,
                 final String outputSchemaString) {
 
             this.parameters = parameters;
@@ -352,7 +354,7 @@ public class JdbcSource extends Source {
             private transient JdbcUtil.CloseableDataSource dataSource;
             private transient Connection connection;
 
-            QueryDoFn(final JdbcSourceParameters parameters,
+            QueryDoFn(final Parameters parameters,
                       final String query,
                       final List<String> prepareCalls,
                       final String outputSchemaString) {
@@ -503,14 +505,14 @@ public class JdbcSource extends Source {
 
     public static class JdbcBatchTableSource extends PTransform<PBegin, PCollection<GenericRecord>> {
 
-        private final JdbcSourceParameters parameters;
+        private final Parameters parameters;
         private final String timestampAttribute;
         private final String timestampDefault;
 
         private final String outputSchemaString;
 
         private JdbcBatchTableSource(
-                final JdbcSourceParameters parameters,
+                final Parameters parameters,
                 final String timestampAttribute,
                 final String timestampDefault,
                 final String outputSchemaString) {
@@ -563,7 +565,7 @@ public class JdbcSource extends Source {
             protected transient List<Schema.Field> parameterFields;
             protected transient Map<String, Schema.Field> parameterFieldsMap;
 
-            TableReadDoFn(final JdbcSourceParameters parameters, final String outputSchemaString) {
+            TableReadDoFn(final Parameters parameters, final String outputSchemaString) {
                 this.driver = parameters.driver;
                 this.url = parameters.url;
                 this.user = parameters.user;
@@ -778,7 +780,7 @@ public class JdbcSource extends Source {
 
         public class TableReadOneDoFn extends TableReadDoFn {
 
-            TableReadOneDoFn(final JdbcSourceParameters parameters, final String outputSchemaString) {
+            TableReadOneDoFn(final Parameters parameters, final String outputSchemaString) {
                 super(parameters, outputSchemaString);
             }
 
@@ -810,7 +812,7 @@ public class JdbcSource extends Source {
             private final boolean enableSplit;
             private final Integer splitSize;
 
-            TableReadRangeDoFn(final JdbcSourceParameters parameters, final String outputSchemaString) {
+            TableReadRangeDoFn(final Parameters parameters, final String outputSchemaString) {
                 super(parameters, outputSchemaString);
                 this.enableSplit = parameters.enableSplit;
                 this.splitSize = parameters.splitSize;

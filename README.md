@@ -8,35 +8,30 @@ See the [Document](docs/README.md) for usage
 
 ## Usage Example
 
-Write the following json file and upload it to GCS (Suppose you upload it to gs://example/config.json).
+Write the following yaml file and upload it to GCS (Suppose you upload it to gs://example/config.yaml).
 
 This configuration file stores the BigQuery query results in the table specified by Spanner.
 
-```json
-{
-  "sources": [
-    {
-      "name": "bigquery",
-      "module": "bigquery",
-      "parameters": {
-        "query": "SELECT * FROM `myproject.mydataset.mytable`"
-      }
-    }
-  ],
-  "sinks": [
-    {
-      "name": "spanner",
-      "module": "spanner",
-      "input": "bigquery",
-      "parameters": {
-        "projectId": "myproject",
-        "instanceId": "myinstance",
-        "databaseId": "mydatabase",
-        "table": "mytable"
-      }
-    }
-  ]
-}
+```yaml
+sources:
+  - name: bigquery
+    module: bigquery
+    parameters:
+      query: |-
+        SELECT
+          *
+        FROM
+          `myproject.mydataset.mytable`
+sinks:
+  - name: spanner
+    module: spanner
+    inputs:
+      - bigquery
+    parameters:
+      projectId: myproject
+      instanceId: myinstance
+      databaseId: mydatabase
+      table: mytable
 ```
 
 Assuming you have deployed the Mercari Dataflow Template to gs://example/template, run the following command.
@@ -44,7 +39,7 @@ Assuming you have deployed the Mercari Dataflow Template to gs://example/templat
 ```sh
 gcloud dataflow flex-template run bigquery-to-spanner \
   --template-file-gcs-location=gs://example/template \
-  --parameters=config=gs://example/config.json
+  --parameters=config=gs://example/config.yaml
 ```
 
 The Dataflow job will be started, and you can check the execution status of the job in the console screen.
@@ -87,7 +82,7 @@ Use the following command to generate a template file that can execute a dataflo
 
 ```sh
 gcloud dataflow flex-template build gs://{path/to/template_file} \
-  --image "{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/cloud:latest" \
+  --image "{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/dataflow:latest" \
   --sdk-language "JAVA"
 ```
 
@@ -100,11 +95,11 @@ Run Dataflow Job from the template file.
 You can run template specifying gcs path that uploaded config file.
 
 ```sh
-gsutil cp config.json gs://{path/to/config.json}
+gsutil cp config.yaml gs://{path/to/config.yaml}
 
 gcloud dataflow flex-template run {job_name} \
   --template-file-gcs-location=gs://{path/to/template_file} \
-  --parameters=config=gs://{path/to/config.json}
+  --parameters=config=gs://{path/to/config.yaml}
 ```
 
 * REST API
@@ -114,7 +109,7 @@ You can also run template by [REST API](https://cloud.google.com/dataflow/docs/r
 ```sh
 PROJECT_ID=[PROJECT_ID]
 REGION=[REGION]
-CONFIG="$(cat examples/xxx.json)"
+CONFIG="$(cat examples/xxx.yaml)"
 
 curl -X POST -H "Content-Type: application/json"  -H "Authorization: Bearer $(gcloud auth print-access-token)" "https://dataflow.googleapis.com/v1b3/projects/${PROJECT_ID}/locations/${REGION}/flexTemplates:launch" -d "{
   'launchParameter': {
@@ -140,7 +135,7 @@ To run Template in streaming mode, specify `streaming=true` in the parameter.
 ```sh
 gcloud dataflow flex-template run {job_name} \
   --template-file-gcs-location=gs://{path/to/template_file} \
-  --parameters=config=gs://{path/to/config.json} \
+  --parameters=config=gs://{path/to/config.yaml} \
   --parameters=streaming=true
 ```
 
@@ -153,15 +148,15 @@ At first, you should register the container for local execution.
 
 ```sh
 # Generate MDT jar file.
-mvn clean package -DskipTests -Dimage="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/cloud"
+mvn clean package -DskipTests -Dimage="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/dataflow"
 
 # Create Docker image for local run
-docker build --tag="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/local" .
+docker build --tag="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct" .
 
 # If you need to push the image to the GAR,
 # you may do so by using the following commands
 gcloud auth configure-docker
-docker push {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/local
+docker push {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct
 ```
 
 ## Run Pipeline locally
@@ -184,9 +179,9 @@ If you want to run in streaming mode, specify streaming=true in the argument as 
 docker run \
   -v ~/.config/gcloud:/mnt/gcloud:ro \
   -v /{your_work_dir}:/mnt/config:ro \
-  --rm {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/local \
+  --rm {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct \
   --project={project} \
-  --config=/mnt/config/{my_config}.json
+  --config=/mnt/config/{my_config}.yaml
 ```
 
 ### Windows OS
@@ -195,9 +190,9 @@ docker run \
 docker run ^
   -v C:\Users\{YourUserName}\AppData\Roaming\gcloud:/mnt/gcloud:ro ^
   -v C:\Users\{YourWorkingDirPath}\:/mnt/config:ro ^
-  --rm {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/local ^
+  --rm {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct ^
   --project={project} ^
-  --config=/mnt/config/{MyConfig}.json
+  --config=/mnt/config/{MyConfig}.yaml
 ```
 
 * Note:
@@ -217,6 +212,6 @@ https://www.mercari.com/cla/
 
 ## License
 
-Copyright 2024 Mercari, Inc.
+Copyright 2025 Mercari, Inc.
 
 Licensed under the MIT License.

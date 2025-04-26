@@ -30,7 +30,7 @@ public class TokenizeTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(TokenizeTransform.class);
 
-    private static class TokenizeTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private List<TokenizeParameter> fields;
 
@@ -70,20 +70,20 @@ public class TokenizeTransform extends Transform {
             public List<String> validate(int n) {
                 final List<String> errorMessages = new ArrayList<>();
                 if (this.name == null) {
-                    errorMessages.add("TokenizeTransform parameters.fields[" + n + "].name must not be null.");
+                    errorMessages.add("parameters.fields[" + n + "].name must not be null.");
                 }
                 if (this.input == null) {
-                    errorMessages.add("TokenizeTransform parameters.fields[" + n + "].input must not be null.");
+                    errorMessages.add("parameters.fields[" + n + "].input must not be null.");
                 }
                 if (this.tokenizer == null) {
-                    errorMessages.add("TokenizeTransform parameters.fields[" + n + "].tokenizer must not be null.");
+                    errorMessages.add("parameters.fields[" + n + "].tokenizer must not be null.");
                 } else {
                     errorMessages.addAll(this.tokenizer.validate());
                 }
                 if (this.charFilters != null) {
                     for(final TokenAnalyzer.CharFilterConfig filter : this.charFilters) {
                         if(filter == null) {
-                            errorMessages.add("CharFilter must not be null");
+                            errorMessages.add("parameters.fields[" + n + "].charFilters must not be null");
                         } else {
                             errorMessages.addAll(filter.validate());
                         }
@@ -92,7 +92,7 @@ public class TokenizeTransform extends Transform {
                 if (this.filters != null) {
                     for(final TokenAnalyzer.TokenFilterConfig filter : this.filters) {
                         if(filter == null) {
-                            errorMessages.add("TokenFilter must not be null");
+                            errorMessages.add("parameters.fields[" + n + "].filters must not be null");
                         } else {
                             errorMessages.addAll(filter.validate());
                         }
@@ -127,8 +127,10 @@ public class TokenizeTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        final TokenizeTransformParameters parameters = getParameters(TokenizeTransformParameters.class);
+    public MCollectionTuple expand(
+            MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -140,7 +142,7 @@ public class TokenizeTransform extends Transform {
 
         final List<Schema.Field> fields = new ArrayList<>(inputSchema.getFields());
         final Map<String, Schema> inputFieldSchemas = new HashMap<>();
-        for(final TokenizeTransformParameters.TokenizeParameter param : parameters.fields) {
+        for(final Parameters.TokenizeParameter param : parameters.fields) {
             final Schema fieldSchema = createOutputSchema(param);
             final Schema.Field field = Schema.Field.of(param.name, Schema.FieldType.array(Schema.FieldType.element(fieldSchema)).withNullable(true));
             fields.add(field);
@@ -157,12 +159,12 @@ public class TokenizeTransform extends Transform {
 
     private static class TokenizeDoFn extends DoFn<MElement, MElement> {
 
-        private final List<TokenizeTransformParameters.TokenizeParameter> fields;
+        private final List<Parameters.TokenizeParameter> fields;
         private final Schema inputSchema;
         private final Map<String, Schema> inputFieldSchemas;
         private transient Map<String, Analyzer> analyzers;
 
-        public TokenizeDoFn(final List<TokenizeTransformParameters.TokenizeParameter> fields,
+        public TokenizeDoFn(final List<Parameters.TokenizeParameter> fields,
                             final Schema inputSchema,
                             final Map<String, Schema> inputFieldSchemas) {
 
@@ -174,7 +176,7 @@ public class TokenizeTransform extends Transform {
         @Setup
         public void setup() {
             this.analyzers = new HashMap<>();
-            for(final TokenizeTransformParameters.TokenizeParameter field : this.fields) {
+            for(final Parameters.TokenizeParameter field : this.fields) {
                 LOG.info("Add analyzer for field: {}", field.name);
                 this.analyzers.put(field.name, new TokenAnalyzer(field.charFilters, field.tokenizer, field.filters));
             }
@@ -187,7 +189,7 @@ public class TokenizeTransform extends Transform {
                 return;
             }
             final Map<String, Object> results = new HashMap<>();
-            for(final TokenizeTransformParameters.TokenizeParameter field : fields) {
+            for(final Parameters.TokenizeParameter field : fields) {
                 final String text = element.getAsString(field.input);
                 if(text != null) {
                     final Analyzer analyzer = analyzers.get(field.name);
@@ -243,7 +245,7 @@ public class TokenizeTransform extends Transform {
 
     }
 
-    private static Schema createOutputSchema(final TokenizeTransformParameters.TokenizeParameter parameter) {
+    private static Schema createOutputSchema(final Parameters.TokenizeParameter parameter) {
         final Schema.Builder builder = Schema.builder();
         builder.withField("token", Schema.FieldType.STRING);
         builder.withField("startOffset", Schema.FieldType.INT32);

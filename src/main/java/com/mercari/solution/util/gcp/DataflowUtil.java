@@ -55,4 +55,25 @@ public class DataflowUtil {
         return update(project, region, jobId, JobState.JOB_STATE_CANCELLED);
     }
 
+    public static LaunchTemplateResponse launchTemplate(
+            final String project,
+            final String region,
+            final String gcsPath,
+            final LaunchTemplateParameters parameter,
+            final Boolean validateOnly) throws IOException {
+
+        final LaunchTemplateRequest request = LaunchTemplateRequest
+                .newBuilder()
+                .setProjectId(project)
+                .setLocation(region)
+                .setGcsPath(gcsPath)
+                .setLaunchParameters(parameter)
+                .setValidateOnly(validateOnly)
+                .build();
+
+        try(final TemplatesServiceClient client = TemplatesServiceClient.create()) {
+            return client.launchTemplate(request);
+        }
+    }
+
 }

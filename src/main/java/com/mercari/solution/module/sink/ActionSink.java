@@ -10,12 +10,9 @@ import com.mercari.solution.util.pipeline.action.DataflowAction;
 import com.mercari.solution.util.pipeline.action.vertexai.GeminiAction;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.metrics.Counter;
-import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.*;
@@ -23,9 +20,7 @@ import java.util.*;
 @Sink.Module(name="action")
 public class ActionSink extends Sink {
 
-    private static final Logger LOG = LoggerFactory.getLogger(ActionSink.class);
-
-    private static class ActionSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private Action.Service service;
         private DataflowAction.Parameters dataflow;
@@ -69,9 +64,12 @@ public class ActionSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
         final Pipeline pipeline = inputs.getPipeline();
-        final ActionSinkParameters parameters = getParameters(ActionSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
         parameters.setDefaults(pipeline.getOptions().as(MPipeline.MPipelineOptions.class));
 
@@ -103,19 +101,15 @@ public class ActionSink extends Sink {
 
         final Schema outputSchema = action.getOutputSchema();
         final TupleTag<MElement> outputTag = new TupleTag<>() {};
-        final TupleTag<MElement> failureTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failureTag = new TupleTag<>() {};
 
         final PCollectionTuple outputs = input
                 .apply("Action", ParDo
                         .of(new ActionDoFn(getJobName(), getName(), action, getFailFast(), failureTag))
                         .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
-        final PCollection<MElement> output = outputs.get(outputTag)
-                .setCoder(ElementCoder.of(outputSchema));
-        final PCollection<MElement> failure = outputs.get(failureTag);
         return MCollectionTuple
-                .of(output, outputSchema)
-                .failure(failure);
+                .of(outputs.get(outputTag), outputSchema);
     }
 
     private static class ActionDoFn extends DoFn<MElement, MElement> {
@@ -126,8 +120,7 @@ public class ActionSink extends Sink {
         private final Action action;
 
         private final boolean failFast;
-        private final TupleTag<MElement> failuresTag;
-        private final Counter errorCounter;
+        private final TupleTag<BadRecord> failuresTag;
 
 
         ActionDoFn(
@@ -135,15 +128,13 @@ public class ActionSink extends Sink {
                 final String name,
                 final Action action,
                 final boolean failFast,
-                final TupleTag<MElement> failuresTag) {
+                final TupleTag<BadRecord> failuresTag) {
 
             this.jobName = jobName;
             this.name = name;
             this.action = action;
             this.failFast = failFast;
             this.failuresTag = failuresTag;
-
-            this.errorCounter = Metrics.counter(name, "sink_action_error");
         }
 
         @Setup
@@ -153,23 +144,16 @@ public class ActionSink extends Sink {
 
         @ProcessElement
         public void processElement(final ProcessContext c) {
-            final MElement element = c.element();
-            if(element == null) {
+            final MElement input = c.element();
+            if(input == null) {
                 return;
             }
             try {
                 final MElement output = this.action.action();
                 c.output(output);
             } catch (final Throwable e) {
-                errorCounter.inc();
-                final MFailure failure = MFailure
-                        .of(jobName, name, element.toString(), e, c.timestamp());
-                final String errorMessage = String.format("Failed to execute sink.action for input: %s, error: %s", failure.getInput(), failure.getError());
-                LOG.error("{} : {}", e, errorMessage);
-                if(failFast) {
-                    throw new RuntimeException(errorMessage, e);
-                }
-                c.output(failuresTag, failure.toElement(c.timestamp()));
+                final BadRecord badRecord = processError("Failed to execute sink.action", input, e, failFast);
+                c.output(failuresTag, badRecord);
             }
         }
 

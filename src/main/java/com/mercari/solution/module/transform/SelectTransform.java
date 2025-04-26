@@ -4,7 +4,6 @@ import com.google.common.collect.Lists;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
-import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.pipeline.*;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
@@ -17,18 +16,13 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
 @Transform.Module(name="select")
 public class SelectTransform extends Transform {
-
-    private static final Logger LOG = LoggerFactory.getLogger(SelectTransform.class);
 
     private static class Parameters {
 
@@ -80,19 +74,9 @@ public class SelectTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
-                return expand(inputs, errorHandler);
-            }
-        } else {
-            return expand(inputs, null);
-        }
-    }
-
     public MCollectionTuple expand(
             final MCollectionTuple inputs,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
 
@@ -156,7 +140,7 @@ public class SelectTransform extends Transform {
         }
 
         if(errorHandler != null) {
-            errorHandler.addErrorCollection(outputs.get(failuresTag));
+            errorHandler.addError(outputs.get(failuresTag));
         }
 
         return MCollectionTuple
@@ -294,13 +278,7 @@ public class SelectTransform extends Transform {
                     Logging.log(LOG, logging, "output", output_);
                 }
             } catch (final Throwable e) {
-                //errorCounter.inc();
-                String errorMessage = FailureUtil.convertThrowableMessage(e);
-                LOG.error("Failed to execute select for input: {} error: {}", input, errorMessage);
-                if(failFast) {
-                    throw new IllegalStateException(errorMessage, e);
-                }
-                final BadRecord badRecord = FailureUtil.createBadRecord(input, "", e);
+                final BadRecord badRecord = processError("Failed to process stateless select", input, e, failFast);
                 c.output(failuresTag, badRecord);
             }
         }
@@ -412,13 +390,7 @@ public class SelectTransform extends Transform {
                 final MElement output = MElement.of(result, c.timestamp());
                 c.output(output);
             } catch (final Throwable e) {
-                //errorCounter.inc();
-                String errorMessage = FailureUtil.convertThrowableMessage(e);
-                LOG.error("Failed to execute stateful batch select for input: {} error: {}", input, errorMessage);
-                if(failFast) {
-                    throw new IllegalStateException(errorMessage, e);
-                }
-                final BadRecord badRecord = FailureUtil.createBadRecord(input, "Failed to execute stateful batch select", e);
+                final BadRecord badRecord = processError("Failed to process stateful batch select", input, e, failFast);
                 c.output(failuresTag, badRecord);
             }
         }
@@ -490,9 +462,14 @@ public class SelectTransform extends Transform {
                 return;
             }
 
-            final Map<String, Object> result = process(input, bufferState, maxCountState, c.timestamp());
-            final MElement output = MElement.of(result, c.timestamp());
-            c.output(output);
+            try {
+                final Map<String, Object> result = process(input, bufferState, maxCountState, c.timestamp());
+                final MElement output = MElement.of(result, c.timestamp());
+                c.output(output);
+            } catch (final Throwable e) {
+                final BadRecord badRecord = processError("Failed to process stateful streaming select", input, e, failFast);
+                c.output(failuresTag, badRecord);
+            }
         }
 
         @OnWindowExpiration

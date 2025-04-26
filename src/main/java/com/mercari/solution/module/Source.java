@@ -68,9 +68,10 @@ public abstract class Source extends Module<PBegin> {
             final @NonNull SourceConfig config,
             final Module properties,
             final PipelineOptions options,
-            final List<MCollection> waits) {
+            final List<MCollection> waits,
+            final MErrorHandler errorHandler) {
 
-        super.setup(config, options, waits);
+        super.setup(config, options, waits, errorHandler);
         this.schema = config.getSchema();
         this.timestampAttribute = config.getTimestampAttribute();
         this.timestampDefault = config.getTimestampDefault();
@@ -86,7 +87,8 @@ public abstract class Source extends Module<PBegin> {
     public static @NonNull Source create(
             @NonNull SourceConfig config,
             @NonNull PipelineOptions options,
-            List<MCollection> waits) {
+            List<MCollection> waits,
+            MErrorHandler errorHandler) {
 
         return Optional.ofNullable(sources.get(config.getModule())).map(clazz -> {
             final Source module;
@@ -101,7 +103,7 @@ public abstract class Source extends Module<PBegin> {
                 throw new IllegalModuleException(errorMessage, e);
             }
             final Module properties = module.getClass().getAnnotation(Module.class);
-            module.setup(config, properties, options, waits);
+            module.setup(config, properties, options, waits, errorHandler);
             return module;
         }).orElseThrow(() -> new IllegalModuleException("Not supported source module: " + config.getModule()));
     }

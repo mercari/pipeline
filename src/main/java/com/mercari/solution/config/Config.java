@@ -150,14 +150,14 @@ public class Config implements Serializable {
     public static class Systems implements Serializable {
 
         private String context;
-        private Boolean failFast;
+        private Failures failures;
 
         public String getContext() {
             return context;
         }
 
-        public Boolean getFailFast() {
-            return failFast;
+        public Failures getFailures() {
+            return failures;
         }
 
         public List<String> validate() {
@@ -168,6 +168,35 @@ public class Config implements Serializable {
         public void setDefaults(String context) {
             if(context != null && !context.isEmpty()) {
                 this.context = context;
+            }
+            if(this.failures == null) {
+                this.failures = new Failures();
+            }
+            this.failures.setDefaults();
+        }
+    }
+
+    public static class Failures implements Serializable {
+
+        private Boolean failFast;
+        private Boolean union;
+
+        public Boolean getFailFast() {
+            return failFast;
+        }
+
+        public Boolean getUnion() {
+            return union;
+        }
+
+        public List<String> validate() {
+            final List<String> errorMessages = new ArrayList<>();
+            return errorMessages;
+        }
+
+        public void setDefaults() {
+            if(union == null) {
+                union = false;
             }
         }
     }
@@ -319,7 +348,7 @@ public class Config implements Serializable {
                     .filter(Objects::nonNull)
                     .peek(c -> c.setArgs(templateArgs))
                     .peek(c -> c.applyContext(config.system.context))
-                    .peek(c -> c.setFailFast(config.system.failFast))
+                    .peek(c -> c.setFailFast(config.system.failures.failFast))
                     .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
             final List<TransformConfig> transforms = Optional.ofNullable(config.getTransforms()).orElseGet(ArrayList::new)
@@ -327,7 +356,7 @@ public class Config implements Serializable {
                     .filter(Objects::nonNull)
                     .peek(c -> c.setArgs(templateArgs))
                     .peek(c -> c.applyContext(config.system.context))
-                    .peek(c -> c.setFailFast(config.system.failFast))
+                    .peek(c -> c.setFailFast(config.system.failures.failFast))
                     .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
             final List<SinkConfig> sinks = Optional.ofNullable(config.getSinks()).orElseGet(ArrayList::new)
@@ -335,7 +364,7 @@ public class Config implements Serializable {
                     .filter(Objects::nonNull)
                     .peek(c -> c.setArgs(templateArgs))
                     .peek(c -> c.applyContext(config.system.context))
-                    .peek(c -> c.setFailFast(config.system.failFast))
+                    .peek(c -> c.setFailFast(config.system.failures.failFast))
                     .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
 
@@ -348,7 +377,7 @@ public class Config implements Serializable {
                                 .stream()
                                 .peek(c -> c.setArgs(i.args))
                                 .peek(c -> c.applyContext(config.system.context))
-                                .peek(c -> c.setFailFast(config.system.failFast))
+                                .peek(c -> c.setFailFast(config.system.failures.failFast))
                                 .peek(c -> c.addFailures(failures))
                                 .toList());
                     }
@@ -357,7 +386,7 @@ public class Config implements Serializable {
                                 .stream()
                                 .peek(c -> c.setArgs(i.args))
                                 .peek(c -> c.applyContext(config.system.context))
-                                .peek(c -> c.setFailFast(config.system.failFast))
+                                .peek(c -> c.setFailFast(config.system.failures.failFast))
                                 .peek(c -> c.addFailures(failures))
                                 .toList());
                     }
@@ -366,7 +395,7 @@ public class Config implements Serializable {
                                 .stream()
                                 .peek(c -> c.setArgs(i.args))
                                 .peek(c -> c.applyContext(config.system.context))
-                                .peek(c -> c.setFailFast(config.system.failFast))
+                                .peek(c -> c.setFailFast(config.system.failures.failFast))
                                 .peek(c -> c.addFailures(failures))
                                 .toList());
                     }

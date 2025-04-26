@@ -8,8 +8,6 @@ import com.mercari.solution.util.pipeline.Select;
 import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import org.apache.beam.sdk.values.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.*;
@@ -18,9 +16,7 @@ import java.util.*;
 @Transform.Module(name="filter")
 public class FilterTransform extends Transform {
 
-    private static final Logger LOG = LoggerFactory.getLogger(FilterTransform.class);
-
-    private static class FilterTransformParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private JsonElement filter;
         private JsonArray select;
@@ -66,9 +62,11 @@ public class FilterTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
-        final FilterTransformParameters parameters = getParameters(FilterTransformParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -99,8 +97,7 @@ public class FilterTransform extends Transform {
         }
 
         return MCollectionTuple
-                .of(output, outputSchema)
-                .failure(failure);
+                .of(output, outputSchema);
     }
 
 }

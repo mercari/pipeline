@@ -46,7 +46,9 @@ public class DebugSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(final MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
         if (inputs.size() == 0) {
             throw new IllegalArgumentException("debug sink module requires inputs parameter");
         }

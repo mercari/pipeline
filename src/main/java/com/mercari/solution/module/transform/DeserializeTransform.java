@@ -29,8 +29,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -42,8 +40,6 @@ import java.util.*;
 
 @Transform.Module(name="deserialize")
 public class DeserializeTransform extends Transform {
-
-    private static final Logger LOG = LoggerFactory.getLogger(DeserializeTransform.class);
 
     private static class Parameters implements Serializable {
 
@@ -125,7 +121,9 @@ public class DeserializeTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
         final PCollection<MElement> input = inputs
                 .apply("Union", Union.flatten()
@@ -175,12 +173,8 @@ public class DeserializeTransform extends Transform {
             outputSchema = deserializedSchema;
         }
 
-        final MCollectionTuple outputTuple = MCollectionTuple
+        return MCollectionTuple
                 .of(output, outputSchema);
-        if(failure == null) {
-            return outputTuple;
-        }
-        return outputTuple.failure(failure);
     }
 
     private static Schema createDeserializedSchema(

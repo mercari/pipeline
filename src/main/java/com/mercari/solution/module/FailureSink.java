@@ -142,14 +142,14 @@ public abstract class FailureSink extends PTransform<PCollection<BadRecord>, PDo
 
     private void setup(
             final @NonNull FailureConfig config,
-            final @NonNull ModuleConfig moduleConfig,
+            final @NonNull String moduleName,
             final FailureSink.Module properties,
             final PipelineOptions options) {
 
         this.name = config.getName();
         this.module = config.getModule();
         this.jobName = options.getJobName();
-        this.moduleName = moduleConfig.getName();
+        this.moduleName = moduleName;
         this.parametersText = config.getParameters().toString();
 
         this.tags = Optional.ofNullable(config.getTags()).orElseGet(HashSet::new);
@@ -169,7 +169,7 @@ public abstract class FailureSink extends PTransform<PCollection<BadRecord>, PDo
 
     public static @NonNull FailureSink create(
             final @NonNull FailureConfig failureConfig,
-            final @NonNull ModuleConfig moduleConfig,
+            final @NonNull String moduleName,
             final @NonNull PipelineOptions options) {
 
         return Optional.ofNullable(failures.get(failureConfig.getModule())).map(clazz -> {
@@ -181,7 +181,7 @@ public abstract class FailureSink extends PTransform<PCollection<BadRecord>, PDo
                 throw new IllegalModuleException("Failed to instantiate sinks module: " + failureConfig.getModule() + ", class: " + clazz, e);
             }
             final FailureSink.Module properties = module.getClass().getAnnotation(FailureSink.Module.class);
-            module.setup(failureConfig, moduleConfig, properties, options);
+            module.setup(failureConfig, moduleName, properties, options);
             return module;
         }).orElseThrow(() -> new IllegalArgumentException("Not supported sinks module: " + failureConfig.getModule()));
     }

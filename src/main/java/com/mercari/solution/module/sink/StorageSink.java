@@ -13,7 +13,6 @@ import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.io.WriteFilesResult;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
@@ -116,20 +115,9 @@ public class StorageSink extends Sink {
     }
 
 
-    @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
-                return expand(inputs, errorHandler);
-            }
-        } else {
-            return expand(inputs, null);
-        }
-    }
-
-    private MCollectionTuple expand(
+    public MCollectionTuple expand(
             final MCollectionTuple inputs,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
@@ -198,7 +186,7 @@ public class StorageSink extends Sink {
 
     private static FileIO.Write<Void, KV<String, MElement>> createWrite(
             final Parameters parameters,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final String bucket = getBucket(parameters.output);
         final String object = getObject(parameters.output);
@@ -226,16 +214,14 @@ public class StorageSink extends Sink {
             write = write.withNoSpilling();
         }
 
-        if(errorHandler != null) {
-            write = write.withBadRecordErrorHandler(errorHandler);
-        }
+        errorHandler.apply(write);
 
         return write;
     }
 
     private static FileIO.Write<String, KV<String, MElement>> createDynamicWrite(
             final Parameters parameters,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final String bucket = getBucket(parameters.output);
         final String suffix = parameters.suffix;
@@ -261,9 +247,7 @@ public class StorageSink extends Sink {
             write = write.withCompression(parameters.compression);
         }
 
-        if(errorHandler != null) {
-            write = write.withBadRecordErrorHandler(errorHandler);
-        }
+        errorHandler.apply(write);
 
         return write;
     }

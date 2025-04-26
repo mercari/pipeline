@@ -4,7 +4,7 @@
 
 | module                           | batch | streaming | description                                                        |
 |----------------------------------|-------|-----------|--------------------------------------------------------------------|
-| [create](source/pubsub.md)       | ○     | ○         | Generate data with specified conditions                            |
+| [create](source/create.md)       | ○     | ○         | Generate data with specified conditions                            |
 | [storage](source/storage.md)     | ○     | ○(TODO)   | Import data from storage on specified path                         |
 | [files](source/files.md)         | ○     | ○(TODO)   | Import files from storage on specified path                        |
 | [bigquery](source/bigquery.md)   | ○     | ○         | Import data from BigQuery with a specified query or table          |

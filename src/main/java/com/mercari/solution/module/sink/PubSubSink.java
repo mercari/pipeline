@@ -21,12 +21,10 @@ import org.apache.avro.io.DatumWriter;
 import org.apache.avro.io.EncoderFactory;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
-import org.apache.beam.sdk.metrics.Counter;
-import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,8 +39,6 @@ import java.util.*;
 public class PubSubSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(PubSubSink.class);
-
-    private static final Counter ERROR_COUNTER = Metrics.counter("pubsub_sink", "error");;
 
     private static final String ATTRIBUTE_NAME_ID = "__id";
     private static final String ATTRIBUTE_NAME_SOURCE = "__source";
@@ -117,6 +113,7 @@ public class PubSubSink extends Sink {
         protobuf
     }
 
+    /*
     @Override
     public MCollectionTuple expand(MCollectionTuple inputs) {
         if(hasFailures()) {
@@ -128,9 +125,11 @@ public class PubSubSink extends Sink {
         }
     }
 
+     */
+
     public MCollectionTuple expand(
             final MCollectionTuple inputs,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
 
@@ -149,31 +148,27 @@ public class PubSubSink extends Sink {
         parameters.setDefaults();
 
         if(getUnion().each) {
-            final List<PCollection<MElement>> failures = new ArrayList<>();
             for(final Map.Entry<String, PCollection<MElement>> entry : inputs.getAll().entrySet()) {
                 final String inputName = entry.getKey();
                 final List<String> inputNames = List.of(inputName);
                 final PCollection<MElement> input = entry.getValue();
 
                 final TupleTag<PubsubMessage> outputTag = new TupleTag<>(){};
-                final TupleTag<MElement> failureTag = new TupleTag<>(){};
+                final TupleTag<BadRecord> failureTag = new TupleTag<>(){};
 
-                final PCollectionTuple messages = input
+                final PCollectionTuple outputs = input
                         .apply("ToMessage_" + inputName, ParDo
                                 .of(new OutputDoFn(
-                                        getJobName(), getName(), parameters,
-                                        inputSchema, outputSchema, inputNames,
-                                        failureTag, getFailFast()))
+                                        parameters, inputSchema, outputSchema, inputNames, getFailFast(), failureTag))
                                 .withOutputTags(outputTag, TupleTagList.of(failureTag)));
                 final PubsubIO.Write<PubsubMessage> write = createWrite(parameters, errorHandler);
-                final PCollection<MElement> failure = messages.get(failureTag);
-                messages.get(outputTag).apply("Publish_" + inputName, write);
-                failures.add(failure);
+                outputs.get(outputTag).apply("Publish_" + inputName, write);
+
+                errorHandler.addError(outputs.get(failureTag));
             }
 
             return MCollectionTuple
-                    .done(PDone.in(inputs.getPipeline()))
-                    .failure(PCollectionList.of(failures));
+                    .done(PDone.in(inputs.getPipeline()));
         } else {
             final List<String> inputNames = inputs.getAllInputs();
             final PCollection<MElement> input = inputs
@@ -182,20 +177,20 @@ public class PubSubSink extends Sink {
                             .withStrategy(getStrategy()));
 
             final TupleTag<PubsubMessage> outputTag = new TupleTag<>(){};
-            final TupleTag<MElement> failureTag = new TupleTag<>(){};
+            final TupleTag<BadRecord> failureTag = new TupleTag<>(){};
 
-            final PCollectionTuple messages = input
+            final PCollectionTuple outputs = input
                     .apply("ToMessage", ParDo
-                            .of(new OutputDoFn(
-                                    getJobName(), getName(), parameters,
-                                    inputSchema, outputSchema, inputNames,
-                                    failureTag, getFailFast()))
+                            .of(new OutputDoFn(parameters, inputSchema, outputSchema, inputNames, getFailFast(), failureTag))
                             .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
-            final PubsubIO.Write<PubsubMessage> write = createWrite(parameters, errorHandler);
+            final PDone done = outputs.get(outputTag)
+                    .apply("Publish", createWrite(parameters, errorHandler));
+
+            errorHandler.addError(outputs.get(failureTag));
+
             return MCollectionTuple
-                    .done(messages.get(outputTag).apply("Publish", write))
-                    .failure(messages.get(failureTag));
+                    .done(done);
         }
     }
 
@@ -206,8 +201,6 @@ public class PubSubSink extends Sink {
         private static final Map<String, org.apache.avro.Schema> avroSchemas = new HashMap<>();
         private static final Map<String, DatumWriter<GenericRecord>> writers = new HashMap<>();
 
-        private final String jobName;
-        private final String name;
         private final Parameters parameters;
         private final Schema outputSchema;
         private final List<String> inputNames;
@@ -217,7 +210,7 @@ public class PubSubSink extends Sink {
         private final List<String> attributeTemplateArgs;
 
         private final boolean failFast;
-        private final TupleTag<MElement> failureTag;
+        private final TupleTag<BadRecord> failureTag;
 
         // for avro
         private transient DatumWriter<GenericRecord> writer;
@@ -227,17 +220,13 @@ public class PubSubSink extends Sink {
         private transient Map<String, Template> attributeTemplates;
 
         OutputDoFn(
-                final String jobName,
-                final String name,
                 final Parameters parameters,
                 final Schema inputSchema,
                 final Schema outputSchema,
                 final List<String> inputNames,
-                final TupleTag<MElement> failureTag,
-                final boolean failFast) {
+                final boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
 
-            this.jobName = jobName;
-            this.name = name;
             this.parameters = parameters;
             this.outputSchema = outputSchema;
             this.inputNames = inputNames;
@@ -249,10 +238,9 @@ public class PubSubSink extends Sink {
                 this.attributeTemplateArgs.addAll(
                         TemplateUtil.extractTemplateArgs(entry.getValue(), inputSchema));
             }
-            LOG.info("attributeTemplateArgs: {}", this.attributeTemplateArgs);
 
-            this.failureTag = failureTag;
             this.failFast = failFast;
+            this.failureTag = failureTag;
         }
 
         @Setup
@@ -296,15 +284,15 @@ public class PubSubSink extends Sink {
 
         @ProcessElement
         public void processElement(ProcessContext c) {
-            final MElement element = c.element();
-            if (element == null) {
+            final MElement input = c.element();
+            if (input == null) {
                 return;
             }
 
             try {
-                final Map<String, String> attributeMap = getAttributes(element);
-                if(DataType.MESSAGE.equals(element.getType()) && element.getValue() instanceof PubsubMessage) {
-                    final PubsubMessage original = (PubsubMessage) element.getValue();
+                final Map<String, String> attributeMap = getAttributes(input);
+                if(DataType.MESSAGE.equals(input.getType()) && input.getValue() instanceof PubsubMessage) {
+                    final PubsubMessage original = (PubsubMessage) input.getValue();
                     if(parameters.attributes.isEmpty()) {
                         c.output(original);
                     } else {
@@ -315,18 +303,18 @@ public class PubSubSink extends Sink {
                     return;
                 }
 
-                final String messageId = getMessageId(element);
-                final String orderingKey = getOrderingKey(element);
+                final String messageId = getMessageId(input);
+                final String orderingKey = getOrderingKey(input);
                 final byte[] payload = switch (parameters.format) {
                     case json -> {
-                        final JsonObject json = ElementToJsonConverter.convert(outputSchema, element.asPrimitiveMap());
+                        final JsonObject json = ElementToJsonConverter.convert(outputSchema, input.asPrimitiveMap());
                         yield json.toString().getBytes(StandardCharsets.UTF_8);
                     }
                     case avro -> {
                         final org.apache.avro.Schema avroSchema = Optional
                                 .ofNullable(avroSchemas.get(outputSchema.getAvro().getFile()))
                                 .orElseGet(() -> getOrLoadAvroSchema(avroSchemas, writers, outputSchema.getAvro()));
-                        final GenericRecord record = ElementToAvroConverter.convert(avroSchema, element);
+                        final GenericRecord record = ElementToAvroConverter.convert(avroSchema, input);
                         try(final ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
                             encoder = EncoderFactory.get().binaryEncoder(byteArrayOutputStream, encoder);
                             writer.write(record, encoder);
@@ -340,13 +328,13 @@ public class PubSubSink extends Sink {
                         final Descriptors.Descriptor descriptor = Optional
                                 .ofNullable(descriptors.get(outputSchema.getProtobuf().getMessageName()))
                                 .orElseGet(() -> getOrLoadDescriptor(descriptors, outputSchema.getProtobuf()));
-                        final DynamicMessage message = ElementToProtoConverter.convert(outputSchema, descriptor, element.asPrimitiveMap());
+                        final DynamicMessage message = ElementToProtoConverter.convert(outputSchema, descriptor, input.asPrimitiveMap());
                         yield Optional
                                 .ofNullable(message)
                                 .map(DynamicMessage::toByteArray)
                                 .orElse(null);
                     }
-                    case message -> element.getAsBytes(parameters.payloadField).array();
+                    case message -> input.getAsBytes(parameters.payloadField).array();
                     default -> throw new IllegalArgumentException("Not supported pubsub sink format: " + parameters.format);
                 };
                 if (parameters.idAttribute != null) {
@@ -355,35 +343,27 @@ public class PubSubSink extends Sink {
                 final PubsubMessage message = new PubsubMessage(payload, attributeMap, messageId, orderingKey);
                 c.output(message);
             } catch (final Throwable e) {
-                ERROR_COUNTER.inc();
-                final String source = inputNames.get(element.getIndex());
-                final String input = switch (element.getType()) {
+                final String source = inputNames.get(input.getIndex());
+                switch (input.getType()) {
                     case MESSAGE -> {
-                        final PubsubMessage original = (PubsubMessage) element.getValue();
-                        final JsonObject json = new JsonObject();
+                        final PubsubMessage original = (PubsubMessage) input.getValue();
+                        final Map<String, Object> json = new HashMap<>();
                         if(original != null) {
-                            json.addProperty("id", original.getMessageId());
-                            json.addProperty("source", source);
+                            json.put("id", original.getMessageId());
+                            json.put("source", source);
                             if(original.getAttributeMap() != null) {
-                                final JsonObject attributes = new JsonObject();
-                                for(Map.Entry<String, String> entry : original.getAttributeMap().entrySet()) {
-                                    attributes.addProperty(entry.getKey(), entry.getValue());
-                                }
-                                json.add("attributes", attributes);
+                                json.put("attributes", original.getAttributeMap());
                             }
                         }
-                        yield json.toString();
+                        final BadRecord badRecord = processError("Failed to create pubsub message from input: " + source, json, e, failFast);
+                        c.output(failureTag, badRecord);
                     }
-                    case null -> null;
-                    default -> element.toString();
-                };
-                if(failFast) {
-                    throw new RuntimeException(String.format("Failed to create message for input: %s", input), e);
+                    default -> {
+                        final BadRecord badRecord = processError("Failed to create pubsub message from input: " + source, input, e, failFast);
+                        c.output(failureTag, badRecord);
+                    }
                 }
 
-                final MFailure failure = MFailure.of(jobName, name, input, e, c.timestamp());
-                LOG.error("Failed to create message for input: {}\n cause: {}", input, MFailure.convertThrowableMessage(e));
-                c.output(failureTag, failure.toElement(c.timestamp()));
             }
         }
 
@@ -467,7 +447,7 @@ public class PubSubSink extends Sink {
 
     private static PubsubIO.Write<PubsubMessage> createWrite(
             final Parameters parameters,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         PubsubIO.Write<PubsubMessage> write;
         if(TemplateUtil.isTemplateText(parameters.topic)) {
@@ -490,9 +470,7 @@ public class PubSubSink extends Sink {
             write = write.withMaxBatchBytesSize(parameters.maxBatchBytesSize);
         }
 
-        if(errorHandler != null) {
-            write = write.withErrorHandler(errorHandler);
-        }
+        errorHandler.apply(write);
 
         return write;
     }

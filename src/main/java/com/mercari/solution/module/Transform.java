@@ -48,9 +48,10 @@ public abstract class Transform extends Module<MCollectionTuple> {
             final Module properties,
             final @NonNull PipelineOptions options,
             final List<MCollection> waits,
-            final List<MCollection> sideInputs) {
+            final List<MCollection> sideInputs,
+            final MErrorHandler errorHandler) {
 
-        super.setup(config, options, waits);
+        super.setup(config, options, waits, errorHandler);
         this.strategy = Optional
                 .ofNullable(config.getStrategy())
                 .orElseGet(Strategy::createDefaultStrategy);
@@ -62,7 +63,8 @@ public abstract class Transform extends Module<MCollectionTuple> {
             final @NonNull TransformConfig config,
             final @NonNull PipelineOptions options,
             final @NonNull List<MCollection> waits,
-            final @NonNull List<MCollection> sideInputs) {
+            final @NonNull List<MCollection> sideInputs,
+            final @NonNull MErrorHandler errorHandler) {
 
         return Optional.ofNullable(transforms.get(config.getModule())).map(clazz -> {
             final Transform module;
@@ -73,7 +75,7 @@ public abstract class Transform extends Module<MCollectionTuple> {
                 throw new RuntimeException("Failed to instantiate transform module: " + config.getModule() + ", class: " + clazz, e);
             }
             final Module properties = module.getClass().getAnnotation(Module.class);
-            module.setup(config, properties, options, waits, sideInputs);
+            module.setup(config, properties, options, waits, sideInputs, errorHandler);
             return module;
         }).orElseThrow(() -> new IllegalArgumentException("Not supported transform module: " + config.getModule()));
     }

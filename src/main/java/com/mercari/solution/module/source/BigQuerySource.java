@@ -21,13 +21,10 @@ import org.apache.beam.sdk.extensions.avro.coders.AvroGenericCoder;
 import org.apache.beam.sdk.io.GenerateSequence;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.bigquery.SchemaAndRecord;
-import org.apache.beam.sdk.metrics.Counter;
-import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
@@ -43,8 +40,6 @@ import java.util.*;
 public class BigQuerySource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(BigQuerySource.class);
-
-    private static final Counter ERROR_COUNTER = Metrics.counter("bigquery_source", "error");;
 
     private static class Parameters implements Serializable {
 
@@ -163,19 +158,9 @@ public class BigQuerySource extends Source {
 
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(begin)) {
-                return expand(begin, errorHandler);
-            }
-        } else {
-            return expand(begin, null);
-        }
-    }
-
-    private MCollectionTuple expand(
+    public MCollectionTuple expand(
             final PBegin begin,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
@@ -226,9 +211,7 @@ public class BigQuerySource extends Source {
                 parameters.query = query;
                 final ViewSource source = new ViewSource(getJobName(), getName(), parameters, outputTag, failureTag);
                 final PCollectionTuple outputs = begin.apply("View", source);
-                yield MCollectionTuple
-                        .of(outputs.get(outputTag), source.schema)
-                        .failure(outputs.get(failureTag));
+                yield MCollectionTuple.of(outputs.get(outputTag), source.schema);
             }
             default -> throw new IllegalArgumentException();
         };
@@ -253,7 +236,7 @@ public class BigQuerySource extends Source {
             final Parameters parameters,
             final Map<String, String> templateArgs,
             final MPipeline.Runner runner,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         BigQueryIO.TypedRead<GenericRecord> read = BigQueryIO
                 .read(SchemaAndRecord::getRecord)
@@ -306,9 +289,7 @@ public class BigQuerySource extends Source {
                     .orElseGet(() -> BigQueryUtil.getPreferReadMethod(tableSchema));
             read = read.withMethod(method);
 
-            if(errorHandler != null) {
-                read = read.withErrorHandler(errorHandler);
-            }
+            errorHandler.apply(read);
 
             return KV.of(avroSchema, read.withCoder(AvroGenericCoder.of(avroSchema)));
         } else if(parameters.table != null || (parameters.datasetId != null)) {
@@ -330,9 +311,7 @@ public class BigQuerySource extends Source {
                     .orElse(BigQueryIO.TypedRead.Method.DIRECT_READ);
             read = read.withMethod(method);
 
-            if(errorHandler != null) {
-                read = read.withErrorHandler(errorHandler);
-            }
+            errorHandler.apply(read);
 
             return switch (runner) {
                 case direct -> {

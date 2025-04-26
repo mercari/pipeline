@@ -29,7 +29,7 @@ public class DriveFileSource extends Source {
 
     private static final String DEFAULT_FIELDS = "files(id,driveId,name,size,description,version,originalFilename,kind,mimeType,fileExtension,parents,createdTime,modifiedTime),nextPageToken";
 
-    private static class DriveMetaSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String query;
         private String user;
@@ -74,8 +74,11 @@ public class DriveFileSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
-        final DriveMetaSourceParameters parameters = getParameters(DriveMetaSourceParameters.class);
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults(begin.getPipeline().getOptions());
 
@@ -99,7 +102,7 @@ public class DriveFileSource extends Source {
 
         private transient Drive service;
 
-        DriveFileReadDoFn(final DriveMetaSourceParameters parameters, Schema schema) {
+        DriveFileReadDoFn(final Parameters parameters, Schema schema) {
             this.user = parameters.user;
             this.driveId = parameters.driveId;
             this.folderId = parameters.folderId;

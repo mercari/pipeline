@@ -31,7 +31,7 @@ public class FirestoreSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(FirestoreSink.class);
 
-    private static class FirestoreSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String databaseId;
@@ -179,8 +179,11 @@ public class FirestoreSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        final FirestoreSinkParameters parameters = getParameters(FirestoreSinkParameters.class);
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
         parameters.setDefaults(inputs);
 
@@ -228,7 +231,7 @@ public class FirestoreSink extends Sink {
         private transient Template nameTemplate;
 
         ConvertWriteDoFn(
-                final FirestoreSinkParameters parameters,
+                final Parameters parameters,
                 final Schema inputSchema) {
 
             this.inputSchema = inputSchema;

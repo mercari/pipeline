@@ -2,9 +2,9 @@ package com.mercari.solution.module.transform;
 
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.gcp.ParameterManagerUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
+import com.mercari.solution.util.schema.RowSchemaUtil;
 import com.mercari.solution.util.schema.converter.ElementToRowConverter;
 import com.mercari.solution.util.sql.udf.AggregateFunctions;
 import com.mercari.solution.util.sql.udf.ArrayFunctions;
@@ -14,10 +14,8 @@ import org.apache.beam.sdk.extensions.sql.SqlTransform;
 import org.apache.beam.sdk.extensions.sql.impl.QueryPlanner;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -28,8 +26,6 @@ import java.util.*;
 
 @Transform.Module(name="beamsql")
 public class BeamSQLTransform extends Transform {
-
-    private static final Logger LOG = LoggerFactory.getLogger(BeamSQLTransform.class);
 
     private static class Parameters implements Serializable {
 
@@ -98,56 +94,47 @@ public class BeamSQLTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
-                return expand(inputs, errorHandler);
-            }
-        } else {
-            return expand(inputs, null);
-        }
-    }
-
     public MCollectionTuple expand(
             final MCollectionTuple inputs,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults(getTemplateArgs());
 
-        final KV<PCollectionTuple, PCollectionList<MElement>> inputsAndFailures = createInput(inputs);
-        final PCollectionTuple tuple = inputsAndFailures.getKey();
-        final PCollectionList<MElement> failures = inputsAndFailures.getValue();
-
-        final PCollection<Row> output = tuple
+        final PCollectionTuple input = createInput(inputs, errorHandler);
+        final PCollection<Row> output = input
                 .apply("SQLTransform", createTransform(parameters, errorHandler));
 
-        final Schema outputSchema = Schema.of(output.getSchema());
-        final PCollection<MElement> element = output
-                .apply("ConvertElement", ParDo.of(new ConvertElementDoFn()))
-                .setCoder(ElementCoder.of(outputSchema));
+        final TupleTag<MElement> outputTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
+
+        final PCollectionTuple outputs = output
+                .apply("ConvertElement", ParDo
+                        .of(new ConvertElementDoFn(getLoggings(), getFailFast(), failuresTag))
+                        .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+
+        errorHandler.addError(outputs.get(failuresTag));
 
         return MCollectionTuple
-                .of(element, Schema.of(output.getSchema()));
+                .of(outputs.get(outputTag), Schema.of(output.getSchema()));
     }
 
-    private KV<PCollectionTuple,PCollectionList<MElement>> createInput(
-            final MCollectionTuple inputs) {
+    private PCollectionTuple createInput(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
         PCollectionTuple tuple = PCollectionTuple.empty(inputs.getPipeline());
-        PCollectionList<MElement> failures = PCollectionList.empty(inputs.getPipeline());
         for(final Map.Entry<String, MCollection> entry : inputs.asCollectionMap().entrySet()) {
             final Schema schema = entry.getValue().getSchema();
             schema.setup();
 
             final TupleTag<Row> outputTag = new TupleTag<>() {};
-            final TupleTag<MElement> failuresTag = new TupleTag<>() {};
+            final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
 
             final PCollectionTuple rowTuple = entry.getValue()
                     .apply("ConvertRow" + entry.getKey(), ParDo
-                            .of(new ConvertRowDoFn(
-                                    getJobName(), getName(), entry.getKey(), schema, getLoggings(), getFailFast(), failuresTag))
+                            .of(new ConvertRowDoFn(entry.getKey(), schema, getLoggings(), getFailFast(), failuresTag))
                             .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
 
             PCollection<Row> row = rowTuple
@@ -160,19 +147,15 @@ public class BeamSQLTransform extends Transform {
             }
             tuple = tuple.and(entry.getKey(), row);
 
-            if(!getFailFast()) {
-                failures = failures
-                        .and(rowTuple.get(failuresTag)
-                                .setCoder(ElementCoder.of(MFailure.schema())));
-            }
+            errorHandler.addError(rowTuple.get(failuresTag));
         }
 
-        return KV.of(tuple, failures);
+        return tuple;
     }
 
     private SqlTransform createTransform(
             final Parameters parameters,
-            final ErrorHandler.BadRecordErrorHandler<?> errorHandler) {
+            final MErrorHandler errorHandler) {
 
         SqlTransform transform = SqlTransform.query(parameters.sql);
         transform = switch (parameters.planner) {
@@ -219,19 +202,13 @@ public class BeamSQLTransform extends Transform {
                 .registerUdaf("MDT_COUNT_DISTINCT_FLOAT64", new AggregateFunctions.CountDistinctFloat64Fn())
                 .registerUdaf("MDT_COUNT_DISTINCT_INT64", new AggregateFunctions.CountDistinctInt64Fn());
 
-        /*
-        if(errorHandler != null) {
-            transform = transform.withErrorsTransformer(errorHandler);
-        }
-         */
+        errorHandler.apply(transform);
 
         return transform;
     }
 
     private static class ConvertRowDoFn extends DoFn<MElement, Row> {
 
-        private final String jobName;
-        private final String moduleName;
         private final String sourceName;
 
         private final Schema schema;
@@ -239,21 +216,15 @@ public class BeamSQLTransform extends Transform {
         private final Map<String, Logging> logging;
 
         private final boolean failFast;
-        private final TupleTag<MElement> failuresTag;
+        private final TupleTag<BadRecord> failuresTag;
 
         ConvertRowDoFn(
-                final String jobName,
-                final String moduleName,
                 final String sourceName,
-                //
                 final Schema schema,
-                //
                 final List<Logging> logging,
                 final boolean failFast,
-                final TupleTag<MElement> failuresTag) {
+                final TupleTag<BadRecord> failuresTag) {
 
-            this.jobName = jobName;
-            this.moduleName = moduleName;
             this.sourceName = sourceName;
 
             this.schema = schema;
@@ -280,14 +251,8 @@ public class BeamSQLTransform extends Transform {
                 final Row row = ElementToRowConverter.convert(schema, input);
                 c.output(row);
             } catch (final Throwable e) {
-                final MFailure failure = MFailure
-                        .of(jobName, moduleName, input.toString(), e, c.timestamp());
-                final String errorMessage = String.format("Failed to convert to row: %s, source: %s, error: %s", input, sourceName, e.getMessage());
-                LOG.error(errorMessage);
-                if(failFast) {
-                    throw new RuntimeException(errorMessage, e);
-                }
-                c.output(failuresTag, failure.toElement(c.timestamp()));
+                final BadRecord badRecord = processError("Failed to convert to row from: " + sourceName, input, e, failFast);
+                c.output(failuresTag, badRecord);
             }
         }
 
@@ -295,14 +260,37 @@ public class BeamSQLTransform extends Transform {
 
     private static class ConvertElementDoFn extends DoFn<Row, MElement> {
 
+        private final Map<String, Logging> logging;
+
+        private final boolean failFast;
+        private final TupleTag<BadRecord> failuresTag;
+
+        ConvertElementDoFn(
+                final List<Logging> logging,
+                final boolean failFast,
+                final TupleTag<BadRecord> failuresTag) {
+
+            this.logging = Logging.map(logging);
+            this.failFast = failFast;
+            this.failuresTag = failuresTag;
+        }
+
         @ProcessElement
         public void processElement(ProcessContext c) {
-            final Row row = c.element();
-            if(row == null) {
+            final Row input = c.element();
+            if(input == null) {
                 return;
             }
-            final MElement element = MElement.of(row, c.timestamp());
-            c.output(element);
+
+            try {
+                final MElement output = MElement.of(input, c.timestamp());
+                c.output(output);
+                Logging.log(LOG, logging, "output", output);
+            } catch (final Throwable e) {
+                final BadRecord badRecord = processError("Failed to convert from row to element", RowSchemaUtil.asPrimitiveMap(input), e, failFast);
+                c.output(failuresTag, badRecord);
+            }
+
         }
 
     }

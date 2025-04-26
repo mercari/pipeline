@@ -17,8 +17,6 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.joda.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -29,8 +27,6 @@ import java.util.Map;
 
 @Source.Module(name="bigtable")
 public class BigtableSource extends Source {
-
-    private static final Logger LOG = LoggerFactory.getLogger(BigtableSource.class);
 
     private static class Parameters implements Serializable {
 
@@ -173,14 +169,17 @@ public class BigtableSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
+
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getMode());
         parameters.setDefaults();
         parameters.setup();
 
         return switch (getMode()) {
-            case batch -> expandBatch(begin, parameters);
+            case batch -> expandBatch(begin, parameters, errorHandler);
             case changeDataCapture -> expandChangeStream(begin, parameters);
             default -> throw new IllegalArgumentException("Not supported mode: " + getMode());
         };
@@ -188,7 +187,8 @@ public class BigtableSource extends Source {
 
     private MCollectionTuple expandBatch(
             final PBegin begin,
-            final Parameters parameters) {
+            final Parameters parameters,
+            final MErrorHandler errorHandle) {
 
         final BigtableIO.Read read = createRead(parameters);
         final PCollection<com.google.bigtable.v2.Row> rows = begin
@@ -330,28 +330,33 @@ public class BigtableSource extends Source {
 
         @ProcessElement
         public void processElement(ProcessContext c) {
-            final Row row = c.element();
-            if(row == null) {
+            final Row input = c.element();
+            if(input == null) {
                 return;
             }
-            final Map<String, Object> primitiveValues = BigtableSchemaUtil.toPrimitiveValues(row, columns);
-            primitiveValues.put(rowKeyField, row.getKey().toStringUtf8());
-            if(withFirstTimestamp || withLastTimestamp) {
-                final KV<Long, Long> timestamps = BigtableSchemaUtil.getRowMinMaxTimestamps(row);
-                primitiveValues.put(firstTimestampField, timestamps.getKey());
-                primitiveValues.put(lastTimestampField, timestamps.getValue());
-            }
 
-            if(timestampAttribute != null) {
-                if(!primitiveValues.containsKey(timestampAttribute)) {
-                    throw new RuntimeException("timestampAttribute does not exists in values: " + primitiveValues);
+            try {
+                final Map<String, Object> primitiveValues = BigtableSchemaUtil.toPrimitiveValues(input, columns);
+                primitiveValues.put(rowKeyField, input.getKey().toStringUtf8());
+                if (withFirstTimestamp || withLastTimestamp) {
+                    final KV<Long, Long> timestamps = BigtableSchemaUtil.getRowMinMaxTimestamps(input);
+                    primitiveValues.put(firstTimestampField, timestamps.getKey());
+                    primitiveValues.put(lastTimestampField, timestamps.getValue());
                 }
-                final Instant timestamp = Instant.ofEpochMilli((Long)primitiveValues.get(timestampAttribute) / 1000L);
-                final MElement output = MElement.of(primitiveValues, timestamp);
-                c.outputWithTimestamp(output, timestamp);
-            } else {
-                final MElement output = MElement.of(primitiveValues, c.timestamp());
-                c.output(output);
+
+                if (timestampAttribute != null) {
+                    if (!primitiveValues.containsKey(timestampAttribute)) {
+                        throw new RuntimeException("timestampAttribute does not exists in values: " + primitiveValues);
+                    }
+                    final Instant timestamp = Instant.ofEpochMilli((Long) primitiveValues.get(timestampAttribute) / 1000L);
+                    final MElement output = MElement.of(primitiveValues, timestamp);
+                    c.outputWithTimestamp(output, timestamp);
+                } else {
+                    final MElement output = MElement.of(primitiveValues, c.timestamp());
+                    c.output(output);
+                }
+            } catch (final Throwable e) {
+
             }
         }
     }

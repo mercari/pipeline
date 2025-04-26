@@ -23,7 +23,7 @@ public class DatastoreSource extends Source {
 
     private static final Logger LOG = LoggerFactory.getLogger(DatastoreSource.class);
 
-    private static class DatastoreSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String gql;
@@ -54,8 +54,11 @@ public class DatastoreSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
-        final DatastoreSourceParameters parameters = getParameters(DatastoreSourceParameters.class);
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 

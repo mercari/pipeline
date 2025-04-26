@@ -26,7 +26,7 @@ public class JdbcSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcSink.class);
 
-    private static class JdbcSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String table;
         private String url;
@@ -97,8 +97,11 @@ public class JdbcSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        final JdbcSinkParameters parameters = getParameters(JdbcSinkParameters.class);
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
         parameters.replaceParameters();

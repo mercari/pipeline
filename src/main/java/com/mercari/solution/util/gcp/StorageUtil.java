@@ -170,12 +170,21 @@ public class StorageUtil {
         }
     }
 
+    public static List<StorageObject> listFilesWithMatch(final String gcsPath, final String matchGlob) {
+        final String[] paths = parseGcsPath(gcsPath);
+        return listFiles(paths[0], paths[1], matchGlob);
+    }
+
     public static List<StorageObject> listFiles(final String gcsPath) {
         final String[] paths = parseGcsPath(gcsPath);
         return listFiles(paths[0], paths[1]);
     }
 
     public static List<StorageObject> listFiles(final String bucket, final String object) {
+        return listFiles(bucket, object, null);
+    }
+
+    public static List<StorageObject> listFiles(final String bucket, final String object, final String matchGlob) {
         final String prefix;
         if(object.endsWith("*")) {
             prefix = object.replace("*", "");
@@ -183,10 +192,14 @@ public class StorageUtil {
             prefix = object;
         }
         try {
-            final List<StorageObject> objects = storage()
+            Storage.Objects.List list = storage()
                     .objects()
                     .list(bucket)
-                    .setPrefix(prefix)
+                    .setPrefix(prefix);
+            if(matchGlob != null) {
+                list = list.setMatchGlob(matchGlob);
+            }
+            final List<StorageObject> objects = list
                     .execute()
                     .getItems();
             if(objects == null) {

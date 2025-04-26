@@ -63,7 +63,9 @@ public class DatastoreSink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
 
         final DatastoreSinkParameters parameters = getParameters(DatastoreSinkParameters.class);
         parameters.validate();

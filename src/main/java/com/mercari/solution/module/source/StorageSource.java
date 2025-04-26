@@ -93,7 +93,10 @@ public class StorageSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
+
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();

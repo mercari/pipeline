@@ -22,8 +22,6 @@ import org.apache.beam.sdk.io.gcp.spanner.SpannerConfig;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerIO;
 import org.apache.beam.sdk.io.gcp.spanner.Transaction;
 import org.apache.beam.sdk.io.gcp.spanner.changestreams.model.DataChangeRecord;
-import org.apache.beam.sdk.metrics.Counter;
-import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.*;
@@ -39,8 +37,6 @@ import java.util.stream.Collectors;
 
 @Source.Module(name="spanner")
 public class SpannerSource extends Source {
-
-    private static final Counter ERROR_COUNTER = Metrics.counter("spanner_source", "error");;
 
     private static class Parameters implements Serializable {
 
@@ -225,7 +221,9 @@ public class SpannerSource extends Source {
     }
 
     @Override
-    public MCollectionTuple expand(PBegin begin) {
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());

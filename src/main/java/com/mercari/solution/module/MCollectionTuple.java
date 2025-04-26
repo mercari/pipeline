@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
 public class MCollectionTuple implements PInput, POutput {
 
     private static final String TAG_DEFAULT = "";
-    private static final String TAG_FAILURES = "failures";
+    //private static final String TAG_FAILURES = "failures";
 
     private final Pipeline pipeline;
     private final Map<String, PCollection<MElement>> pcollectionMap;
@@ -67,6 +67,7 @@ public class MCollectionTuple implements PInput, POutput {
                         .build());
     }
 
+    /*
     public MCollectionTuple failure(PCollection<MElement> failure) {
         if(failure == null) {
             return this;
@@ -91,6 +92,7 @@ public class MCollectionTuple implements PInput, POutput {
     public MCollectionTuple failure(PCollectionList<MElement> failures) {
         return failure(failures.apply(Flatten.pCollections()));
     }
+     */
 
     public int size() {
         return this.pcollectionMap.size();

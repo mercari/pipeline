@@ -51,8 +51,7 @@ public class Schema implements Serializable {
     }
 
     public boolean hasField(final String name) {
-        return fields.stream()
-                .anyMatch(f -> f.getName().equals(name));
+        return hasField(fields, name);
     }
 
     public Field getField(int index) {
@@ -60,10 +59,7 @@ public class Schema implements Serializable {
     }
 
     public Field getField(final String name) {
-        return fields.stream()
-                .filter(f -> f.getName().equals(name))
-                .findAny()
-                .orElse(null);
+        return getField(fields, name);
     }
 
     public boolean hasOption(final String name) {
@@ -81,8 +77,12 @@ public class Schema implements Serializable {
     }
 
     public AvroSchema getAvro() {
-        if(avro == null && fields != null && !fields.isEmpty()) {
-            avro = new AvroSchema(ElementToAvroConverter.convertSchema(fields));
+        if((avro == null || avro.json == null)) {
+            if(fields != null && !fields.isEmpty()) {
+                avro = new AvroSchema(ElementToAvroConverter.convertSchema(fields));
+            }
+        } else if(avro.schema == null) {
+            avro.setup();
         }
         return avro;
     }
@@ -128,14 +128,15 @@ public class Schema implements Serializable {
         return this;
     }
 
-    public void setup() {
+    public Schema setup() {
         setup(DataType.ELEMENT);
+        return this;
     }
 
-    public void setup(final DataType dataType) {
+    public Schema setup(final DataType dataType) {
         switch (dataType) {
             case AVRO -> {
-                if(avro == null) {
+                if(avro == null || avro.schema == null) {
                     if(fields != null && !fields.isEmpty()) {
                         avro = new AvroSchema(ElementToAvroConverter.convertSchema(this.fields));
                     }
@@ -164,7 +165,7 @@ public class Schema implements Serializable {
                 this.fields = RowToElementConverter.convertFields(row.schema.getFields());
             }
         }
-
+        return this;
     }
 
     private Schema(
@@ -294,6 +295,7 @@ public class Schema implements Serializable {
 
     public JsonObject toJsonObject() {
         final JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("dataType", this.type.name());
         {
             final JsonArray fieldsArray = new JsonArray();
             for(final Field field : fields) {
@@ -355,6 +357,18 @@ public class Schema implements Serializable {
 
     public static Builder builder(Schema schema) {
         return new Builder(schema);
+    }
+
+    public static boolean hasField(final List<Field> fields, final String name) {
+        return fields.stream()
+                .anyMatch(f -> f.getName().equals(name));
+    }
+
+    public static Field getField(final List<Field> fields, final String name) {
+        return fields.stream()
+                .filter(f -> f.getName().equals(name))
+                .findAny()
+                .orElse(null);
     }
 
     public static class Field implements Serializable {
@@ -472,11 +486,13 @@ public class Schema implements Serializable {
 
         private Type type;
         private Schema elementSchema; // for element type
-        private FieldType arrayValueType;
+        private FieldType arrayValueType; // for repeated mode
         private FieldType mapValueType; // for map type
         private List<String> symbols; // for enumerate type
-        private Integer scale; // for decimal
-        private Integer precision; // for decimal
+        private Integer scale; // for decimal type
+        private Integer precision; // for decimal type
+        private List<Long> shape; // for matrix type
+        private FieldType matrixValueType; // for matrix type
         private Boolean nullable;
         private String defaultValue;
 
@@ -691,6 +707,15 @@ public class Schema implements Serializable {
             return fieldType;
         }
 
+        public static FieldType matrix(FieldType matrixValueType, List<Long> shape) {
+            final FieldType fieldType = new FieldType();
+            fieldType.type = Type.matrix;
+            fieldType.matrixValueType = matrixValueType;
+            fieldType.shape = shape;
+            fieldType.nullable = true;
+            return fieldType;
+        }
+
         public FieldType withNullable(final boolean nullable) {
             final FieldType fieldType = this.copy();
             fieldType.nullable = nullable;
@@ -713,9 +738,11 @@ public class Schema implements Serializable {
             fieldType.elementSchema = Optional.ofNullable(this.elementSchema).map(Schema::copy).orElse(null);
             fieldType.arrayValueType = Optional.ofNullable(this.arrayValueType).map(FieldType::copy).orElse(null);
             fieldType.mapValueType = Optional.ofNullable(this.mapValueType).map(FieldType::copy).orElse(null);
+            fieldType.matrixValueType = Optional.ofNullable(this.matrixValueType).map(FieldType::copy).orElse(null);
             fieldType.symbols = new ArrayList<>(this.symbols);
             fieldType.precision = this.precision;
             fieldType.scale = this.scale;
+            fieldType.shape = this.shape;
             fieldType.nullable = this.nullable;
             fieldType.defaultValue = this.defaultValue;
             return fieldType;
@@ -728,6 +755,7 @@ public class Schema implements Serializable {
                 case array -> String.format("{ type: %s, arrayValue: %s }", type, arrayValueType);
                 case map -> String.format("{ type: %s, mapValue: %s }", type, mapValueType);
                 case enumeration -> String.format("{ type: %s, symbols: %s }", type, symbols);
+                case matrix -> String.format("{ type: %s, matrixValue: %s, shape: %s }", type, arrayValueType, shape);
                 default -> String.format("{ type: %s }", type);
             };
         }
@@ -754,6 +782,16 @@ public class Schema implements Serializable {
                         }
                     }
                     jsonObject.add("enumSymbols", symbolsArray);
+                }
+                case matrix -> {
+                    jsonObject.add("matrixValueType", matrixValueType.toJsonObject());
+                    final JsonArray shapeArray = new JsonArray();
+                    if(symbols != null) {
+                        for(final Long s : shape) {
+                            shapeArray.add(s);
+                        }
+                    }
+                    jsonObject.add("shape", shapeArray);
                 }
             }
 
@@ -801,7 +839,10 @@ public class Schema implements Serializable {
 
         AvroSchema(org.apache.avro.Schema schema) {
             this.schema = schema;
-            this.json = Optional.ofNullable(schema).map(s -> s.toString()).orElse(null);
+            this.json = Optional
+                    .ofNullable(schema)
+                    .map(org.apache.avro.Schema::toString)
+                    .orElse(null);
         }
 
         private void setup() {
@@ -836,6 +877,19 @@ public class Schema implements Serializable {
 
         public static AvroSchema parse(final JsonObject jsonObject) {
             return new Gson().fromJson(jsonObject, AvroSchema.class);
+        }
+
+        @Override
+        public String toString() {
+            final JsonObject jsonObject = new JsonObject();
+            jsonObject.addProperty("file", file);
+            jsonObject.addProperty("json", json);
+            try {
+                jsonObject.addProperty("schema", schema.toString());
+            } catch (Throwable e) {
+                jsonObject.addProperty("schema", "error: " + e.getMessage());
+            }
+            return jsonObject.toString();
         }
     }
 
@@ -941,6 +995,9 @@ public class Schema implements Serializable {
             if(fields.isEmpty()) {
                 if(protobuf != null) {
                     protobuf.setup();
+                    if(!protobuf.descriptors.containsKey(protobuf.messageName)) {
+                        throw new IllegalArgumentException("protobuf messageName: " + protobuf.messageName + " is not found in descriptors: " + protobuf.descriptors.keySet());
+                    }
                     schema = Schema.of(protobuf.descriptors.get(protobuf.messageName));
                     schema.protobuf.descriptorFile = protobuf.descriptorFile;
                     schema.protobuf.messageName = protobuf.messageName;
@@ -1029,7 +1086,8 @@ public class Schema implements Serializable {
         enumeration,
         map,
         element,
-        array;
+        array,
+        matrix;
 
         public static Type of(final String type) {
             if(type == null) {
@@ -1056,6 +1114,7 @@ public class Schema implements Serializable {
                 case "row", "struct", "record", "element" -> Type.element;
                 case "map" -> Type.map;
                 case "geography" -> Type.geography;
+                case "matrix" -> Type.matrix;
                 default -> throw new IllegalArgumentException("Not supported schema type[" + type + "]");
             };
         }
@@ -1071,7 +1130,7 @@ public class Schema implements Serializable {
                 case "date" -> Long.valueOf(DateTimeUtil.toLocalDate(value.getAsString()).toEpochDay()).intValue();
                 case "time" -> DateTimeUtil.toLocalTime(value.getAsString()).toNanoOfDay() / 1000L;
                 case "timestamp" -> DateTimeUtil.toJodaInstant(value.getAsString()).getMillis() * 1000L;
-                default -> throw new IllegalArgumentException("SelectField type[" + type + "] is not supported");
+                default -> throw new IllegalArgumentException("type[" + type + "] is not supported");
             };
         }
 

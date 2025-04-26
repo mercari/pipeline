@@ -25,7 +25,7 @@ public class LocalH2Sink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(LocalH2Sink.class);
 
-    private static class LocalH2SinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String output;
         private String input;
@@ -106,9 +106,11 @@ public class LocalH2Sink extends Sink {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
-        final LocalH2SinkParameters parameters = getParameters(LocalH2SinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 

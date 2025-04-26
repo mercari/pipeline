@@ -325,7 +325,10 @@ public class HttpTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
+
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
@@ -406,8 +409,7 @@ public class HttpTransform extends Transform {
         }
 
         return MCollectionTuple
-                .of(output, outputSchema)
-                .failure(errorList.apply(Flatten.pCollections()));
+                .of(output, outputSchema);
     }
 
     private static Schema createOutputSchema(

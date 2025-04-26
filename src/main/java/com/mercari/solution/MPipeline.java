@@ -14,6 +14,7 @@ import org.apache.beam.sdk.transforms.Create;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -100,16 +101,21 @@ public class MPipeline {
 
         final int size = moduleNames.size();
         int preOutputSize = 0;
-        while(preOutputSize < size) {
-            setSourceResult(pipeline, config.getSources(), outputs, executedModuleNames);
-            setTransformResult(pipeline, config.getTransforms(), outputs, executedModuleNames);
-            setSinkResult(pipeline, config.getSinks(), outputs, executedModuleNames);
-            if(preOutputSize == executedModuleNames.size()) {
-                moduleNames.removeAll(executedModuleNames);
-                final String message = String.format("No input for modules: %s", String.join(",", moduleNames));
-                throw new IllegalModuleException("", "pipeline", List.of(message));
+
+        try(final MErrorHandler errorHandler = MErrorHandler.createPipelineErrorHandler(pipeline, config)) {
+            while(preOutputSize < size) {
+                setSourceResult(pipeline, config.getSources(), outputs, executedModuleNames, errorHandler);
+                setTransformResult(pipeline, config.getTransforms(), outputs, executedModuleNames, errorHandler);
+                setSinkResult(pipeline, config.getSinks(), outputs, executedModuleNames, errorHandler);
+                if(preOutputSize == executedModuleNames.size()) {
+                    moduleNames.removeAll(executedModuleNames);
+                    final String message = String.format("No input for modules: %s", String.join(",", moduleNames));
+                    throw new IllegalModuleException("", "pipeline", List.of(message));
+                }
+                preOutputSize = executedModuleNames.size();
             }
-            preOutputSize = executedModuleNames.size();
+        } catch (final IOException e) {
+            throw new IllegalArgumentException("Failed to register error handler", e);
         }
 
         return outputs;
@@ -119,7 +125,8 @@ public class MPipeline {
             final Pipeline pipeline,
             final List<SourceConfig> sourceConfigs,
             final Map<String, MCollection> outputs,
-            final Set<String> executedModuleNames) {
+            final Set<String> executedModuleNames,
+            final MErrorHandler errorHandler) {
 
         final List<SourceConfig> notDoneModules = new ArrayList<>();
         for (final SourceConfig sourceConfig : sourceConfigs) {
@@ -153,7 +160,7 @@ public class MPipeline {
             }
 
             try {
-                final Source source = Source.create(sourceConfig, pipeline.getOptions(), waits);
+                final Source source = Source.create(sourceConfig, pipeline.getOptions(), waits, errorHandler);
                 final MCollectionTuple output = pipeline.begin()
                         .apply(sourceConfig.getName(), source)
                         .withSource(sourceConfig.getName());
@@ -172,14 +179,15 @@ public class MPipeline {
         if(notDoneModules.size() == sourceConfigs.size()) {
             return;
         }
-        setSourceResult(pipeline, notDoneModules, outputs, executedModuleNames);
+        setSourceResult(pipeline, notDoneModules, outputs, executedModuleNames, errorHandler);
     }
 
     private static void setTransformResult(
             final Pipeline pipeline,
             final List<TransformConfig> transformConfigs,
             final Map<String, MCollection> outputs,
-            final Set<String> executedModuleNames) {
+            final Set<String> executedModuleNames,
+            final MErrorHandler errorHandler) {
 
         final List<TransformConfig> notDoneModules = new ArrayList<>();
         for(final TransformConfig transformConfig : transformConfigs) {
@@ -239,7 +247,7 @@ public class MPipeline {
                     .collect(Collectors.toList());
             try {
                 final MCollectionTuple input = MCollectionTuple.mergeCollection(inputs);
-                final Transform transform = Transform.create(transformConfig, pipeline.getOptions(), waits, sideInputs);
+                final Transform transform = Transform.create(transformConfig, pipeline.getOptions(), waits, sideInputs, errorHandler);
                 final MCollectionTuple output = input
                         .apply(transformConfig.getName(), transform)
                         .withSource(transformConfig.getName());
@@ -258,14 +266,15 @@ public class MPipeline {
         if(notDoneModules.size() == transformConfigs.size()) {
             return;
         }
-        setTransformResult(pipeline, notDoneModules, outputs, executedModuleNames);
+        setTransformResult(pipeline, notDoneModules, outputs, executedModuleNames, errorHandler);
     }
 
     private static void setSinkResult(
             final Pipeline pipeline,
             final List<SinkConfig> sinkConfigs,
             final Map<String, MCollection> outputs,
-            final Set<String> executedModuleNames) {
+            final Set<String> executedModuleNames,
+            final MErrorHandler errorHandler) {
 
         final List<SinkConfig> notDoneModules = new ArrayList<>();
         for(final SinkConfig sinkConfig : sinkConfigs) {
@@ -317,7 +326,7 @@ public class MPipeline {
                 } else {
                     input = MCollectionTuple.mergeCollection(inputs);
                 }
-                final Sink sink = Sink.create(sinkConfig, pipeline.getOptions(), waits);
+                final Sink sink = Sink.create(sinkConfig, pipeline.getOptions(), waits, errorHandler);
                 final MCollectionTuple output = input
                         .apply(sinkConfig.getName(), sink)
                         .withSource(sinkConfig.getName());
@@ -336,7 +345,7 @@ public class MPipeline {
         if(notDoneModules.size() == sinkConfigs.size()) {
             return;
         }
-        setSinkResult(pipeline, notDoneModules, outputs, executedModuleNames);
+        setSinkResult(pipeline, notDoneModules, outputs, executedModuleNames, errorHandler);
     }
 
     private static Set<String> moduleNames(final Config config) {

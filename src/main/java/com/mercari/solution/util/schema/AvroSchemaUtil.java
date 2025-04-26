@@ -1527,7 +1527,10 @@ public class AvroSchemaUtil {
                     yield fieldValue;
                 }
             }
-            case RECORD -> getAsPrimitive(fieldSchema.getElementType(), fieldValue);
+            case RECORD -> {
+                final GenericRecord record = (GenericRecord) fieldValue;
+                yield asPrimitiveMap(record);
+            }
             case ARRAY -> switch (fieldSchema.getElementType().getType()) {
                 case FLOAT, DOUBLE, BOOLEAN, BYTES -> fieldValue;
                 case STRING -> ((List<Object>) fieldValue).stream()

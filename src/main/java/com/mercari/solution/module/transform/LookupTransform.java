@@ -2,7 +2,6 @@ package com.mercari.solution.module.transform;
 
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
-import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.pipeline.*;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import org.apache.beam.sdk.metrics.Counter;
@@ -91,7 +90,9 @@ public class LookupTransform extends Transform {
     }
 
     @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
+    public MCollectionTuple expand(
+            MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getSideInputs());
@@ -188,12 +189,14 @@ public class LookupTransform extends Transform {
 
 
         final PCollection<MElement> lookup = withLookup.get(outputTag);
+        /*
         final PCollection<MElement> lookupFailures = withLookup.get(failureTag)
                 .apply("WithDefaultWindow", Strategy.createDefaultWindow())
                 .setCoder(ElementCoder.of(MFailure.schema()));
+         */
 
         final PCollection<MElement> output;
-        PCollectionList<MElement> failuresList = PCollectionList.of(lookupFailures);
+        //PCollectionList<MElement> failuresList = PCollectionList.of(lookupFailures);
         if(selectFunctions.isEmpty()) {
             output = lookup;
         } else {
@@ -202,12 +205,11 @@ public class LookupTransform extends Transform {
             final PCollectionTuple selected = lookup
                     .apply("Select", selectTransform);
             output = selected.get(selectTransform.outputTag);
-            failuresList = failuresList.and(selected.get(selectTransform.failuresTag));
+            //failuresList = failuresList.and(selected.get(selectTransform.failuresTag));
         }
 
         return MCollectionTuple
-                .of(output, outputSchema)
-                .failure(failuresList.apply("Flatten", Flatten.pCollections()));
+                .of(output, outputSchema);
     }
 
     private static Schema createOutputSchema(
