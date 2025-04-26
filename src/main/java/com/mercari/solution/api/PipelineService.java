@@ -1,8 +1,6 @@
 package com.mercari.solution.api;
 
-import com.google.dataflow.v1beta3.Job;
-import com.google.dataflow.v1beta3.LaunchFlexTemplateParameter;
-import com.google.dataflow.v1beta3.LaunchFlexTemplateResponse;
+import com.google.dataflow.v1beta3.*;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mercari.solution.MPipeline;
@@ -12,7 +10,7 @@ import com.mercari.solution.config.options.DataflowOptions;
 import com.mercari.solution.config.options.DirectOptions;
 import com.mercari.solution.module.IllegalModuleException;
 import com.mercari.solution.module.MCollection;
-import com.mercari.solution.module.MFailure;
+import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.gcp.DataflowUtil;
 import com.mercari.solution.util.pipeline.OptionUtil;
 import jakarta.servlet.ServletException;
@@ -41,7 +39,7 @@ public class PipelineService {
         String type = "";
         final long startMillis = Instant.now().toEpochMilli();
         try(final Reader reader = request.getReader()) {
-            final JsonObject jsonObject = Config.convertConfigJson(reader);
+            final JsonObject jsonObject = Config.convertConfigJson(reader, Config.Format.unknown);
 
             if (!jsonObject.has("type")) {
                 throw new IllegalArgumentException("request parameter type is not found");
@@ -59,7 +57,11 @@ public class PipelineService {
                     run(configText, dryRun, response);
                 }
                 case "launch" -> {
-                    launch(configText, response);
+                    launch(configText, response, false);
+                }
+                case "createtemplate" -> {
+                    launch(configText, response, true);
+                    //createTemplate(configText, response);
                 }
                 default -> throw new IllegalArgumentException("Not supported type: " + type);
             }
@@ -73,7 +75,7 @@ public class PipelineService {
                 final JsonObject error = new JsonObject();
                 error.addProperty("name", "");
                 error.addProperty("module", "server");
-                error.addProperty("message", MFailure.convertThrowableMessage(e));
+                error.addProperty("message", FailureUtil.convertThrowableMessage(e));
                 responseJson.add("error", error);
             }
             response.getWriter().println(responseJson);
@@ -83,14 +85,15 @@ public class PipelineService {
 
     private static void launch(
             final String configText,
-            final HttpServletResponse response) throws IOException {
+            final HttpServletResponse response,
+            final boolean validateOnly) throws IOException {
 
         final JsonObject responseJson = new JsonObject();
         responseJson.addProperty("type", "launch");
 
         final long startMillis = Instant.now().toEpochMilli();
         try {
-            final Config config = MPipeline.loadConfig(configText);
+            final Config config = Config.load(configText);
             if(config.getOptions() == null) {
                 throw new IllegalArgumentException("config.options must not be empty");
             }
@@ -152,7 +155,7 @@ public class PipelineService {
                 final JsonObject error = new JsonObject();
                 error.addProperty("name", "");
                 error.addProperty("module", "pipeline");
-                error.addProperty("message", MFailure.convertThrowableMessage(e));
+                error.addProperty("message", FailureUtil.convertThrowableMessage(e));
                 responseJson.add("error", error);
             }
             response.getWriter().println(responseJson);
@@ -174,7 +177,7 @@ public class PipelineService {
             //response.getWriter().flush();
             //response.flushBuffer();
 
-            final Config config = MPipeline.loadConfig(configText);
+            final Config config = Config.load(configText);
 
             final MPipeline.MPipelineOptions pipelineOptions = createPipelineOptions(new String[0]);
             Options.setOptions(pipelineOptions, config.getOptions());
@@ -186,7 +189,7 @@ public class PipelineService {
 
             final Pipeline pipeline = Pipeline.create(pipelineOptions);
 
-            final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config, new String[0]);
+            final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);
 
             final PipelineResult result = dryRun ? null : pipeline.run();
 
@@ -260,7 +263,7 @@ public class PipelineService {
                 final JsonObject error = new JsonObject();
                 error.addProperty("name", "");
                 error.addProperty("module", "pipeline");
-                error.addProperty("message", MFailure.convertThrowableMessage(e));
+                error.addProperty("message", FailureUtil.convertThrowableMessage(e));
                 responseJson.add("error", error);
             }
             response.getWriter().println(responseJson);

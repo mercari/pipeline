@@ -39,14 +39,21 @@ public class ElementToProtoConverter {
             final Schema schema,
             final Descriptors.Descriptor messageDescriptor,
             final Map<?, ?> primitives) {
+        return convert(schema.getFields(), messageDescriptor, primitives);
+    }
+
+    public static DynamicMessage convert(
+            final List<Schema.Field> fields,
+            final Descriptors.Descriptor messageDescriptor,
+            final Map<?, ?> primitives) {
 
         final DynamicMessage.Builder builder = DynamicMessage.newBuilder(messageDescriptor);
 
         for(final Descriptors.FieldDescriptor field : messageDescriptor.getFields()) {
-            if(!schema.hasField(field.getName())) {
+            if(!Schema.hasField(fields, field.getName())) {
                 continue;
             }
-            final Schema.FieldType fieldType = schema.getField(field.getName()).getFieldType();
+            final Schema.FieldType fieldType = Schema.getField(fields, field.getName()).getFieldType();
             if(field.isMapField()) {
                 final List<Object> list = (List<Object>) convertValue(field, fieldType, primitives.get(field.getName()));
                 if(list == null) {

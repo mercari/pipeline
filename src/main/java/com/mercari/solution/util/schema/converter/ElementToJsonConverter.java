@@ -46,11 +46,19 @@ public class ElementToJsonConverter {
     }
 
     public static JsonObject convert(final Schema schema, final Map<String,Object> primitiveValues, final List<String> fields) {
+        return convert(schema.getFields(), primitiveValues, fields);
+    }
+
+    public static JsonObject convert(final List<Schema.Field> schemaFields, final Map<String,Object> primitiveValues) {
+        return convert(schemaFields, primitiveValues, null);
+    }
+
+    public static JsonObject convert(final List<Schema.Field> schemaFields, final Map<String,Object> primitiveValues, final List<String> fields) {
         final JsonObject obj = new JsonObject();
         if(primitiveValues == null || primitiveValues.isEmpty()) {
             return obj;
         }
-        schema.getFields()
+        schemaFields
                 .stream()
                 .filter(f -> fields == null || fields.isEmpty() || fields.contains(f.getName()))
                 .forEach(f -> setValue(obj, f, primitiveValues));
