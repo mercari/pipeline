@@ -13,9 +13,8 @@ import org.apache.beam.sdk.io.gcp.bigtable.BigtableIO;
 import org.apache.beam.sdk.io.range.ByteKeyRange;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PBegin;
-import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
+import org.apache.beam.sdk.values.*;
 import org.joda.time.Instant;
 
 import java.io.Serializable;
@@ -110,7 +109,7 @@ public class BigtableSource extends Source {
                 withLastTimestamp = false;
             }
             if(rowKeyField == null) {
-                rowKeyField = "__rowKey";
+                rowKeyField = "row_key";
             }
             if(firstTimestampField == null) {
                 firstTimestampField = "__firstTimestamp";
@@ -188,49 +187,55 @@ public class BigtableSource extends Source {
     private MCollectionTuple expandBatch(
             final PBegin begin,
             final Parameters parameters,
-            final MErrorHandler errorHandle) {
+            final MErrorHandler errorHandler) {
 
         final BigtableIO.Read read = createRead(parameters);
         final PCollection<com.google.bigtable.v2.Row> rows = begin
                 .apply("Read", read);
 
-        final PCollection<MElement> output;
-        Schema outputSchema;
+        final TupleTag<MElement> outputTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
+
+        final Schema outputSchema;
+        final PCollectionTuple outputs;
         switch (parameters.outputType) {
             case row -> {
-                output = rows
-                        .apply("ConvertRow", ParDo.of(new RowToRowElementDoFn(
-                                parameters, getTimestampAttribute())));
-                if(parameters.withRowKey) {
-                    if(parameters.columns.isEmpty()) {
-                        outputSchema = Schema.builder()
-                                .withField(parameters.rowKeyField, Schema.FieldType.STRING)
-                                .build();
-                    } else {
-                        outputSchema = Schema.builder(BigtableSchemaUtil.createSchema(parameters.columns))
-                                .withField(parameters.rowKeyField, Schema.FieldType.STRING)
-                                .build();
-                    }
+                final Schema.Builder builder;
+                if(parameters.columns.isEmpty()) {
+                    builder = Schema.builder();
                 } else {
-                    outputSchema = BigtableSchemaUtil.createSchema(parameters.columns);
+                    builder = Schema.builder(BigtableSchemaUtil.createSchema(parameters.columns));
+                }
+                if(parameters.withRowKey) {
+                    builder.withField(parameters.rowKeyField, Schema.FieldType.STRING);
                 }
                 if(parameters.withFirstTimestamp) {
-                    outputSchema = Schema.builder(outputSchema).withField(parameters.firstTimestampField, Schema.FieldType.TIMESTAMP).build();
+                    builder.withField(parameters.firstTimestampField, Schema.FieldType.TIMESTAMP);
                 }
                 if(parameters.withLastTimestamp) {
-                    outputSchema = Schema.builder(outputSchema).withField(parameters.lastTimestampField, Schema.FieldType.TIMESTAMP).build();
+                    builder.withField(parameters.lastTimestampField, Schema.FieldType.TIMESTAMP);
                 }
+                outputSchema = builder.build();
+                outputs = rows
+                        .apply("ConvertToRow", ParDo
+                                .of(new RowToRowElementDoFn(
+                                        parameters, getTimestampAttribute(), getFailFast(), failuresTag))
+                                .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
             }
             case cell -> {
-                output = rows
-                        .apply("ConvertCell", ParDo.of(new RowToCellElementDoFn()));
                 outputSchema = BigtableSchemaUtil.createCellSchema();
+                outputs = rows
+                        .apply("ConvertToCells", ParDo
+                                .of(new RowToCellElementDoFn(getFailFast(), failuresTag))
+                        .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
             }
-            default -> throw new IllegalArgumentException();
+            default -> throw new IllegalModuleException("Not supported bigtable source output type: " + parameters.outputType);
         }
 
+        errorHandler.addError(outputs.get(failuresTag));
+
         return MCollectionTuple
-                .of(output, outputSchema);
+                .of(outputs.get(outputTag), outputSchema);
     }
 
     private MCollectionTuple expandChangeStream(
@@ -245,8 +250,7 @@ public class BigtableSource extends Source {
         return MCollectionTuple.of(output, getSchema());
     }
 
-    private static BigtableIO.Read createRead(
-            Parameters parameters) {
+    private static BigtableIO.Read createRead(final Parameters parameters) {
 
         BigtableIO.Read read = BigtableIO.read()
                 .withProjectId(parameters.projectId)
@@ -306,10 +310,14 @@ public class BigtableSource extends Source {
         private final String firstTimestampField;
         private final String lastTimestampField;
 
+        private final Boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
 
         RowToRowElementDoFn(
                 final Parameters parameters,
-                final String timestampAttribute) {
+                final String timestampAttribute,
+                final Boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
 
             this.columns = BigtableSchemaUtil.toMap(parameters.columns);
             this.timestampAttribute = timestampAttribute;
@@ -319,6 +327,9 @@ public class BigtableSource extends Source {
             this.rowKeyField = parameters.rowKeyField;
             this.firstTimestampField = parameters.firstTimestampField;
             this.lastTimestampField = parameters.lastTimestampField;
+
+            this.failFast = failFast;
+            this.failureTag = failureTag;
         }
 
         @Setup
@@ -356,36 +367,57 @@ public class BigtableSource extends Source {
                     c.output(output);
                 }
             } catch (final Throwable e) {
-
+                final Map<String, Object> values = new HashMap<>();
+                values.put("row", input.toString());
+                final BadRecord badRecord = processError("Failed to convert from bigtable row to element", values, e, failFast);
+                c.output(failureTag, badRecord);
             }
         }
     }
 
     private static class RowToCellElementDoFn extends DoFn<Row, MElement> {
 
+        private final Boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
+
+        RowToCellElementDoFn(
+                final Boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
+
+            this.failFast = failFast;
+            this.failureTag = failureTag;
+        }
+
         @ProcessElement
         public void processElement(ProcessContext c) {
-            final Row row = c.element();
-            if(row == null) {
+            final Row input = c.element();
+            if(input == null) {
                 return;
             }
 
-            final ByteString rowKey = row.getKey();
-            for(final Family family : row.getFamiliesList()) {
-                final String familyName = family.getName();
-                for(final Column column : family.getColumnsList()) {
-                    final ByteString qualifier = column.getQualifier();
-                    for(final Cell cell : column.getCellsList()) {
-                        final Map<String, Object> primitives = new HashMap<>();
-                        primitives.put("rowKey", rowKey.toStringUtf8());
-                        primitives.put("family", familyName);
-                        primitives.put("qualifier", qualifier.toStringUtf8());
-                        primitives.put("timestamp", cell.getTimestampMicros());
-                        final Instant timestamp = Instant.ofEpochMilli(cell.getTimestampMicros() / 1000L);
-                        final MElement element = MElement.of(primitives, timestamp);
-                        c.outputWithTimestamp(element, timestamp);
+            try {
+                final ByteString rowKey = input.getKey();
+                for (final Family family : input.getFamiliesList()) {
+                    final String familyName = family.getName();
+                    for (final Column column : family.getColumnsList()) {
+                        final ByteString qualifier = column.getQualifier();
+                        for (final Cell cell : column.getCellsList()) {
+                            final Map<String, Object> primitives = new HashMap<>();
+                            primitives.put("rowKey", rowKey.toStringUtf8());
+                            primitives.put("family", familyName);
+                            primitives.put("qualifier", qualifier.toStringUtf8());
+                            primitives.put("timestamp", cell.getTimestampMicros());
+                            final Instant timestamp = Instant.ofEpochMilli(cell.getTimestampMicros() / 1000L);
+                            final MElement element = MElement.of(primitives, timestamp);
+                            c.outputWithTimestamp(element, timestamp);
+                        }
                     }
                 }
+            } catch (final Throwable e) {
+                final Map<String, Object> values = new HashMap<>();
+                values.put("row", input.toString());
+                final BadRecord badRecord = processError("Failed to convert from bigtable cells to element", values, e, failFast);
+                c.output(failureTag, badRecord);
             }
         }
     }
