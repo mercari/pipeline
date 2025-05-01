@@ -2,11 +2,16 @@
 
 The Mercari Pipeline enables you to run various pipelines without writing programs by simply defining a configuration file.
 
-Mercari Dataflow Template is implemented as a [FlexTemplate](https://cloud.google.com/dataflow/docs/guides/templates/using-flex-templates) for [Cloud Dataflow](https://cloud.google.com/dataflow). Pipelines are assembled based on the defined configuration file and can be executed as Cloud Dataflow Jobs.
+Currently Mercari Pipeline's primary target is Cloud Dataflow, but we are in the process of preparing to run on Apache Spark and Apache Flink clusters as well.
+
+(Mercari Dataflow Template has been renamed Mercari Pipeline)
 
 See the [Document](docs/README.md) for usage
 
 ## Usage Example
+
+MD can be deployed as a [FlexTemplate](https://cloud.google.com/dataflow/docs/guides/templates/using-flex-templates) for use with [Cloud Dataflow](https://cloud.google.com/dataflow) Runner.
+Pipelines are assembled based on the defined configuration file and can be executed as Cloud Dataflow Jobs.
 
 Write the following yaml file and upload it to GCS (Suppose you upload it to gs://example/config.yaml).
 
