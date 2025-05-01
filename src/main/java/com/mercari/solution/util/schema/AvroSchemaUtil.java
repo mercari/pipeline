@@ -75,6 +75,7 @@ public class AvroSchemaUtil {
     public static final Schema REQUIRED_DOUBLE = Schema.create(Schema.Type.DOUBLE);
     public static final Schema REQUIRED_JSON = SchemaBuilder.builder().stringBuilder().prop("sqlType", "JSON").endString();
 
+    public static final Schema REQUIRED_LOGICAL_UUID_TYPE = LogicalTypes.uuid().addToSchema(Schema.create(Schema.Type.STRING));
     public static final Schema REQUIRED_LOGICAL_DATE_TYPE = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
     public static final Schema REQUIRED_LOGICAL_TIME_MILLI_TYPE = LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
     public static final Schema REQUIRED_LOGICAL_TIME_MICRO_TYPE = LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG));
@@ -97,6 +98,7 @@ public class AvroSchemaUtil {
             .nullType()
             .endUnion();
 
+    public static final Schema NULLABLE_LOGICAL_UUID_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.uuid().addToSchema(Schema.create(Schema.Type.STRING)));
     public static final Schema NULLABLE_LOGICAL_DATE_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT)));
     public static final Schema NULLABLE_LOGICAL_TIME_MILLI_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT)));
     public static final Schema NULLABLE_LOGICAL_TIME_MICRO_TYPE = Schema.createUnion(Schema.create(Schema.Type.NULL), LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG)));
