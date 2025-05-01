@@ -325,7 +325,7 @@ public class SelectTransform extends Transform {
             //final Iterable<TimestampedValue<MElement>> buffer = bufferState.readRange(minTimestamp, eventTime);
             final List<TimestampedValue<MElement>> buffer = Lists.newArrayList(bufferState.readRange(minTimestamp, eventTime));
 
-            final Map<String, Object> output = select.statefulSelect(input, buffer, eventTime, maxCount);
+            final Map<String, Object> output = select.select(input, buffer, maxCount, eventTime);
 
             //bufferState.clearRange();
             bufferState.add(TimestampedValue.of(input, eventTime));

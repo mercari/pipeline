@@ -1,9 +1,9 @@
 package com.mercari.solution.util.pipeline.select.stateful;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.mercari.solution.module.IllegalModuleException;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
@@ -22,37 +22,81 @@ public interface StatefulFunction extends SelectFunction {
     class Range implements Serializable {
 
         public String name;
-        public Integer count;
-        public Long duration;
-        public DateTimeUtil.TimeUnit durationUnit;
-        public Integer offset;
 
-        public Boolean isCountRange;
-        public Boolean isDurationRange;
+        public Integer count;
+        public Duration duration;
+
+        public Integer offsetCount;
+        public Duration offsetDuration;
+
+        public RangeType type;
 
         public Boolean isSingle;
 
         public static List<Range> of(final JsonArray jsonArray) {
             final List<Range> ranges = new ArrayList<>();
             for(final JsonElement element : jsonArray) {
-                final Range range = of(element.getAsJsonObject());
-                if(range == null) {
-                    continue;
-                }
+                final Range range = of(null, element.getAsJsonObject());
                 range.isSingle = false;
                 ranges.add(range);
             }
             return ranges;
         }
 
-        public static Range of(final JsonObject jsonObject) {
+        public static Range of(final String name, final JsonObject jsonObject) {
             if(jsonObject == null || jsonObject.isJsonNull()) {
                 return null;
             }
-            final Range range = new Gson().fromJson(jsonObject, Range.class);
-            if(range == null) {
-                return null;
+
+            final Range range = new Range();
+            if(jsonObject.has("name")) {
+                range.name = jsonObject.get("name").getAsString();
+            } else {
+                range.name = name;
             }
+            if(jsonObject.has("count")) {
+                range.count = jsonObject.get("count").getAsInt();
+            }
+
+            final DateTimeUtil.TimeUnit unit;
+            if(jsonObject.has("duration")) {
+                final Long durationAmount = jsonObject.get("duration").getAsLong();
+
+                if(jsonObject.has("unit")) {
+                    unit = DateTimeUtil.TimeUnit.valueOf(jsonObject.get("unit").getAsString());
+                } else {
+                    unit = DateTimeUtil.TimeUnit.second;
+                }
+                range.duration = DateTimeUtil.getDuration(unit, durationAmount);
+            } else {
+                unit = DateTimeUtil.TimeUnit.second;
+            }
+
+            if(range.count != null) {
+                range.type = RangeType.count;
+            } else if(range.duration != null) {
+                range.type = RangeType.duration;
+            } else {
+                throw new IllegalModuleException("select function range must contain count or duration parameter");
+            }
+
+            if(jsonObject.has("offset")) {
+                final Integer offset = jsonObject.get("offset").getAsInt();
+                switch (range.type) {
+                    case count -> {
+                        range.offsetCount = offset;
+                        range.offsetDuration = Duration.ZERO;
+                    }
+                    case duration -> {
+                        range.offsetCount = 0;
+                        range.offsetDuration = DateTimeUtil.getDuration(unit, offset.longValue());
+                    }
+                }
+            } else {
+                range.offsetCount = 0;
+                range.offsetDuration = Duration.ZERO;
+            }
+
             range.isSingle = true;
             return range;
         }
@@ -65,37 +109,42 @@ public interface StatefulFunction extends SelectFunction {
                 errorMessages.add("");
             } else if(count != null && count < 1) {
                 errorMessages.add("");
-            } else if(duration != null && duration < 1) {
+            } else if(duration != null && duration.getStandardSeconds() < 1) {
                 errorMessages.add("");
             }
 
-            if(offset != null && offset < 0) {
+            if(offsetCount != null && offsetCount < 0) {
+                errorMessages.add("");
+            } else if(offsetDuration != null && offsetDuration.getMillis() < 0) {
                 errorMessages.add("");
             }
             return errorMessages;
         }
 
-        public void setDefaults() {
-            if(durationUnit == null) {
-                durationUnit = DateTimeUtil.TimeUnit.second;
-            }
-            if(offset == null) {
-                offset = 0;
-            }
-            if(count != null) {
-                this.isCountRange = true;
-                this.isDurationRange = false;
-            } else if(duration != null) {
-                this.isCountRange = false;
-                this.isDurationRange = true;
-            }
+        public boolean filter(final Instant timestamp, final Instant bufferTimestamp, final Integer bufferCount) {
+            return switch (type) {
+                case count -> bufferCount < this.count;
+                case duration -> {
+                    final boolean flag = bufferTimestamp.isAfter(timestamp.minus(duration));
+                    if(offsetDuration != null && offsetDuration.getMillis() == 0) {
+                        yield flag;
+                    } else {
+                        yield flag && (bufferTimestamp.isBefore(timestamp.minus(offsetDuration)) || bufferTimestamp.isEqual(timestamp.minus(offsetDuration)));
+                    }
+                }
+            };
         }
 
-        public Duration getAsDuration() {
+        public Duration getDuration() {
             if(duration == null) {
                 return Duration.ZERO;
             }
-            return DateTimeUtil.getDuration(durationUnit, duration);
+            return duration;
+        }
+
+        public enum RangeType {
+            count,
+            duration
         }
 
     }
@@ -121,6 +170,11 @@ public interface StatefulFunction extends SelectFunction {
         public Integer firstCount() {
             return maxCount;
         }
+
+        @Override
+        public String toString() {
+            return String.format("maxCount: %d, maxDuration: %s", maxCount, maxDuration);
+        }
     }
 
     enum Func implements Serializable {
@@ -138,7 +192,7 @@ public interface StatefulFunction extends SelectFunction {
 
     Boolean filter(MElement input);
     List<String> validate(int parent, int index);
-    Accumulator addInput(Accumulator accumulator, MElement values, Instant timestamp, Integer count);
+    Accumulator addInput(Accumulator accumulator, MElement values, Integer count, Instant timestamp);
     Object extractOutput(Accumulator accumulator, Map<String, Object> values);
     List<Range> getRanges();
 
@@ -179,7 +233,7 @@ public interface StatefulFunction extends SelectFunction {
             if(!rangeJson.isJsonObject()) {
                 throw new IllegalArgumentException("Aggregator requires func or op parameter");
             }
-            final Range range = Range.of(rangeJson.getAsJsonObject());
+            final Range range = Range.of(name, rangeJson.getAsJsonObject());
             ranges.add(range);
         } else if(params.has("ranges")) {
             final JsonElement rangesJson = params.get("ranges");
@@ -198,7 +252,7 @@ public interface StatefulFunction extends SelectFunction {
         }
 
         return switch (op) {
-            case multi_regression -> Count.of(name, condition, ignore);
+            case multi_regression -> Count.of(name, condition, ranges, ignore);
             case null -> AggregateFunction.of(element, inputFields, ranges);
         };
     }
@@ -215,7 +269,7 @@ public interface StatefulFunction extends SelectFunction {
                 continue;
             }
             if(selectFunction instanceof StatefulFunction statefulFunction) {
-                accumulator = statefulFunction.addInput(accumulator, input, timestamp, count);
+                accumulator = statefulFunction.addInput(accumulator, input, count, timestamp);
             }
         }
         return accumulator;
@@ -231,11 +285,17 @@ public interface StatefulFunction extends SelectFunction {
             }
             final List<Range> ranges = statefulFunction.getRanges();
             for(final Range range : ranges) {
-                if(range.isCountRange && range.count > countMax) {
-                    countMax = range.count;
-                }
-                if(range.isDurationRange && range.getAsDuration().compareTo(durationMax) > 0) {
-                    durationMax = range.getAsDuration();
+                switch (range.type) {
+                    case count -> {
+                        if(range.count > countMax) {
+                            countMax = range.count;
+                        }
+                    }
+                    case duration -> {
+                        if(range.getDuration().compareTo(durationMax) > 0) {
+                            durationMax = range.getDuration();
+                        }
+                    }
                 }
             }
         }

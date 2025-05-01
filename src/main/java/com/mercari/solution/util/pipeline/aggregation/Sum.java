@@ -35,6 +35,7 @@ public class Sum implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore) {
 
         final Sum sum = new Sum();
@@ -42,6 +43,7 @@ public class Sum implements AggregateFunction {
         sum.field = field;
         sum.expression = expression;
         sum.condition = condition;
+        sum.ranges = ranges;
         sum.ignore = ignore;
 
         sum.inputFields = new ArrayList<>();
@@ -116,17 +118,28 @@ public class Sum implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Object inputValue;
         if(field != null) {
             inputValue = input.getPrimitiveValue(field);
         } else {
             inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
-        final Object prevValue = accumulator.get(name);
 
-        final Object sumNext = AggregateFunction.sum(prevValue, inputValue);
-        accumulator.put(name, sumNext);
+        if(getRanges().isEmpty()) {
+            final Object prevValue = accumulator.get(name);
+            final Object sumNext = AggregateFunction.sum(prevValue, inputValue);
+            accumulator.put(name, sumNext);
+        } else {
+            for(final Range range : getRanges()) {
+                if(!range.filter(timestamp, input.getTimestamp(), count)) {
+                    continue;
+                }
+                final Object prevValue = accumulator.get(range.name);
+                final Object sumNext = AggregateFunction.sum(prevValue, inputValue);
+                accumulator.put(range.name, sumNext);
+            }
+        }
         return accumulator;
     }
 

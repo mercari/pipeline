@@ -71,6 +71,7 @@ public class SimpleRegression implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -79,6 +80,7 @@ public class SimpleRegression implements AggregateFunction {
         regression.field = field;
         regression.expression = expression;
         regression.condition = condition;
+        regression.ranges = ranges;
         regression.ignore = ignore;
 
         regression.accumKeyCountName = name + ".count";
@@ -203,7 +205,7 @@ public class SimpleRegression implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer co) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer co, final Instant timestamp) {
         final Double y;
         if(field != null) {
             y = input.getAsDouble(field);

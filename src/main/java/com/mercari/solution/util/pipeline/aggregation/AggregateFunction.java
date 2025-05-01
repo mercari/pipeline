@@ -90,18 +90,18 @@ public interface AggregateFunction extends StatefulFunction {
         }
 
         return switch (op) {
-            case count -> Count.of(name, condition, ignore);
-            case sum -> Sum.of(name, inputFields, field, expression, condition, ignore);
-            case max -> Max.of(name, inputFields, field, expression, condition, ignore, false);
-            case min -> Max.of(name, inputFields, field, expression, condition, ignore, true);
+            case count -> Count.of(name, condition, ranges, ignore);
+            case sum -> Sum.of(name, inputFields, field, expression, condition, ranges, ignore);
+            case max -> Max.of(name, inputFields, field, expression, condition, ranges, ignore, false);
+            case min -> Max.of(name, inputFields, field, expression, condition, ranges, ignore, true);
             case last -> Last.of(name, inputFields, condition, ranges, ignore, params, false);
             case first -> Last.of(name, inputFields, condition, ranges, ignore, params, true);
-            case argmax -> ArgMax.of(name, inputFields, condition, ignore, params);
-            case argmin -> ArgMax.of(name, inputFields, condition, ignore, params, true);
-            case avg -> Avg.of(name, inputFields, field, expression, condition, ignore, params);
-            case std -> Std.of(name, inputFields, field, expression, condition, ignore, params);
-            case simple_regression -> SimpleRegression.of(name, inputFields, field, expression, condition, ignore, params);
-            case array_agg -> ArrayAgg.of(name, inputFields, condition, ignore, params);
+            case argmax -> ArgMax.of(name, inputFields, condition, ranges, ignore, params);
+            case argmin -> ArgMax.of(name, inputFields, condition, ranges, ignore, params, true);
+            case avg -> Avg.of(name, inputFields, field, expression, condition, ranges, ignore, params);
+            case std -> Std.of(name, inputFields, field, expression, condition, ranges, ignore, params);
+            case simple_regression -> SimpleRegression.of(name, inputFields, field, expression, condition, ranges, ignore, params);
+            case array_agg -> ArrayAgg.of(name, inputFields, condition, ranges, ignore, params);
             default -> throw new IllegalArgumentException("Not supported aggregation op: " + op);
         };
     }

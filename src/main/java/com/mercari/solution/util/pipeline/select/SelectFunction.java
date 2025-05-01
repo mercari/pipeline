@@ -5,7 +5,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
-import com.mercari.solution.util.pipeline.aggregation.Accumulator;
 import com.mercari.solution.util.pipeline.select.navigation.NavigationFunction;
 import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
 import org.joda.time.Instant;

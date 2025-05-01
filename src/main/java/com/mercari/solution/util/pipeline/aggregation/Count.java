@@ -48,11 +48,13 @@ public class Count implements AggregateFunction {
     public static Count of(
             final String name,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore) {
 
         final Count count = new Count();
         count.name = name;
         count.condition = condition;
+        count.ranges = ranges;
         count.ignore = ignore;
 
         count.inputFields = new ArrayList<>();
@@ -93,7 +95,7 @@ public class Count implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Object countPrev = accumulator.get(name);
         final long countNext;
         if(countPrev == null) {

@@ -180,7 +180,7 @@ public class BigtableSource extends Source {
         return switch (getMode()) {
             case batch -> expandBatch(begin, parameters, errorHandler);
             case changeDataCapture -> expandChangeStream(begin, parameters);
-            default -> throw new IllegalArgumentException("Not supported mode: " + getMode());
+            default -> throw new IllegalModuleException("bigtable source does not support mode: " + getMode());
         };
     }
 
@@ -243,10 +243,11 @@ public class BigtableSource extends Source {
             final Parameters parameters) {
 
         final BigtableIO.ReadChangeStream read = createReadChangeStreams(parameters);
-        final PCollection<KV<ByteString, ChangeStreamMutation>> mutations = begin
-                .apply("ReadChangeStream", read);
-        final PCollection<MElement> output = mutations
-                .apply("Convert", ParDo.of(new ChangeStreamToElementDoFn(getSchema())));
+        final PCollection<MElement> output = begin
+                .apply("ReadChangeStream", read)
+                .apply("Convert", ParDo
+                        .of(new ChangeStreamToElementDoFn()));
+
         return MCollectionTuple.of(output, getSchema());
     }
 
@@ -424,12 +425,6 @@ public class BigtableSource extends Source {
 
     private static class ChangeStreamToElementDoFn extends DoFn<KV<ByteString, ChangeStreamMutation>, MElement> {
 
-        private final Schema schema;
-
-        ChangeStreamToElementDoFn(final Schema schema) {
-            this.schema = schema;
-        }
-
         @ProcessElement
         public void processElement(ProcessContext c) {
             final KV<ByteString, ChangeStreamMutation> kv = c.element();
@@ -441,26 +436,9 @@ public class BigtableSource extends Source {
             if(rowKey == null || mutation == null) {
                 return;
             }
-            for(final Entry entry : mutation.getEntries()) {
-                switch (entry) {
-                    case SetCell set -> {
 
-                    }
-                    case AddToCell add -> {
-
-                    }
-                    case MergeToCell merge -> {
-
-                    }
-                    case DeleteCells deleteCells -> {
-
-                    }
-                    case DeleteFamily deleteFamily -> {
-
-                    }
-                    default -> throw new RuntimeException();
-                };
-            }
+            final MElement output = MElement.of(mutation, c.timestamp());
+            c.output(output);
         }
     }
 

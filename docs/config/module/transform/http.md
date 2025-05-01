@@ -13,12 +13,12 @@ Http transform module can be used to filter rows by specified criteria or to ret
 
 ## Http transform module parameters
 
-| parameter      | optional | type                             | description                                                                                                                 |
-|----------------|----------|----------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
-| request        | required | Request                          | Specify the configuration settings needed to create an HTTP request                                                         |
-| response       | required | Response                         | Specify the configuration options needed to parse the HTTP response                                                         |
-| select         | optional | Array<[SelectField](select.md)\> | Specify the field definitions if you want to refine, rename, or apply some processing to the http response or input fields. |
-| timeoutSeconds | optional | Integer                          | Specify the seconds in which a request is considered to have timed out and failed. The default is 60.                       |
+| parameter      | optional | type                                       | description                                                                                                                 |
+|----------------|----------|--------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| request        | required | Request                                    | Specify the configuration settings needed to create an HTTP request                                                         |
+| response       | required | Response                                   | Specify the configuration options needed to parse the HTTP response                                                         |
+| select         | optional | Array<[SelectField](../common/select.md)\> | Specify the field definitions if you want to refine, rename, or apply some processing to the http response or input fields. |
+| timeoutSeconds | optional | Integer                                    | Specify the seconds in which a request is considered to have timed out and failed. The default is 60.                       |
 
 ## Http transform module Request parameters
 

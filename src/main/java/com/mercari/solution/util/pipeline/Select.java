@@ -56,55 +56,65 @@ public class Select implements Serializable {
         selectFunctions.forEach(SelectFunction::setup);
     }
 
-    public Map<String, Object> select(final MElement element, final Instant timestamp) {
+    // Stateless select processing
+    public Map<String, Object> select(
+            final MElement element,
+            final Instant timestamp) {
+
         if(selectFunctions.isEmpty()) {
             return element.asPrimitiveMap();
         }
         return SelectFunction.apply(selectFunctions, element, timestamp);
     }
 
-    public Map<String, Object> select(final Map<String, Object> primitiveValues, final Instant timestamp) {
+    // Stateless select processing
+    public Map<String, Object> select(
+            final Map<String, Object> primitiveValues,
+            final Instant timestamp) {
+
         if(selectFunctions.isEmpty()) {
             return primitiveValues;
         }
         return SelectFunction.apply(selectFunctions, primitiveValues, timestamp);
     }
 
-    public Map<String, Object> statefulSelect(
+    // Stateful select processing
+    public Map<String, Object> select(
             final MElement input,
             final Iterable<TimestampedValue<MElement>> buffer,
-            final Instant timestamp,
-            final Integer count) {
-
-        Map<String, Object> values = new HashMap<>();
-        if(selectFunctions.isEmpty()) {
-            return values;
-        }
-        values.putAll(input.asPrimitiveMap());
+            final Integer count,
+            final Instant timestamp) {
 
         int index = count;
         Accumulator accumulator = Accumulator.of();
-        for(final TimestampedValue<MElement> value : buffer) {
-            final Instant valueTimestamp = value.getTimestamp();
-            final MElement valueElement = value.getValue();
+        for(final TimestampedValue<MElement> bufferTimestampedValue : buffer) {
+            final MElement bufferValue = bufferTimestampedValue.getValue();
             for(final SelectFunction selectFunction : selectFunctions) {
                 if(selectFunction.ignore()) {
                     continue;
                 }
                 if(selectFunction instanceof StatefulFunction statefulFunction) {
-                    accumulator = statefulFunction.addInput(accumulator, valueElement, valueTimestamp, index);
+                    accumulator = statefulFunction.addInput(accumulator, bufferValue, index, timestamp);
                 }
             }
             index = index - 1;
         }
 
         final Map<String, Object> outputs = new HashMap<>();
+        if(selectFunctions.isEmpty()) {
+            return outputs;
+        }
+        outputs.putAll(input.asPrimitiveMap());
+
         for(final SelectFunction selectFunction : selectFunctions) {
             if(selectFunction.ignore()) {
                 continue;
             }
             final Object output = switch (selectFunction) {
-                case StatefulFunction statefulFunction -> statefulFunction.extractOutput(accumulator, outputs);
+                case StatefulFunction statefulFunction -> {
+                    accumulator = statefulFunction.addInput(accumulator, input, index, timestamp);
+                    yield statefulFunction.extractOutput(accumulator, outputs);
+                }
                 case NavigationFunction navigationFunction -> null; //TODO
                 default -> selectFunction.apply(outputs, timestamp);
             };
@@ -116,33 +126,6 @@ public class Select implements Serializable {
     public boolean useSelect() {
         return !selectFunctions.isEmpty();
     }
-
-    /*
-    public Map<String, Object> sql(final List<MElement> elements) {
-        final MemorySchema memorySchema = MemorySchema.create("schema", List.of(
-            MemorySchema.createTable("INPUT", inputSchema, elements)
-        ));
-        //this.planner = Query.createPlanner(memorySchema);
-        try {
-            //this.statement = Query.createStatement(planner, sql);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        try(final ResultSet resultSet = statement.executeQuery()) {
-            final List<MElement> outputs = new ArrayList<>();
-            final List<Map<String, Object>> results = CalciteSchemaUtil.convert(resultSet);
-            for(final Map<String, Object> result : results) {
-                final MElement output = MElement.of(result, timestamp);
-                outputs.add(output);
-            }
-            return outputs;
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-        return null;
-    }
-      */
 
     public static Transform of(
             final String jobName,

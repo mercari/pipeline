@@ -125,7 +125,7 @@ public class Last implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Long currentMicros = input.getEpochMillis() * 1000L;
         final Long prevMicros = (Long) accumulator.get(timestampKeyName);
 

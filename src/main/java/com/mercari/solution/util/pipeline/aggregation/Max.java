@@ -58,6 +58,7 @@ public class Max implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final Boolean opposite) {
 
@@ -66,6 +67,7 @@ public class Max implements AggregateFunction {
         max.field = field;
         max.expression = expression;
         max.condition = condition;
+        max.ranges = ranges;
         max.ignore = ignore;
         max.opposite = opposite;
 
@@ -121,8 +123,7 @@ public class Max implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
-        final Object prevValue = accumulator.get(name);
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Object inputValue;
         if(field != null) {
             inputValue = input.getPrimitiveValue(field);
@@ -130,9 +131,22 @@ public class Max implements AggregateFunction {
             inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
 
-        final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
-        accumulator.put(name, maxNext);
+        if(getRanges().isEmpty()) {
+            final Object prevValue = accumulator.get(name);
+            final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
+            accumulator.put(name, maxNext);
+        } else {
+            for(final Range range : getRanges()) {
+                if(!range.filter(timestamp, input.getTimestamp(), count)) {
+                    continue;
+                }
+                final Object prevValue = accumulator.get(range.name);
+                final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
+                accumulator.put(range.name, maxNext);
+            }
+        }
         return accumulator;
+
     }
 
     @Override

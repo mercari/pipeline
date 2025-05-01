@@ -38,6 +38,7 @@ public class ArrayAgg implements AggregateFunction {
             final String name,
             final List<Schema.Field> inputFields,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -46,6 +47,7 @@ public class ArrayAgg implements AggregateFunction {
         arrayAgg.fields = new ArrayList<>();
         arrayAgg.inputFields = new ArrayList<>();
         arrayAgg.condition = condition;
+        arrayAgg.ranges = ranges;
         arrayAgg.ignore = ignore;
 
         if(params.has("fields") && params.get("fields").isJsonArray()) {
@@ -126,7 +128,7 @@ public class ArrayAgg implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         for(final Schema.Field inputField : inputFields) {
             final String key = outputKeyName(inputField.getName());
             final Object value = input.getPrimitiveValue(inputField.getName());

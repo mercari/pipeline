@@ -46,6 +46,7 @@ public class Avg implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -54,6 +55,7 @@ public class Avg implements AggregateFunction {
         avg.field = field;
         avg.expression = expression;
         avg.condition = condition;
+        avg.ranges = ranges;
         avg.ignore = ignore;
 
         avg.inputFields = new ArrayList<>();
@@ -143,7 +145,7 @@ public class Avg implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Double prevAvg = (Double) accumulator.get(name);
         final Double prevWeight = Optional.ofNullable((Double)accumulator.get(weightKeyName)).orElse(0D);
         final Double inputValue;

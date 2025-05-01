@@ -1,5 +1,6 @@
 package com.mercari.solution.module;
 
+import com.google.cloud.bigtable.data.v2.models.ChangeStreamMutation;
 import com.google.cloud.spanner.Struct;
 import com.google.datastore.v1.Entity;
 import com.google.firestore.v1.Document;
@@ -11,6 +12,7 @@ import com.mercari.solution.util.schema.converter.*;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 import org.apache.beam.sdk.values.Row;
+import org.apache.beam.sdk.values.TimestampedValue;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
@@ -44,6 +46,10 @@ public class MElement implements Serializable {
 
     public long getEpochMillis() {
         return epochMillis;
+    }
+
+    public org.joda.time.Instant getTimestamp() {
+        return org.joda.time.Instant.ofEpochMilli(epochMillis);
     }
 
     private MElement(int index, DataType dataType, Object value, long epochMillis) {
@@ -125,6 +131,14 @@ public class MElement implements Serializable {
 
     public static MElement of(PubsubMessage message, long epochMillis) {
         return new MElement(0, DataType.MESSAGE, message, epochMillis);
+    }
+
+    public static MElement of(ChangeStreamMutation bigtableMutation, org.joda.time.Instant timestamp) {
+        return of(bigtableMutation, timestamp.getMillis());
+    }
+
+    public static MElement of(ChangeStreamMutation bigtableMutation, long epochMillis) {
+        return new MElement(0, DataType.BIGTABLE_DATACHANGERECORD, bigtableMutation, epochMillis);
     }
 
     public static MElement of(int index, DataType dataType, Object value, long epochMillis) {
@@ -292,6 +306,10 @@ public class MElement implements Serializable {
                     default -> throw new IllegalArgumentException("Not supported type: " + type);
                 })
                 .orElseGet(HashMap::new);
+    }
+
+    public TimestampedValue<MElement> asTimestampedValue() {
+        return TimestampedValue.of(this, getTimestamp());
     }
 
     public static Object getAsStandardValue(final Schema.FieldType fieldType, final Object primitiveValue) {

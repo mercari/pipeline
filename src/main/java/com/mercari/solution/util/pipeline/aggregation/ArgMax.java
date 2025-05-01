@@ -62,16 +62,18 @@ public class ArgMax implements AggregateFunction {
             final String name,
             final List<Schema.Field> inputFields,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final JsonObject params) {
 
-        return of(name, inputFields, condition, ignore, params, false);
+        return of(name, inputFields, condition, ranges, ignore, params, false);
     }
 
     public static ArgMax of(
             final String name,
             final List<Schema.Field> inputFields,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final JsonObject params,
             final boolean opposite) {
@@ -79,6 +81,7 @@ public class ArgMax implements AggregateFunction {
         final ArgMax argmax = new ArgMax();
         argmax.name = name;
         argmax.condition = condition;
+        argmax.ranges = ranges;
         argmax.ignore = ignore;
         argmax.fields = new ArrayList<>();
 
@@ -171,7 +174,7 @@ public class ArgMax implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Object prevComparingValue = accumulator.get(comparingKeyName);
         final Object inputComparingValue;
         if(comparingField != null) {

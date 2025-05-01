@@ -51,6 +51,7 @@ public class Std implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -59,6 +60,7 @@ public class Std implements AggregateFunction {
         std.field = field;
         std.expression = expression;
         std.condition = condition;
+        std.ranges = ranges;
         std.ignore = ignore;
 
         if(params.has("ddof") && params.get("ddof").isJsonPrimitive()) {
@@ -166,7 +168,7 @@ public class Std implements AggregateFunction {
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Instant timestamp, final Integer count) {
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Double inputValue;
         if(field != null) {
             inputValue = input.getAsDouble(field);
