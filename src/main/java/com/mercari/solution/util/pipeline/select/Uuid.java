@@ -1,7 +1,7 @@
 package com.mercari.solution.util.pipeline.select;
 
 import com.google.gson.JsonObject;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.Schema;
 import org.joda.time.Instant;
 
 import java.util.ArrayList;

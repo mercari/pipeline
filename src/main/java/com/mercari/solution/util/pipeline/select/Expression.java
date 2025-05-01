@@ -1,8 +1,9 @@
 package com.mercari.solution.util.pipeline.select;
 
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.ExpressionUtil;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import org.joda.time.Instant;
 
 import java.util.*;
@@ -19,16 +20,16 @@ public class Expression implements SelectFunction {
 
     private transient net.objecthunter.exp4j.Expression expression;
 
-    Expression(String name, String expressionString, Set<String> expressionVariables, boolean ignore) {
+    Expression(String name, String expressionString, Set<String> expressionVariables, Schema.FieldType outputFieldType, boolean ignore) {
         this.name = name;
         this.expressionString = expressionString;
         this.expressionVariables = expressionVariables;
 
         this.inputFields = new ArrayList<>();
         for(String variable : expressionVariables) {
-            this.inputFields.add(Schema.Field.of(variable, Schema.FieldType.DOUBLE.withNullable(true)));
+            this.inputFields.add(Schema.Field.of(variable, Schema.FieldType.FLOAT64.withNullable(true)));
         }
-        this.outputFieldType = Schema.FieldType.DOUBLE.withNullable(true);
+        this.outputFieldType = outputFieldType;
         this.ignore = ignore;
     }
 
@@ -38,7 +39,16 @@ public class Expression implements SelectFunction {
         }
         final String expression = jsonObject.get("expression").getAsString();
         final Set<String> expressionVariables = ExpressionUtil.estimateVariables(expression);
-        return new Expression(name, expression, expressionVariables, ignore);
+
+        final String type;
+        if(jsonObject.has("type")) {
+            type = jsonObject.get("type").getAsString();
+        } else {
+            type = "float64";
+        }
+        final Schema.FieldType outputFieldType = Schema.FieldType.type(Schema.Type.of(type));
+
+        return new Expression(name, expression, expressionVariables, outputFieldType, ignore);
     }
 
     @Override
@@ -74,7 +84,10 @@ public class Expression implements SelectFunction {
             final Double value = ExpressionUtil.getAsDouble(variable);
             values.put(variableName, value);
         }
-        return this.expression.setVariables(values).evaluate();
+        double result = this.expression
+                .setVariables(values)
+                .evaluate();
+        return ElementSchemaUtil.getAsPrimitive(outputFieldType, result);
     }
 
 }

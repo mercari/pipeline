@@ -5,13 +5,10 @@ import com.google.gson.Gson;
 import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.OptionUtil;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.pipeline.mutation.UnifiedMutation;
 import com.mercari.solution.util.pipeline.mutation.UnifiedMutationCoder;
-import com.mercari.solution.util.pipeline.union.Union;
-import com.mercari.solution.util.pipeline.union.UnionValue;
 import com.mercari.solution.util.schema.StructSchemaUtil;
 import org.apache.avro.Schema;
 import org.apache.beam.sdk.coders.*;
@@ -27,7 +24,7 @@ import java.io.Serializable;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class ChangeStreamTransform implements TransformModule {
+public class ChangeStreamTransform {
 
     private static final Logger LOG = LoggerFactory.getLogger(ChangeStreamTransform.class);
 
@@ -140,12 +137,10 @@ public class ChangeStreamTransform implements TransformModule {
     }
 
 
-    @Override
     public String getName() {
         return "changeStream";
     }
 
-    @Override
     public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, TransformConfig config) {
         return transform(inputs, config);
     }
@@ -204,8 +199,10 @@ public class ChangeStreamTransform implements TransformModule {
                     throw new IllegalArgumentException();
                 } else {
                     // Batch restore
-                    return switch (sourceService) {
-                        case spanner -> {
+                    if(true) {
+                        return switch (sourceService) {
+                            case spanner -> {
+                            /*
                             final Restore restore = new Restore(
                                     parameters,
                                     inputTags, inputNames, inputTypes,
@@ -217,8 +214,10 @@ public class ChangeStreamTransform implements TransformModule {
                                     .setCoder(UnifiedMutationCoder.of());
                             yield Collections.singletonMap(
                                     config.getName(), FCollection.of(config.getName(), mutations, DataType.UNIFIEDMUTATION, StructSchemaUtil.createDataChangeRecordRowSchema()));
-                        }
-                        case bigtable -> {
+                             */
+                                throw new IllegalArgumentException();
+                            }
+                            case bigtable -> {
                             /*
                             switch (targetService) {
                                 case spanner -> throw new IllegalArgumentException();
@@ -229,11 +228,15 @@ public class ChangeStreamTransform implements TransformModule {
                             }
 
                              */
-                            throw new IllegalArgumentException();
-                        }
-                        case datastream -> throw new IllegalArgumentException();
-                        case bigquery -> throw new IllegalArgumentException();
-                    };
+                                throw new IllegalArgumentException();
+                            }
+                            case datastream -> throw new IllegalArgumentException();
+                            case bigquery -> throw new IllegalArgumentException();
+                            default -> null;
+                        };
+                    } else {
+                        return null;
+                    }
                 }
             }
             default -> throw new IllegalArgumentException("Not supported type: " + parameters.getType());
@@ -346,6 +349,7 @@ public class ChangeStreamTransform implements TransformModule {
      */
 
 
+    /*
     public static class Restore extends PTransform<PCollectionTuple, PCollection<UnifiedMutation>> {
 
         private final ChangeStreamTransformParameters parameters;
@@ -518,8 +522,11 @@ public class ChangeStreamTransform implements TransformModule {
 
         }
 
+
+     */
     }
 
+    /*
     private interface Converter<InputT, OutputT> extends Serializable {
         List<KV<KV<String, String>, OutputT>> convert(InputT input);
     }
@@ -536,4 +543,6 @@ public class ChangeStreamTransform implements TransformModule {
                 boolean applyUpsertForUpdate);
     }
 
-}
+     */
+
+

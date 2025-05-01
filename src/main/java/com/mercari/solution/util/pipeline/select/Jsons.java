@@ -5,10 +5,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.DataType;
-import com.mercari.solution.util.converter.RowToJsonConverter;
-import com.mercari.solution.util.schema.RowSchemaUtil;
-import org.apache.beam.sdk.schemas.Schema;
-import org.apache.beam.sdk.values.Row;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.schema.converter.ElementToJsonConverter;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,13 +33,13 @@ public class Jsons implements SelectFunction {
     private transient List<SelectFunction> selectFunctions;
 
     Jsons(final String name,
-           final String selectFunctionsJson,
-           final Schema.FieldType outputFieldType,
-           final List<Schema.Field> inputFields,
-           final String eachField,
-           final Schema outputSchema,
-           final boolean isArray,
-           final boolean ignore) {
+          final String selectFunctionsJson,
+          final Schema.FieldType outputFieldType,
+          final List<Schema.Field> inputFields,
+          final String eachField,
+          final Schema outputSchema,
+          final boolean isArray,
+          final boolean ignore) {
 
         this.name = name;
         this.selectFunctionsJson = selectFunctionsJson;
@@ -55,25 +53,18 @@ public class Jsons implements SelectFunction {
         this.ignore = ignore;
     }
 
-    public static Jsons of(String name, JsonObject jsonObject, DataType outputType, List<Schema.Field> inputFields, boolean ignore) {
+    public static Jsons of(String name, JsonObject jsonObject, List<Schema.Field> inputFields, boolean ignore) {
         if(!jsonObject.has("fields")) {
             throw new IllegalArgumentException("SelectField: " + name + " json func requires fields parameter");
         } else if(!jsonObject.get("fields").isJsonArray()) {
             throw new IllegalArgumentException("SelectField: " + name + " json func fields parameter must be array");
         }
         final JsonElement fieldsElement = jsonObject.get("fields");
-        final List<SelectFunction> childFunctions = SelectFunction.of(fieldsElement.getAsJsonArray(), inputFields, outputType);
+        final List<SelectFunction> childFunctions = SelectFunction.of(fieldsElement.getAsJsonArray(), inputFields);
         final Schema outputSchema = SelectFunction.createSchema(childFunctions);
         final List<Schema.Field> nestedInputFields = new ArrayList<>();
         for(final SelectFunction selectFunction : childFunctions) {
             nestedInputFields.addAll(selectFunction.getInputFields());
-        }
-
-        final String mode;
-        if(jsonObject.has("mode") && jsonObject.get("mode").isJsonPrimitive()) {
-            mode = jsonObject.get("mode").getAsString();
-        } else {
-            mode = "nullable";
         }
 
         final String eachField;
@@ -81,6 +72,15 @@ public class Jsons implements SelectFunction {
             eachField = jsonObject.get("each").getAsString();
         } else {
             eachField = null;
+        }
+
+        final String mode;
+        if(jsonObject.has("mode") && jsonObject.get("mode").isJsonPrimitive()) {
+            mode = jsonObject.get("mode").getAsString();
+        } else if(eachField != null) {
+            mode = "repeated";
+        } else {
+            mode = "nullable";
         }
 
         final Schema.FieldType fieldType = Schema.FieldType.STRING;
@@ -91,7 +91,7 @@ public class Jsons implements SelectFunction {
             default -> throw new IllegalArgumentException("illegal json mode: " + mode);
         };
 
-        final boolean isArray = Schema.TypeName.ARRAY.equals(outputFieldType.getTypeName());
+        final boolean isArray = Schema.Type.array.equals(outputFieldType.getType());
 
         final List<Schema.Field> deduplicatedNestedInputFields = new ArrayList<>();
         final Set<String> nestedInputFieldNames = new HashSet<>();
@@ -130,7 +130,7 @@ public class Jsons implements SelectFunction {
     @Override
     public void setup() {
         final JsonArray jsonArray = new Gson().fromJson(this.selectFunctionsJson, JsonArray.class);
-        this.selectFunctions = SelectFunction.of(jsonArray, inputFields, outputType);
+        this.selectFunctions = SelectFunction.of(jsonArray, inputFields);
         for(final SelectFunction selectFunction : this.selectFunctions) {
             selectFunction.setup();
         }
@@ -141,7 +141,7 @@ public class Jsons implements SelectFunction {
         if(isArray) {
             if(eachField == null || !input.containsKey(eachField)) {
                 final Map<String, Object> newInput = new HashMap<>(input);
-                final Map<String, Object> output = SelectFunction.apply(selectFunctions, newInput, outputType, timestamp);
+                final Map<String, Object> output = SelectFunction.apply(selectFunctions, newInput, timestamp);
                 final JsonObject jsonObject = toJsonObject(output);
                 return List.of(jsonObject.toString());
             }
@@ -153,7 +153,7 @@ public class Jsons implements SelectFunction {
             for(final Object value :eachValues) {
                 final Map<String, Object> newInput = new HashMap<>(input);
                 newInput.put("_", value);
-                final Map<String, Object> output =  SelectFunction.apply(selectFunctions, newInput, outputType, timestamp);
+                final Map<String, Object> output =  SelectFunction.apply(selectFunctions, newInput, timestamp);
                 outputs.add(output);
             }
 
@@ -164,7 +164,7 @@ public class Jsons implements SelectFunction {
             return jsonArray.toString();
         } else {
             final Map<String, Object> newInput = new HashMap<>(input);
-            final Map<String, Object> output = SelectFunction.apply(selectFunctions, newInput, outputType, timestamp);
+            final Map<String, Object> output = SelectFunction.apply(selectFunctions, newInput, timestamp);
             final JsonObject jsonObject = toJsonObject(output);
             return jsonObject.toString();
         }
@@ -174,8 +174,7 @@ public class Jsons implements SelectFunction {
         if(values == null) {
             return null;
         }
-        final Row row = RowSchemaUtil.create(outputSchema, values);
-        return RowToJsonConverter.convertObject(row);
+        return ElementToJsonConverter.convert(outputSchema, values, null);
     }
 
 }

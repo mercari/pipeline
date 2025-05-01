@@ -10,13 +10,13 @@ import com.google.protobuf.NullValue;
 import com.google.protobuf.Timestamp;
 import com.google.protobuf.util.Timestamps;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.converter.EntityToMapConverter;
+import com.mercari.solution.util.schema.converter.EntityToMapConverter;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
-import org.apache.hadoop.hbase.util.Bytes;
 import org.joda.time.Instant;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.*;
@@ -238,22 +238,16 @@ public class EntitySchemaUtil {
         }
 
         final Value value = entity.getPropertiesOrThrow(fieldName);
-        final byte[] bytes;
-        switch (value.getValueTypeCase()) {
-            case BOOLEAN_VALUE -> bytes = Bytes.toBytes(value.getBooleanValue());
-            case STRING_VALUE -> bytes = Bytes.toBytes(value.getStringValue());
-            case BLOB_VALUE -> bytes = value.getBlobValue().asReadOnlyByteBuffer().array();
-            case INTEGER_VALUE -> bytes = Bytes.toBytes(value.getIntegerValue());
-            case DOUBLE_VALUE -> bytes = Bytes.toBytes(value.getDoubleValue());
-            case TIMESTAMP_VALUE -> {
-                final Timestamp timestamp = value.getTimestampValue();
-                bytes = Bytes.toBytes(Timestamps.toMicros(timestamp));
-            }
-            default -> {
-                return null;
-            }
-        }
-        return ByteString.copyFrom(bytes);
+        return switch (value.getValueTypeCase()) {
+            case BOOLEAN_VALUE -> BigtableSchemaUtil.toByteString(value.getBooleanValue());
+            case STRING_VALUE -> BigtableSchemaUtil.toByteString(value.getStringValue());
+            case BLOB_VALUE -> BigtableSchemaUtil.toByteString(value.getBlobValue().asReadOnlyByteBuffer());
+            case INTEGER_VALUE -> BigtableSchemaUtil.toByteString(value.getIntegerValue());
+            case DOUBLE_VALUE -> BigtableSchemaUtil.toByteString(value.getDoubleValue());
+            case TIMESTAMP_VALUE -> BigtableSchemaUtil.toByteString(Timestamps.toMicros(value.getTimestampValue()));
+            case ENTITY_VALUE -> BigtableSchemaUtil.toByteString(asPrimitiveMap(value.getEntityValue()));
+            default -> null;
+        };
     }
 
     public static List<Float> getAsFloatList(final Entity entity, final String fieldName) {
@@ -266,30 +260,23 @@ public class EntitySchemaUtil {
         }
 
         final Value value = entity.getPropertiesOrThrow(fieldName);
-        switch (value.getValueTypeCase()) {
-            case ARRAY_VALUE: {
+        return switch (value.getValueTypeCase()) {
+            case ARRAY_VALUE -> {
                 final List<Value> arrayList = value.getArrayValue().getValuesList();
-                if(arrayList.size() == 0) {
-                    return new ArrayList<>();
+                if(arrayList.isEmpty()) {
+                    yield new ArrayList<>();
                 }
-                arrayList.stream().map(v -> {
-                    switch (v.getValueTypeCase()) {
-                        case DOUBLE_VALUE:
-                            return Double.valueOf(v.getDoubleValue()).floatValue();
-                        case INTEGER_VALUE:
-                            return Long.valueOf(v.getIntegerValue()).floatValue();
-                        case STRING_VALUE:
-                            return Float.valueOf(v.getStringValue());
-                        case BOOLEAN_VALUE:
-                            return v.getBooleanValue() ? 1F :  0F;
-                        default:
-                            return null;
-                    }
-                }).collect(Collectors.toList());
+                yield arrayList.stream().map(v -> switch (v.getValueTypeCase()) {
+                        case DOUBLE_VALUE -> Double.valueOf(v.getDoubleValue()).floatValue();
+                        case INTEGER_VALUE -> Long.valueOf(v.getIntegerValue()).floatValue();
+                        case STRING_VALUE -> Float.valueOf(v.getStringValue());
+                        case BOOLEAN_VALUE -> v.getBooleanValue() ? 1F :  0F;
+                        default -> null;
+                    }).collect(Collectors.toList());
             }
-            default:
-                return new ArrayList<>();
-        }
+            case NULL_VALUE, VALUETYPE_NOT_SET -> new ArrayList<>();
+            default -> new ArrayList<>();
+        };
     }
 
     public static Object getAsPrimitive(Object object, Schema.FieldType fieldType, String field) {
@@ -496,6 +483,27 @@ public class EntitySchemaUtil {
         };
     }
 
+    public static Object getAsStandard(final Value value) {
+        if(value == null) {
+            return null;
+        }
+        return switch (value.getValueTypeCase()) {
+            case BOOLEAN_VALUE -> value.getBooleanValue();
+            case STRING_VALUE -> value.getStringValue();
+            case INTEGER_VALUE -> value.getIntegerValue();
+            case DOUBLE_VALUE -> value.getDoubleValue();
+            case BLOB_VALUE -> ByteBuffer.wrap(value.getBlobValue().toByteArray());
+            case TIMESTAMP_VALUE -> DateTimeUtil.toEpochMicroSecond(value.getTimestampValue());
+            case GEO_POINT_VALUE -> value.getGeoPointValue().toString();
+            case ENTITY_VALUE -> EntityToMapConverter.convert(value.getEntityValue());
+            case ARRAY_VALUE -> value.getArrayValue().getValuesList().stream()
+                    .map(EntitySchemaUtil::getAsPrimitive)
+                    .collect(Collectors.toList());
+            case KEY_VALUE -> value.getKeyValue().toString();
+            case NULL_VALUE, VALUETYPE_NOT_SET -> null;
+        };
+    }
+
     public static Object convertPrimitive(Schema.FieldType fieldType, Object primitiveValue) {
         if (primitiveValue == null) {
             return null;
@@ -566,6 +574,20 @@ public class EntitySchemaUtil {
         for(final Map.Entry<String, Value> entry : entity.getPropertiesMap().entrySet()) {
             final Object value = getAsPrimitive(entry.getValue());
             primitiveMap.put(entry.getKey(), value);
+        }
+        return primitiveMap;
+    }
+
+    public static Map<String, Object> asStandardMap(final Entity entity, final Collection<String> fields) {
+        final Map<String, Object> primitiveMap = new HashMap<>();
+        if(entity == null) {
+            return primitiveMap;
+        }
+        for(final Map.Entry<String, Value> entry : entity.getPropertiesMap().entrySet()) {
+            if(fields == null || fields.isEmpty() || fields.contains(entry.getKey())) {
+                final Object value = getAsPrimitive(entry.getValue());
+                primitiveMap.put(entry.getKey(), value);
+            }
         }
         return primitiveMap;
     }
@@ -728,49 +750,21 @@ public class EntitySchemaUtil {
                 value = Value.newBuilder().setNullValue(NullValue.NULL_VALUE).build();
             } else {
                 final Object object = values.get(field.getName());
-                switch (field.getType().getTypeName()) {
-                    case BOOLEAN:
-                        value = Value.newBuilder().setBooleanValue((Boolean)object).build();
-                        break;
-                    case STRING:
-                        value = Value.newBuilder().setStringValue(object.toString()).build();
-                        break;
-                    case BYTES:
-                        value = Value.newBuilder().setBlobValue(ByteString.copyFrom((byte[]) object)).build();
-                        break;
-                    case BYTE:
-                        value = Value.newBuilder().setIntegerValue((Byte) object).build();
-                        break;
-                    case INT16:
-                        value = Value.newBuilder().setIntegerValue((Short) object).build();
-                        break;
-                    case INT32:
-                        value = Value.newBuilder().setIntegerValue((Integer) object).build();
-                        break;
-                    case INT64:
-                        value = Value.newBuilder().setIntegerValue((Long) object).build();
-                        break;
-                    case FLOAT:
-                        value = Value.newBuilder().setDoubleValue((Float) object).build();
-                        break;
-                    case DOUBLE:
-                        value = Value.newBuilder().setDoubleValue((Double) object).build();
-                        break;
-                    case DATETIME:
-                        value = Value.newBuilder().setTimestampValue(DateTimeUtil.toProtoTimestamp((Long) object)).build();
-                        break;
-                    case DECIMAL:
-                        value = Value.newBuilder().setStringValue(object.toString()).build();
-                        break;
-                    case ROW:
-                        value = Value.newBuilder().setEntityValue((Entity) object).build();
-                        break;
-                    case ITERABLE:
-                    case ARRAY:
-                    default: {
-                        throw new IllegalArgumentException("Not supported type: " + field.getName() + ", type: " + field.getType());
-                    }
-                }
+                value = switch (field.getType().getTypeName()) {
+                    case BOOLEAN -> Value.newBuilder().setBooleanValue((Boolean)object).build();
+                    case STRING -> Value.newBuilder().setStringValue(object.toString()).build();
+                    case BYTES -> Value.newBuilder().setBlobValue(ByteString.copyFrom((byte[]) object)).build();
+                    case BYTE -> Value.newBuilder().setIntegerValue((Byte) object).build();
+                    case INT16 -> Value.newBuilder().setIntegerValue((Short) object).build();
+                    case INT32 -> Value.newBuilder().setIntegerValue((Integer) object).build();
+                    case INT64 -> Value.newBuilder().setIntegerValue((Long) object).build();
+                    case FLOAT -> Value.newBuilder().setDoubleValue((Float) object).build();
+                    case DOUBLE -> Value.newBuilder().setDoubleValue((Double) object).build();
+                    case DATETIME -> Value.newBuilder().setTimestampValue(DateTimeUtil.toProtoTimestamp((Long) object)).build();
+                    case DECIMAL -> Value.newBuilder().setStringValue(object.toString()).build();
+                    case ROW -> Value.newBuilder().setEntityValue((Entity) object).build();
+                    default -> throw new IllegalArgumentException("Not supported type: " + field.getName() + ", type: " + field.getType());
+                };
             }
             builder.putProperties(field.getName(), value);
         }
@@ -843,15 +837,30 @@ public class EntitySchemaUtil {
         if(value == null) {
             return null;
         }
-        switch (value.getValueTypeCase()) {
-            case STRING_VALUE:
-                return Base64.getDecoder().decode(value.getStringValue());
-            case BLOB_VALUE:
-                return value.getBlobValue().toByteArray();
-            case NULL_VALUE:
-            default:
-                return null;
+        return switch (value.getValueTypeCase()) {
+            case STRING_VALUE -> Base64.getDecoder().decode(value.getStringValue());
+            case BLOB_VALUE -> value.getBlobValue().toByteArray();
+            default -> null;
+        };
+    }
+
+    public static ByteBuffer getAsBytes(final Entity entity, final String fieldName) {
+        if(entity == null) {
+            return null;
         }
+        final Value value = entity.getPropertiesMap().getOrDefault(fieldName, null);
+        if(value == null) {
+            return null;
+        }
+        final byte[] bytes = switch (value.getValueTypeCase()) {
+            case STRING_VALUE -> Base64.getDecoder().decode(value.getStringValue());
+            case BLOB_VALUE -> value.getBlobValue().toByteArray();
+            default -> null;
+        };
+        return Optional
+                .ofNullable(bytes)
+                .map(ByteBuffer::wrap)
+                .orElse(null);
     }
 
     public static Instant getTimestamp(final Entity entity, final String fieldName) {
@@ -915,7 +924,7 @@ public class EntitySchemaUtil {
             String fieldName = entity
                     .getPropertiesOrThrow("property_name")
                     .getStringValue();
-            if(prefix.length() > 0 && fieldName.startsWith(prefix)) {
+            if(!prefix.isEmpty() && fieldName.startsWith(prefix)) {
                 fieldName = fieldName.replaceFirst(prefix + "\\.", "");
             }
 
@@ -939,9 +948,9 @@ public class EntitySchemaUtil {
                     .withNullable(true));
         }
 
-        if(embeddedFields.size() > 0) {
+        if(!embeddedFields.isEmpty()) {
             for(final Map.Entry<String, List<Entity>> child : embeddedFields.entrySet()) {
-                final String childPrefix = (prefix.length() == 0 ? "" : prefix + ".") + child.getKey();
+                final String childPrefix = (prefix.isEmpty() ? "" : prefix + ".") + child.getKey();
                 final Schema childSchema = convertSchema(childPrefix, child.getValue());
                 builder.addField(Schema.Field.of(
                         child.getKey(),
@@ -953,38 +962,19 @@ public class EntitySchemaUtil {
     }
 
     private static Schema.FieldType convertFieldType(final String type) {
-        switch (type) {
-            case "Blob":
-            case "ShortBlobg":
-                return Schema.FieldType.BYTES.withNullable(true);
-            case "IM":
-            case "Link":
-            case "Email":
-            case "User":
-            case "PhoneNumber":
-            case "PostalAddress":
-            case "Category":
-            case "Text":
-            case "String":
-                return Schema.FieldType.STRING;
-            case "Rating":
-            case "Integer":
-                return Schema.FieldType.INT64;
-            case "Float":
-                return Schema.FieldType.DOUBLE;
-            case "Boolean":
-                return Schema.FieldType.BOOLEAN;
-            case "Date/Time":
-                return Schema.FieldType.DATETIME;
-            case "EmbeddedEntity":
-                //return Schema.FieldType.row(convertSchema(type));
-            case "Key":
-                //return Schema.FieldType.array(convertFieldType(type.getArrayElementType()));
-            case "NULL":
-                return Schema.FieldType.STRING;
-            default:
-                throw new IllegalArgumentException("Spanner type: " + type + " not supported!");
-        }
+        return switch (type) {
+            case "Blob", "ShortBlobg" -> Schema.FieldType.BYTES.withNullable(true);
+            case "IM", "Link", "Email", "User", "PhoneNumber", "PostalAddress", "Category", "Text", "String" ->
+                    Schema.FieldType.STRING;
+            case "Rating", "Integer" -> Schema.FieldType.INT64;
+            case "Float" -> Schema.FieldType.DOUBLE;
+            case "Boolean" -> Schema.FieldType.BOOLEAN;
+            case "Date/Time" -> Schema.FieldType.DATETIME;
+            //return Schema.FieldType.row(convertSchema(type));
+            //return Schema.FieldType.array(convertFieldType(type.getArrayElementType()));
+            case "EmbeddedEntity", "Key", "NULL" -> Schema.FieldType.STRING;
+            default -> throw new IllegalArgumentException("Spanner type: " + type + " not supported!");
+        };
     }
 
     private static String toStringKey(Key key) {

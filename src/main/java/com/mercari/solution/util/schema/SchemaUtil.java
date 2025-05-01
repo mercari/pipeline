@@ -8,7 +8,7 @@ import com.google.firestore.v1.Document;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.DataType;
-import com.mercari.solution.util.converter.*;
+import com.mercari.solution.util.schema.converter.*;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.RowCoder;
@@ -162,7 +162,7 @@ public class SchemaUtil {
                     }
                     case ROW: {
                         final Schema outputRowSchema = (Schema) outputSchema;
-                        return new TypeTransform<Schema,Schema,GenericRecord,Row>(outputRowSchema, s -> s, RecordToRowConverter::convert, RowCoder.of(outputRowSchema));
+                        return new TypeTransform<Schema,Schema,GenericRecord,Row>(outputRowSchema, s -> s, AvroToRowConverter::convert, RowCoder.of(outputRowSchema));
                     }
                     default:
                         throw new IllegalArgumentException("Not supported conversion from: " + inputType + " to: " + outputType);
@@ -186,7 +186,7 @@ public class SchemaUtil {
                 switch (outputType) {
                     case AVRO: {
                         final org.apache.avro.Schema outputAvroSchema = (org.apache.avro.Schema) outputSchema;
-                        return new TypeTransform<String,org.apache.avro.Schema,Struct,GenericRecord>(outputAvroSchema.toString(), AvroSchemaUtil::convertSchema, StructToRecordConverter::convert, AvroCoder.of(outputAvroSchema));
+                        return new TypeTransform<String,org.apache.avro.Schema,Struct,GenericRecord>(outputAvroSchema.toString(), AvroSchemaUtil::convertSchema, StructToAvroConverter::convert, AvroCoder.of(outputAvroSchema));
                     }
                     case ROW: {
                         final Schema outputRowSchema = (Schema) outputSchema;
@@ -204,7 +204,7 @@ public class SchemaUtil {
                 switch (outputType) {
                     case AVRO: {
                         final org.apache.avro.Schema outputAvroSchema = (org.apache.avro.Schema) outputSchema;
-                        return new TypeTransform<String, org.apache.avro.Schema, Document, GenericRecord>(outputAvroSchema.toString(), AvroSchemaUtil::convertSchema, DocumentToRecordConverter::convert, AvroCoder.of(outputAvroSchema));
+                        return new TypeTransform<String, org.apache.avro.Schema, Document, GenericRecord>(outputAvroSchema.toString(), AvroSchemaUtil::convertSchema, DocumentToAvroConverter::convert, AvroCoder.of(outputAvroSchema));
                     }
                     case ROW: {
                         final Schema outputRowSchema = (Schema) outputSchema;
@@ -222,7 +222,7 @@ public class SchemaUtil {
                 switch (outputType) {
                     case AVRO: {
                         final org.apache.avro.Schema outputAvroSchema = (org.apache.avro.Schema) outputSchema;
-                        return new TypeTransform<String, org.apache.avro.Schema,Entity,GenericRecord>(outputAvroSchema.toString(), AvroSchemaUtil::convertSchema, EntityToRecordConverter::convert, AvroCoder.of(outputAvroSchema));
+                        return new TypeTransform<String, org.apache.avro.Schema,Entity,GenericRecord>(outputAvroSchema.toString(), AvroSchemaUtil::convertSchema, EntityToAvroConverter::convert, AvroCoder.of(outputAvroSchema));
                     }
                     case ROW: {
                         final Schema outputRowSchema = (Schema) outputSchema;

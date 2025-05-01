@@ -1,23 +1,26 @@
 package com.mercari.solution.config;
 
-import com.google.api.services.storage.Storage;
+import com.google.common.io.CharStreams;
 import com.google.gson.*;
-import com.mercari.solution.module.transform.BeamSQLTransform;
+import com.mercari.solution.module.IllegalModuleException;
 import com.mercari.solution.util.TemplateUtil;
+import com.mercari.solution.util.gcp.ArtifactRegistryUtil;
+import com.mercari.solution.util.gcp.ParameterManagerUtil;
+import com.mercari.solution.util.gcp.PubSubUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
-import freemarker.template.Template;
-import freemarker.template.TemplateException;
-import org.joda.time.DateTimeZone;
-import org.joda.time.LocalDate;
-import org.joda.time.format.DateTimeFormat;
-import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
+import java.io.Reader;
 import java.io.Serializable;
-import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 
@@ -25,80 +28,67 @@ public class Config implements Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Config.class);
 
-    private static final DateTimeFormatter FORMATTER_YYYYMMDD = DateTimeFormat.forPattern("yyyyMMdd");
-    private static final String[] RESERVED_PARAMETERS = {
-            "__EVENT_EPOCH_SECOND__",
-            "__EVENT_EPOCH_SECOND_PRE__",
-            "__EVENT_EPOCH_MILLISECOND__",
-            "__EVENT_EPOCH_MILLISECOND_PRE__",
-            "__EVENT_DATETIME_ISO__",
-            "__EVENT_DATETIME_ISO_PRE__"
-    };
-
     private String name;
+    private String version;
     private String description;
+
+    private Systems system;
+    private Map<String, String> args;
     private List<Import> imports;
-    private Settings settings;
+
+    private Options options;
     private List<SourceConfig> sources;
     private List<TransformConfig> transforms;
     private List<SinkConfig> sinks;
+    private List<FailureConfig> failures;
 
     private Boolean empty;
+    private String content;
+
+    // deprecated
+    private Options settings;
+
 
     public String getName() {
         return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
     }
 
     public String getDescription() {
         return description;
     }
 
+    public Systems getSystem() {
+        return system;
+    }
+
     public List<Import> getImports() {
         return imports;
     }
 
-    public void setImports(List<Import> imports) {
-        this.imports = imports;
+    public Map<String, String> getArgs() {
+        return args;
     }
 
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public Settings getSettings() {
-        return settings;
-    }
-
-    public void setSettings(Settings settings) {
-        this.settings = settings;
+    public Options getOptions() {
+        return Optional
+                .ofNullable(options)
+                .orElse(settings);
     }
 
     public List<SourceConfig> getSources() {
         return sources;
     }
 
-    public void setSources(List<SourceConfig> sources) {
-        this.sources = sources;
-    }
-
     public List<TransformConfig> getTransforms() {
         return transforms;
-    }
-
-    public void setTransforms(List<TransformConfig> transforms) {
-        this.transforms = transforms;
     }
 
     public List<SinkConfig> getSinks() {
         return sinks;
     }
 
-    public void setSinks(List<SinkConfig> sinks) {
-        this.sinks = sinks;
+    public List<FailureConfig> getFailures() {
+        return failures;
     }
 
     public Boolean getEmpty() {
@@ -109,335 +99,421 @@ public class Config implements Serializable {
         this.empty = empty;
     }
 
+    public String getContent() {
+        return content;
+    }
+
     public void validate() {
-        final List<String> messages = new ArrayList<>();
+        final List<String> errorMessages = new ArrayList<>();
+        if(this.system != null) {
+            errorMessages.addAll(this.system.validate());
+        }
         if(this.imports != null) {
-            for(final Import i : this.imports) {
-                messages.addAll(i.validate());
+            for(int i=0; i<this.imports.size(); i++) {
+                final Import imp = this.imports.get(i);
+                imp.setDefaults(this.args);
+                errorMessages.addAll(imp.validate(i));
             }
         }
+
+        if(!errorMessages.isEmpty()) {
+            throw new IllegalModuleException("", "pipeline", errorMessages);
+        }
     }
-    public void setDefaults() {
+
+    public void setDefaults(
+            final String context,
+            final Map<String, String> args) {
+
+        if(this.system == null) {
+            this.system = new Systems();
+            this.system.setDefaults(context);
+        }
+
+        if(this.args == null) {
+            this.args = new HashMap<>();
+        }
+        this.args.putAll(args);
+
         if(this.imports == null) {
             this.imports = new ArrayList<>();
         } else {
             for(final Import i : this.imports) {
-                i.setDefaults();
+                i.setDefaults(this.args);
+            }
+        }
+        if(this.empty == null) {
+            this.empty = false;
+        }
+    }
+
+    public static class Systems implements Serializable {
+
+        private String context;
+        private Failures failures;
+
+        public String getContext() {
+            return context;
+        }
+
+        public Failures getFailures() {
+            return failures;
+        }
+
+        public List<String> validate() {
+            final List<String> errorMessages = new ArrayList<>();
+            return errorMessages;
+        }
+
+        public void setDefaults(String context) {
+            if(context != null && !context.isEmpty()) {
+                this.context = context;
+            }
+            if(this.failures == null) {
+                this.failures = new Failures();
+            }
+            this.failures.setDefaults();
+        }
+    }
+
+    public static class Failures implements Serializable {
+
+        private Boolean failFast;
+        private Boolean union;
+
+        public Boolean getFailFast() {
+            return failFast;
+        }
+
+        public Boolean getUnion() {
+            return union;
+        }
+
+        public List<String> validate() {
+            final List<String> errorMessages = new ArrayList<>();
+            return errorMessages;
+        }
+
+        public void setDefaults() {
+            if(union == null) {
+                union = false;
             }
         }
     }
 
-    public class Import implements Serializable {
+    public static class Import implements Serializable {
 
-        private String name;
         private String base;
         private List<String> files;
-
-        private Map<String, List<String>> inputs;
-        private Map<String, JsonObject> parameters;
-
-        private List<String> includes;
-        private List<String> excludes;
-
-        public String getName() {
-            return name;
-        }
-
-        public void setName(String name) {
-            this.name = name;
-        }
+        private Map<String, String> args;
+        private String filter;
 
         public String getBase() {
             return base;
-        }
-
-        public void setBase(String base) {
-            this.base = base;
         }
 
         public List<String> getFiles() {
             return files;
         }
 
-        public void setFiles(List<String> files) {
-            this.files = files;
+        public Map<String, String> getArgs() {
+            return args;
         }
 
-        public Map<String, List<String>> getInputs() {
-            return inputs;
+        public String getFilter() {
+            return filter;
         }
 
-        public void setInputs(Map<String, List<String>> inputs) {
-            this.inputs = inputs;
-        }
-
-        public Map<String, JsonObject> getParameters() {
-            return parameters;
-        }
-
-        public void setParameters(Map<String, JsonObject> parameters) {
-            this.parameters = parameters;
-        }
-
-        public List<String> getIncludes() {
-            return includes;
-        }
-
-        public void setIncludes(List<String> includes) {
-            this.includes = includes;
-        }
-
-        public List<String> getExcludes() {
-            return excludes;
-        }
-
-        public void setExcludes(List<String> excludes) {
-            this.excludes = excludes;
-        }
-
-        public boolean filter(final String name) {
-            if(this.includes.size() > 0) {
-                return this.includes.contains(name);
+        public List<String> validate(int index) {
+            final List<String> errorMessages = new ArrayList<>();
+            if((this.files == null || this.files.isEmpty()) && this.base == null) {
+                errorMessages.add("config.imports[" + index + "].files must not be empty" );
             }
-            if(this.excludes.size() > 0) {
-                return !this.excludes.contains(name);
-            }
-            return true;
+            return errorMessages;
         }
 
-        public List<String> validate() {
-            return new ArrayList<>();
-        }
-
-        public void setDefaults() {
-            if(this.files == null) {
-                this.files = new ArrayList<>();
+        public void setDefaults(final Map<String, String> args) {
+            if(this.args == null) {
+                this.args = new HashMap<>();
             }
-            if(this.inputs == null) {
-                this.inputs = new HashMap<>();
-            }
-            if(parameters == null) {
-                this.parameters = new HashMap<>();
-            }
-            if(includes == null) {
-                this.includes = new ArrayList<>();
-            }
-            if(excludes == null) {
-                this.excludes = new ArrayList<>();
+            if(args != null && !args.isEmpty()) {
+                this.args.putAll(args);
             }
         }
     }
 
-    public boolean isCalcitePlanner() {
-        if(this.transforms == null) {
-            return false;
-        }
-        final String beamSQLTransformName = new BeamSQLTransform().getName();
-        final Optional<TransformConfig> tc = this.transforms.stream()
-                .filter(c -> beamSQLTransformName.equals(c.getModule()))
-                .findFirst();
-        if(tc.isEmpty()) {
-            return false;
-        }
-        if(tc.get().getParameters() == null) {
-            return false;
-        }
-        if(!tc.get().getParameters().has("planner")) {
-            return false;
-        }
-        if(!tc.get().getParameters().get("planner").isJsonPrimitive()) {
-            return false;
-        }
-
-        return "calcite".equals(tc.get().getParameters().get("planner").getAsString().trim().toLowerCase());
+    public enum Format {
+        json,
+        yaml,
+        unknown
     }
 
-    public static Config parse(final String configJson, final String[] args) throws Exception {
-        final Map<String, Map<String, String>> argsParameters = filterConfigArgs(args);
-        final String templatedConfigJson = executeTemplate(
-                configJson, argsParameters.getOrDefault("template", new HashMap<>()));
+    public static Config empty() {
+        final Config config = new Config();
+        config.setEmpty(true);
+        return config;
+    }
 
-        final JsonObject jsonObject;
+    public static Config load(final String configParam) throws IOException {
+        return load(configParam, null, Format.unknown, new String[0]);
+    }
+
+    public static Config load(final String configParam, final String context, final Format format, final String[] args) throws IOException {
+        final Map<String, String> templateArgs = extractArgs(args);
+        return load(configParam, context, format, templateArgs);
+    }
+
+    public static Config load(final String configParam, final String context, final Format format, final Map<String, String> args) throws IOException {
+        if(configParam == null) {
+            throw new IllegalModuleException("", "pipeline", List.of("pipeline parameter config must not be null"));
+        }
+
+        final String content;
+        if(configParam.startsWith("gs://")) {
+            LOG.info("config parameter is GCS path: {}", configParam);
+            content = StorageUtil.readString(configParam);
+        } else if(ParameterManagerUtil.isParameterVersionResource(configParam)) {
+            LOG.info("config parameter is Parameter Manager resource: {}", configParam);
+            final ParameterManagerUtil.Version version = ParameterManagerUtil.getParameterVersion(configParam);
+            content = new String(version.payload, StandardCharsets.UTF_8);
+        } else if(configParam.startsWith("ar://")) {
+            LOG.info("config parameter is GAR path: {}", configParam);
+            final byte[] bytes = ArtifactRegistryUtil.download(configParam);
+            content = new String(bytes, StandardCharsets.UTF_8);
+        } else if(configParam.startsWith("data:")) {
+            LOG.info("config parameter is base64 encoded");
+            content = new String(Base64.getDecoder().decode(configParam.replaceFirst("data:", "")), StandardCharsets.UTF_8);
+        } else if(PubSubUtil.isSubscriptionResource(configParam)) {
+            LOG.info("config parameter is PubSub Subscription: {}", configParam);
+            content = PubSubUtil.getTextMessage(configParam);
+            if(content == null) {
+                return empty();
+            }
+            LOG.info("config content: {}", content);
+        } else  {
+            Path path;
+            try {
+                path = Paths.get(configParam);
+            } catch (final Throwable e) {
+                path = null;
+            }
+            if(path != null && Files.exists(path) && !Files.isDirectory(path)) {
+                LOG.info("config parameter is local file path: {}", configParam);
+                content = Files.readString(path, StandardCharsets.UTF_8);
+            } else {
+                LOG.info("config parameter body: {}", configParam);
+                content = configParam;
+            }
+        }
+
+        if(content == null) {
+            throw new IllegalModuleException("", "pipeline", List.of("pipeline parameter config must not be empty"));
+        }
+
+        return parse(content, context, format, args);
+    }
+
+    public static Config parse(final String configText, final String context, final Format format, final String[] args) {
+        final Map<String, String> templateArgs = extractArgs(args);
+        return parse(configText, context, format, templateArgs);
+    }
+
+    public static Config parse(final String configText, final String context, final Format format, final Map<String, String> templateArgs) {
         try {
-            jsonObject= new Gson().fromJson(templatedConfigJson, JsonObject.class);
-        } catch (Exception e) {
-            final String errorMessage = "Failed to parse template json: " + templatedConfigJson;
-            LOG.error(errorMessage);
-            throw new IllegalArgumentException(errorMessage, e);
-        }
+            JsonObject jsonObject = convertConfigJson(configText, format);
+            LOG.info("Pipeline config: \n{}", new GsonBuilder().setPrettyPrinting().create().toJson(jsonObject));
 
-        // Config sources parameters
-        if(jsonObject.has("sources")) {
-            final JsonElement jsonSources = jsonObject.get("sources");
-            if(!jsonSources.isJsonArray()) {
-                throw new IllegalArgumentException("Config sources must be array! : " + jsonSources);
+            try {
+                jsonObject = processArgs(jsonObject, templateArgs);
+            } catch (Throwable e) {
+                throw new IllegalModuleException("", "pipeline", e);
             }
-            replaceParameters(jsonSources.getAsJsonArray(), argsParameters);
-        }
 
-        // Config transforms parameters
-        if(jsonObject.has("transforms")) {
-            final JsonElement jsonTransforms = jsonObject.get("transforms");
-            if(!jsonTransforms.isJsonArray()) {
-                throw new IllegalArgumentException("Config transforms must be array! : " + jsonTransforms);
-            }
-            replaceParameters(jsonTransforms.getAsJsonArray(), argsParameters);
-        }
-
-        // Config sinks parameters
-        if(jsonObject.has("sinks")) {
-            final JsonElement jsonSinks = jsonObject.get("sinks");
-            if(!jsonSinks.isJsonArray()) {
-                throw new IllegalArgumentException("Config sinks must be array! : " + jsonSinks);
-            }
-            replaceParameters(jsonSinks.getAsJsonArray(), argsParameters);
-        }
-
-        LOG.info("Pipeline config: \n" + new GsonBuilder().setPrettyPrinting().create().toJson(jsonObject));
-        final String jsonText = replaceParameters(jsonObject.toString());
-        try {
-            final Config config = new Gson().fromJson(jsonText, Config.class);
+            final Config config = new Gson().fromJson(jsonObject, Config.class);
             if(config == null) {
-                throw new IllegalArgumentException("Json Config must not be null !");
+                throw new IllegalModuleException("", "pipeline", List.of("config must not be empty"));
             }
-            config.setDefaults();
+            config.validate();
+            config.setDefaults(context, templateArgs);
 
-            final Map<String, Object> templateArgs = getTemplateArgs(args);
+            final List<FailureConfig> failures = Optional.ofNullable(config.getFailures()).orElseGet(ArrayList::new)
+                    .stream()
+                    .filter(Objects::nonNull)
+                    .peek(c -> c.setArgs(templateArgs))
+                    .peek(c -> c.applyContext(config.system.context))
+                    .collect(Collectors.toList());
+
             final List<SourceConfig> sources = Optional.ofNullable(config.getSources()).orElseGet(ArrayList::new)
                     .stream()
                     .filter(Objects::nonNull)
                     .peek(c -> c.setArgs(templateArgs))
+                    .peek(c -> c.applyContext(config.system.context))
+                    .peek(c -> c.setFailFast(config.system.failures.failFast))
+                    .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
             final List<TransformConfig> transforms = Optional.ofNullable(config.getTransforms()).orElseGet(ArrayList::new)
                     .stream()
                     .filter(Objects::nonNull)
                     .peek(c -> c.setArgs(templateArgs))
+                    .peek(c -> c.applyContext(config.system.context))
+                    .peek(c -> c.setFailFast(config.system.failures.failFast))
+                    .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
             final List<SinkConfig> sinks = Optional.ofNullable(config.getSinks()).orElseGet(ArrayList::new)
                     .stream()
                     .filter(Objects::nonNull)
                     .peek(c -> c.setArgs(templateArgs))
+                    .peek(c -> c.applyContext(config.system.context))
+                    .peek(c -> c.setFailFast(config.system.failures.failFast))
+                    .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
 
-            if(config.getImports() != null && config.getImports().size() > 0) {
-                final Storage storage = StorageUtil.storage();
-                for(final Import i : config.getImports()) {
-                    final Map<String, List<String>> inputs = Optional.ofNullable(i.getInputs()).orElseGet(HashMap::new);
-                    final Map<String, JsonObject> iparams = Optional.ofNullable(i.getParameters()).orElseGet(HashMap::new);
-                    for(final String path : i.getFiles()) {
-                        final String gcsPath = (i.getBase() == null ? "" : i.getBase()) + path;
-                        final String json = StorageUtil.readString(storage, gcsPath);
-                        final Config importConfig = Config.parse(json, args);
-                        if(importConfig.getSources() != null) {
-                            sources.addAll(importConfig.getSources()
-                                    .stream()
-                                    .filter(c -> i.filter(c.getName()))
-                                    .peek(c -> {
-                                        if(iparams.containsKey(c.getName())) {
-                                            final JsonObject iparam = iparams.get(c.getName());
-                                            setAltParameters(c.getParameters(), iparam);
-                                        }
-                                    })
-                                    .collect(Collectors.toList()));
-                        }
-                        if(importConfig.getTransforms() != null) {
-                            transforms.addAll(importConfig.getTransforms()
-                                    .stream()
-                                    .filter(c -> i.filter(c.getName()))
-                                    .peek(c -> {
-                                        if(iparams.containsKey(c.getName())) {
-                                            final JsonObject iparam = iparams.get(c.getName());
-                                            setAltParameters(c.getParameters(), iparam);
-                                        }
-                                        if(inputs.containsKey(c.getName())) {
-                                            c.setInputs(inputs.get(c.getName()));
-                                        }
-                                    })
-                                    .collect(Collectors.toList()));
-                        }
-                        if(importConfig.getSinks() != null) {
-                            sinks.addAll(importConfig.getSinks()
-                                    .stream()
-                                    .filter(c -> i.filter(c.getName()))
-                                    .peek(c -> {
-                                        if(iparams.containsKey(c.getName())) {
-                                            final JsonObject iparam = iparams.get(c.getName());
-                                            setAltParameters(c.getParameters(), iparam);
-                                        }
-                                        if(inputs.containsKey(c.getName())) {
-                                            final List<String> input = inputs.get(c.getName());
-                                            if(input.size() > 0) {
-                                                c.setInput(input.get(0));
-                                            }
-                                        }
-                                    })
-                                    .collect(Collectors.toList()));
-                        }
+            for(final Import i : config.getImports()) {
+                for(final String path : i.getFiles()) {
+                    final String configPath = (i.getBase() == null ? "" : i.getBase()) + path;
+                    final Config importConfig = load(configPath, config.system.context, format, i.args);
+                    if(importConfig.getSources() != null) {
+                        sources.addAll(importConfig.getSources()
+                                .stream()
+                                .peek(c -> c.setArgs(i.args))
+                                .peek(c -> c.applyContext(config.system.context))
+                                .peek(c -> c.setFailFast(config.system.failures.failFast))
+                                .peek(c -> c.addFailures(failures))
+                                .toList());
+                    }
+                    if(importConfig.getTransforms() != null) {
+                        transforms.addAll(importConfig.getTransforms()
+                                .stream()
+                                .peek(c -> c.setArgs(i.args))
+                                .peek(c -> c.applyContext(config.system.context))
+                                .peek(c -> c.setFailFast(config.system.failures.failFast))
+                                .peek(c -> c.addFailures(failures))
+                                .toList());
+                    }
+                    if(importConfig.getSinks() != null) {
+                        sinks.addAll(importConfig.getSinks()
+                                .stream()
+                                .peek(c -> c.setArgs(i.args))
+                                .peek(c -> c.applyContext(config.system.context))
+                                .peek(c -> c.setFailFast(config.system.failures.failFast))
+                                .peek(c -> c.addFailures(failures))
+                                .toList());
                     }
                 }
             }
 
-            if(sources.size() == 0 && transforms.size() == 0 && sinks.size() == 0) {
-                throw new IllegalArgumentException("no module definition!");
+            if(sources.isEmpty() && transforms.isEmpty() && sinks.isEmpty()) {
+                throw new IllegalModuleException("", "pipeline", List.of("config has no module(sources,transforms,sinks) definition"));
             }
 
-            config.setSources(sources);
-            config.setTransforms(transforms);
-            config.setSinks(sinks);
+            config.sources = sources;
+            config.transforms = transforms;
+            config.sinks = sinks;
+            config.failures = failures;
+
+            config.content = jsonObject.toString();
 
             return config;
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to parse config json: " + jsonText, e);
+            throw new IllegalModuleException("", "pipeline", e);
         }
     }
 
-    static Map<String, Object> getTemplateArgs(final String[] args) {
+    public static JsonObject convertConfigJson(
+            final Reader reader,
+            final Format format) {
+        try {
+            final String configText = CharStreams.toString(reader);
+            return convertConfigJson(configText, format);
+        } catch (IOException e) {
+            throw new IllegalModuleException("", "pipeline", e);
+        }
+    }
+
+    public static JsonObject convertConfigJson(
+            final String configText,
+            final Format format) {
+
+        switch (format) {
+            case yaml -> {
+                try {
+                    return parseYaml(configText);
+                } catch (final Throwable e) {
+                    final String errorMessage = "Failed to parse config yaml error: " + e.getMessage() + ", yaml: " + configText;
+                    LOG.error(errorMessage);
+                    throw new IllegalModuleException("", "pipeline", List.of(errorMessage));
+                }
+            }
+            case json -> {
+                try {
+                    return new Gson().fromJson(configText, JsonObject.class);
+                } catch (final Throwable e) {
+                    final String errorMessage = "Failed to parse config json error: " + e.getMessage() + ", json: " + configText;
+                    LOG.error(errorMessage);
+                    throw new IllegalModuleException("", "pipeline", List.of(errorMessage));
+                }
+            }
+            default -> {
+                try {
+                    return new Gson().fromJson(configText, JsonObject.class);
+                } catch (final JsonSyntaxException e) {
+                    try {
+                        return parseYaml(configText);
+                    } catch (final Throwable ee) {
+                        final String errorMessage = "Failed to parse config: " + configText;
+                        LOG.error(errorMessage);
+                        throw new IllegalModuleException(errorMessage, e);
+                    }
+                } catch (final Throwable e) {
+                    final String errorMessage = "Failed to parse config json: " + configText;
+                    LOG.error(errorMessage);
+                    throw new IllegalModuleException(errorMessage, e);
+                }
+            }
+        }
+    }
+
+    static Map<String, String> extractArgs(final String[] args) {
         final Map<String, Map<String, String>> argsParameters = filterConfigArgs(args);
-        final Map<String, Object> map = new HashMap<>();
-        for(final Map.Entry<String, String> entry : argsParameters.getOrDefault("template", new HashMap<>()).entrySet()) {
-            JsonElement jsonElement;
-            try {
-                jsonElement = new Gson().fromJson(entry.getValue(), JsonElement.class);
-            } catch (final JsonSyntaxException e) {
-                jsonElement = new JsonPrimitive(entry.getValue());
-            }
-            map.put(entry.getKey(), extractTemplateParameters(jsonElement));
-        }
-        return map;
+        return new LinkedHashMap<>(argsParameters.getOrDefault("args", new LinkedHashMap<>()));
     }
 
-    private static void replaceParameters(final JsonArray array, final Map<String, Map<String, String>> args) {
-        for(final JsonElement element : array) {
-            if(element.isJsonNull()) {
-                continue;
-            }
-            if(!element.isJsonObject()) {
-                throw new IllegalArgumentException("Config module must be object! -> " + element.toString());
-            }
-            final JsonObject module = element.getAsJsonObject();
-            if(!module.has("name")) {
-                throw new IllegalArgumentException("Config module must be set name -> " + module.toString());
-            }
-            final String name = module.get("name").getAsString();
-            if(!args.containsKey(name)) {
-                continue;
-            }
-            if(!module.has("parameters")) {
-                module.add("parameters", new JsonObject());
-            }
-
-            final JsonObject parameters = module.get("parameters").getAsJsonObject();
-            for(final Map.Entry<String, String> arg : args.get(name).entrySet()) {
-                parameters.addProperty(arg.getKey(), arg.getValue());
+    private static JsonObject processArgs(final JsonObject configJson, final Map<String, String> args) {
+        if(configJson.has("args") && configJson.get("args").isJsonObject()) {
+            for(final Map.Entry<String, JsonElement> entry : configJson.getAsJsonObject("args").entrySet()) {
+                if(entry.getValue().isJsonPrimitive()) {
+                    final JsonPrimitive primitive = entry.getValue().getAsJsonPrimitive();
+                    if(primitive.isString()) {
+                        args.put(entry.getKey(), entry.getValue().getAsString());
+                    } else {
+                        args.put(entry.getKey(), entry.getValue().toString());
+                    }
+                } else {
+                    args.put(entry.getKey(), entry.getValue().toString());
+                }
             }
         }
-    }
 
-    private static String replaceParameters(final String json) {
-        final LocalDate today = LocalDate.now(DateTimeZone.forID("Asia/Tokyo"));
-        return json
-                .replaceAll("<TODAY>", FORMATTER_YYYYMMDD.print(today))
-                .replaceAll("<YESTERDAY>", FORMATTER_YYYYMMDD.print(today.plusDays(-1)));
+        if(args.isEmpty()) {
+            return configJson;
+        }
+
+        final Map<String,String> values = new HashMap<>();
+        for(final Map.Entry<String,String> entry : args.entrySet()) {
+            final String value;
+            if(TemplateUtil.isTemplateText(entry.getValue())) {
+                value = TemplateUtil.executeStrictTemplate(entry.getValue(), values);
+            } else {
+                value = entry.getValue();
+            }
+            values.put("${args." + entry.getKey() + "}", value);
+        }
+
+        String configText = configJson.toString();
+        for(final Map.Entry<String, String> entry : values.entrySet()) {
+            configText = configText.replaceAll(Pattern.quote(entry.getKey()), entry.getValue());
+        }
+        return new Gson().fromJson(configText, JsonObject.class);
     }
 
     private static Map<String, Map<String, String>> filterConfigArgs(final String[] args) {
@@ -452,59 +528,12 @@ public class Config implements Serializable {
                                 (s1, s2) -> s2)));
     }
 
-    private static String executeTemplate(final String config, final Map<String, String> parameters) throws IOException, TemplateException {
-        final Map<String, Object> map = new HashMap<>();
-        for(final String reservedParameter : RESERVED_PARAMETERS) {
-            map.put(reservedParameter, String.format("${%s}", reservedParameter));
-        }
-        for(final Map.Entry<String, String> entry : parameters.entrySet()) {
-            JsonElement jsonElement;
-            try {
-                jsonElement = new Gson().fromJson(entry.getValue(), JsonElement.class);
-            } catch (final JsonSyntaxException e) {
-                jsonElement = new JsonPrimitive(entry.getValue());
-            }
-            map.put(entry.getKey(), extractTemplateParameters(jsonElement));
-        }
-
-        final Template template = TemplateUtil.createSafeTemplate("config", config);
-        final StringWriter stringWriter = new StringWriter();
-        template.process(map, stringWriter);
-        return stringWriter.toString();
-    }
-
-    private static Object extractTemplateParameters(final JsonElement jsonElement) {
-        if(jsonElement.isJsonPrimitive()) {
-            if(jsonElement.getAsJsonPrimitive().isBoolean()) {
-                return jsonElement.getAsBoolean();
-            } else if(jsonElement.getAsJsonPrimitive().isString()) {
-                return jsonElement.getAsString();
-            } else if(jsonElement.getAsJsonPrimitive().isNumber()) {
-                return jsonElement.getAsLong();
-            }
-            return jsonElement.toString();
-        }
-        if(jsonElement.isJsonObject()) {
-            final Map<String, Object> map = new HashMap<>();
-            jsonElement.getAsJsonObject().entrySet().forEach(kv -> map.put(kv.getKey(), extractTemplateParameters(kv.getValue())));
-            return map;
-        }
-        if(jsonElement.isJsonArray()) {
-            final List<Object> list = new ArrayList<>();
-            jsonElement.getAsJsonArray().forEach(element -> list.add(extractTemplateParameters(element)));
-            return list;
-        }
-        return null;
-    }
-
-    private static void setAltParameters(final JsonObject parameters, final JsonObject altParameters) {
-        for(final Map.Entry<String, JsonElement> entry : altParameters.entrySet()) {
-            if(entry.getValue().isJsonObject()) {
-                setAltParameters(parameters.get(entry.getKey()).getAsJsonObject(), entry.getValue().getAsJsonObject());
-            } else {
-                parameters.add(entry.getKey(), entry.getValue());
-            }
-        }
+    private static JsonObject parseYaml(final String text) {
+        final Yaml yaml = new Yaml();
+        final Map<?, ?> loadedYaml = yaml.loadAs(text, Map.class);
+        final Gson gson = new GsonBuilder().setPrettyPrinting().create();
+        final String jsonText = gson.toJson(loadedYaml, Map.class);
+        return new Gson().fromJson(jsonText, JsonObject.class);
     }
 
 }

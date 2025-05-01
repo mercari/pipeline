@@ -5,27 +5,16 @@ import com.google.api.services.drive.DriveScopes;
 import com.google.api.services.drive.model.File;
 import com.google.api.services.storage.Storage;
 import com.google.api.services.storage.model.StorageObject;
-import com.google.cloud.spanner.Struct;
-import com.google.datastore.v1.Entity;
-import com.google.gson.Gson;
-import com.mercari.solution.config.SinkConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.aws.S3Util;
-import com.mercari.solution.util.converter.EntityToMapConverter;
-import com.mercari.solution.util.converter.RecordToMapConverter;
-import com.mercari.solution.util.converter.RowToMapConverter;
-import com.mercari.solution.util.converter.StructToMapConverter;
 import com.mercari.solution.util.gcp.DriveUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
-import com.mercari.solution.util.schema.*;
+import com.mercari.solution.util.pipeline.Union;
 import freemarker.template.Template;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.metrics.Counter;
+import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Reshuffle;
 import org.apache.beam.sdk.values.*;
@@ -34,12 +23,16 @@ import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.s3.S3Client;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.util.*;
 
 
-public class CopyFileSink implements SinkModule {
+@Sink.Module(name="copyfile")
+public class CopyFileSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(CopyFileSink.class);
+
+    private static final Counter ERROR_COUNTER = Metrics.counter("copyfile", "error");
 
     private static class CopyFileSinkParameters implements Serializable {
 
@@ -53,39 +46,16 @@ public class CopyFileSink implements SinkModule {
         private S3Parameters s3;
         private DriveParameters drive;
 
-        private Boolean failFast;
-
-        public StorageService getSourceService() {
-            return sourceService;
+        private static class DriveParameters implements Serializable {
+            private String user;
         }
 
-        public StorageService getDestinationService() {
-            return destinationService;
+        private static class S3Parameters implements Serializable {
+            private String accessKey;
+            private String secretKey;
+            private String region;
         }
 
-        public String getSource() {
-            return source;
-        }
-
-        public String getDestination() {
-            return destination;
-        }
-
-        public Map<String, String> getAttributes() {
-            return attributes;
-        }
-
-        public S3Parameters getS3() {
-            return s3;
-        }
-
-        public DriveParameters getDrive() {
-            return drive;
-        }
-
-        public Boolean getFailFast() {
-            return failFast;
-        }
 
         private void validate() {
             final List<String> errorMessages = new ArrayList<>();
@@ -103,13 +73,13 @@ public class CopyFileSink implements SinkModule {
                 if(s3 == null) {
                     errorMessages.add("s3 parameter is required for CopyFileSink config when using s3.");
                 } else {
-                    if(s3.getAccessKey() == null) {
+                    if(s3.accessKey == null) {
                         errorMessages.add("s3.accessKey parameter is required for CopyFileSink config when using s3.");
                     }
-                    if(s3.getSecretKey() == null) {
+                    if(s3.secretKey == null) {
                         errorMessages.add("s3.secretKey parameter is required for CopyFileSink config when using s3.");
                     }
-                    if(s3.getRegion() == null) {
+                    if(s3.region == null) {
                         errorMessages.add("s3.region parameter is required for CopyFileSink config when using s3.");
                     }
                 }
@@ -119,13 +89,13 @@ public class CopyFileSink implements SinkModule {
                 if(drive == null) {
                     errorMessages.add("drive parameter is required for CopyFileSink config when using drive.");
                 } else {
-                    if(drive.getUser() == null) {
+                    if(drive.user == null) {
                         errorMessages.add("drive.user parameter is required for CopyFileSink config when using drive.");
                     }
                 }
             }
 
-            if(errorMessages.size() > 0) {
+            if(!errorMessages.isEmpty()) {
                 throw new IllegalArgumentException(String.join("\n", errorMessages));
             }
         }
@@ -134,40 +104,7 @@ public class CopyFileSink implements SinkModule {
             if(attributes == null) {
                 attributes = new HashMap<>();
             }
-            if(failFast == null) {
-                failFast = true;
-            }
         }
-    }
-
-    private static class DriveParameters implements Serializable {
-
-        private String user;
-
-        public String getUser() {
-            return user;
-        }
-
-    }
-
-    private static class S3Parameters implements Serializable {
-
-        private String accessKey;
-        private String secretKey;
-        private String region;
-
-        public String getAccessKey() {
-            return accessKey;
-        }
-
-        public String getSecretKey() {
-            return secretKey;
-        }
-
-        public String getRegion() {
-            return region;
-        }
-
     }
 
     private enum StorageService implements Serializable {
@@ -177,326 +114,283 @@ public class CopyFileSink implements SinkModule {
         field
     }
 
-    public String getName() {
-        return "copyfile";
-    }
-
 
     @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
-        if(inputs == null || inputs.size() != 1) {
-            throw new IllegalArgumentException("copyFile sink module requires input parameter");
-        }
-        final FCollection<?> input = inputs.get(0);
-
-        final CopyFileSinkParameters parameters = new Gson().fromJson(config.getParameters(), CopyFileSinkParameters.class);
-        if(parameters == null) {
-            throw new IllegalArgumentException("CopyFileSink config parameters must not be empty!");
-        }
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
+        final CopyFileSinkParameters parameters = getParameters(CopyFileSinkParameters.class);
         parameters.validate();
         parameters.setDefaults();
 
-        final Map<String, FCollection<?>> results = new HashMap<>();
-        final Coder coder = input.getCollection().getCoder();
-        switch (input.getDataType()) {
-            case ROW: {
-                final FCollection<Row> inputCollection = (FCollection<Row>) input;
-                final Transform<Row> transform = new Transform<>(
-                        parameters,
-                        RowSchemaUtil::getBytes,
-                        RowToMapConverter::convert);
-                PCollectionTuple output = inputCollection.getCollection().apply(config.getName(), transform);
-                results.put(config.getName(), FCollection.of(config.getName(), output.get("output").setCoder(coder), DataType.ROW, input.getSchema()));
-                results.put(config.getName() + ".failures", FCollection.of(config.getName(), output.get("failures").setCoder(coder), DataType.ROW, input.getSchema()));
-                return results;
-            }
-            case AVRO: {
-                final FCollection<GenericRecord> inputCollection = (FCollection<GenericRecord>) input;
-                final Transform<GenericRecord> transform = new Transform<>(
-                        parameters,
-                        AvroSchemaUtil::getBytes,
-                        RecordToMapConverter::convert);
-                PCollectionTuple output = inputCollection.getCollection().apply(config.getName(), transform);
-                results.put(config.getName(), FCollection.of(config.getName(), output.get("output").setCoder(coder), DataType.AVRO, input.getAvroSchema()));
-                results.put(config.getName() + ".failures", FCollection.of(config.getName(), output.get("failures").setCoder(coder), DataType.AVRO, input.getAvroSchema()));
-                return results;
-            }
-            case STRUCT: {
-                final FCollection<Struct> inputCollection = (FCollection<Struct>) input;
-                final Transform<Struct> transform = new Transform<>(
-                        parameters,
-                        StructSchemaUtil::getBytes,
-                        StructToMapConverter::convert);
-                PCollectionTuple output = inputCollection.getCollection().apply(config.getName(), transform);
-                results.put(config.getName(), FCollection.of(config.getName(), output.get("output").setCoder(coder), DataType.STRUCT, input.getSpannerType()));
-                results.put(config.getName() + ".failures", FCollection.of(config.getName(), output.get("failures").setCoder(coder), DataType.STRUCT, input.getSpannerType()));
-                return results;
-            }
-            case ENTITY: {
-                final FCollection<Entity> inputCollection = (FCollection<Entity>) input;
-                final Transform<Entity> transform = new Transform<>(
-                        parameters,
-                        EntitySchemaUtil::getBytes,
-                        EntityToMapConverter::convert);
-                PCollectionTuple output = inputCollection.getCollection().apply(config.getName(), transform);
-                results.put(config.getName(), FCollection.of(config.getName(), output.get("output").setCoder(coder), DataType.ENTITY, input.getSchema()));
-                results.put(config.getName() + ".failures", FCollection.of(config.getName(), output.get("failures").setCoder(coder), DataType.ENTITY, input.getSchema()));
-                return results;
-            }
-            default: {
-                throw new IllegalStateException();
-            }
+        if (inputs.size() == 0) {
+            throw new IllegalArgumentException("copyfile sink module requires inputs parameter");
         }
+
+        final Schema inputSchema = Union.createUnionSchema(inputs);
+
+        final TupleTag<MElement> outputTag = new TupleTag<>(){};
+        final TupleTag<MElement> failureTag = new TupleTag<>(){};
+
+        final PCollectionTuple input = inputs
+                .apply("Union", Union.flatten()
+                        .withWaits(getWaits())
+                        .withStrategy(getStrategy()))
+                .apply("Reshuffle", Reshuffle.viaRandomKey())
+                .apply("CopyFile", ParDo
+                        .of(new CopyDoFn(getJobName(), getName(), inputSchema, parameters, getFailFast(), failureTag))
+                        .withOutputTags(outputTag, TupleTagList.of(failureTag)));
+
+        return MCollectionTuple
+                .of(input.get(outputTag), createOutputSchema());
     }
 
-    public static class Transform<T> extends PTransform<PCollection<T>, PCollectionTuple> {
+    private static class CopyDoFn extends DoFn<MElement, MElement> {
 
-        private final TupleTag<T> outputTag;
-        private final TupleTag<T> failureTag;
+        private final String jobName;
+        private final String name;
+        private final Schema inputSchema;
 
-        private final CopyFileSinkParameters parameters;
+        private final StorageService sourceService;
+        private final StorageService destinationService;
 
-        private final SchemaUtil.BytesGetter<T> bytesGetter;
-        private final SchemaUtil.MapConverter<T> mapConverter;
+        private final String source;
+        private final String destination;
+        private final Map<String, String> attributes;
 
-        private Transform(final CopyFileSinkParameters parameters,
-                          final SchemaUtil.BytesGetter<T> bytesGetter,
-                          final SchemaUtil.MapConverter<T> mapConverter) {
+        private final CopyFileSinkParameters.DriveParameters driveParameters;
+        private final CopyFileSinkParameters.S3Parameters s3Parameters;
 
-            this.parameters = parameters;
-            this.bytesGetter = bytesGetter;
-            this.mapConverter = mapConverter;
+        private final TupleTag<MElement> failureTag;
+        private final Boolean failFast;
 
-            this.outputTag = new TupleTag<>("output"){};
-            this.failureTag = new TupleTag<>("failures"){};
+        private transient Template templateSource;
+        private transient Template templateDestination;
+        private transient Map<String,Template> templateAttributes;
+
+        private transient S3Client s3;
+        private transient Storage storage;
+        private transient Drive drive;
+
+        private transient Set<String> templateArgs;
+
+        CopyDoFn(
+                final String jobName,
+                final String name,
+                final Schema inputSchema,
+                final CopyFileSinkParameters parameters,
+                final Boolean failFast,
+                final TupleTag<MElement> failureTag) {
+
+            this.jobName = jobName;
+            this.name = name;
+            this.inputSchema = inputSchema;
+            this.sourceService = parameters.sourceService;
+            this.destinationService = parameters.destinationService;
+
+            this.source = parameters.source;
+            this.destination = parameters.destination;
+            this.attributes = parameters.attributes;
+
+            this.driveParameters = parameters.drive;
+            this.s3Parameters = parameters.s3;
+
+            this.failureTag = failureTag;
+            this.failFast = failFast;
         }
 
-        @Override
-        public PCollectionTuple expand(final PCollection<T> input) {
-            return input
-                    .apply("Reshuffle", Reshuffle.viaRandomKey())
-                    .apply("CopyFile", ParDo
-                            .of(new CopyDoFn<>(parameters, bytesGetter, mapConverter, failureTag))
-                            .withOutputTags(outputTag, TupleTagList.of(failureTag)));
+        @Setup
+        public void setup() {
+
+            inputSchema.setup();
+
+            // Setup template engine
+            this.templateSource = TemplateUtil.createStrictTemplate("source", source);
+            this.templateDestination = TemplateUtil.createStrictTemplate("destination", destination);
+            this.templateAttributes = new HashMap<>();
+            for(final Map.Entry<String, String> entry : attributes.entrySet()) {
+                this.templateAttributes.put(entry.getKey(), TemplateUtil.createStrictTemplate(entry.getKey(), entry.getValue()));
+            }
+
+            // Setup storage service client
+            if(StorageService.gcs.equals(sourceService) || StorageService.gcs.equals(destinationService)) {
+                this.storage = StorageUtil.storage();
+            }
+            if(StorageService.s3.equals(sourceService) || StorageService.s3.equals(destinationService)) {
+                this.s3 = S3Util.storage(this.s3Parameters.accessKey, this.s3Parameters.secretKey, this.s3Parameters.region);
+            }
+            if(StorageService.drive.equals(destinationService)) {
+                this.drive = DriveUtil.drive(driveParameters.user, DriveScopes.DRIVE_FILE, DriveScopes.DRIVE_READONLY);
+            } else if(StorageService.drive.equals(sourceService)) {
+                this.drive = DriveUtil.drive(driveParameters.user, DriveScopes.DRIVE_READONLY);
+            }
+
+            // Set template args
+            this.templateArgs = new HashSet<>();
+            this.templateArgs.addAll(TemplateUtil.extractTemplateArgs(source, inputSchema));
+            this.templateArgs.addAll(TemplateUtil.extractTemplateArgs(destination, inputSchema));
+            for(final Map.Entry<String, String> entry : attributes.entrySet()) {
+                this.templateArgs.addAll(TemplateUtil.extractTemplateArgs(entry.getValue(), inputSchema));
+            }
         }
 
-
-        private static class CopyDoFn<T> extends DoFn<T, T> {
-
-            private final TupleTag<T> failureTag;
-
-            private final StorageService sourceService;
-            private final StorageService destinationService;
-
-            private final String source;
-            private final String destination;
-            private final Map<String, String> attributes;
-
-            private final SchemaUtil.BytesGetter<T> bytesGetter;
-            private final SchemaUtil.MapConverter<T> mapConverter;
-
-            private final DriveParameters driveParameters;
-            private final S3Parameters s3Parameters;
-
-            private final Boolean failFast;
-
-            private transient Template templateSource;
-            private transient Template templateDestination;
-            private transient Map<String,Template> templateAttributes;
-
-            private transient S3Client s3;
-            private transient Storage storage;
-            private transient Drive drive;
-
-
-            CopyDoFn(final CopyFileSinkParameters parameters,
-                     final SchemaUtil.BytesGetter<T> bytesGetter,
-                     final SchemaUtil.MapConverter<T> mapConverter,
-                     final TupleTag<T> failureTag) {
-
-                this.failureTag = failureTag;
-
-                this.sourceService = parameters.getSourceService();
-                this.destinationService = parameters.getDestinationService();
-
-                this.source = parameters.getSource();
-                this.destination = parameters.getDestination();
-                this.attributes = parameters.getAttributes();
-
-                this.bytesGetter = bytesGetter;
-                this.mapConverter = mapConverter;
-
-                this.driveParameters = parameters.getDrive();
-                this.s3Parameters = parameters.getS3();
-
-                this.failFast = parameters.getFailFast();
+        @ProcessElement
+        public void processElement(final ProcessContext c) {
+            final MElement element = c.element();
+            if(element == null) {
+                return;
             }
 
-            @Setup
-            public void setup() {
-                // Setup template engine
-                this.templateSource = TemplateUtil.createStrictTemplate("source", source);
-                this.templateDestination = TemplateUtil.createStrictTemplate("destination", destination);
-                this.templateAttributes = new HashMap<>();
-                for(final Map.Entry<String, String> entry : attributes.entrySet()) {
-                    this.templateAttributes.put(entry.getKey(), TemplateUtil.createStrictTemplate(entry.getKey(), entry.getValue()));
-                }
+            try {
+                final Map<String, Object> templateValues = element.asStandardMap(inputSchema, null);
+                TemplateUtil.setFunctions(templateValues);
+                final String destinationPath = TemplateUtil.executeStrictTemplate(this.templateDestination, templateValues);
 
-                // Setup storage service client
-                if(StorageService.gcs.equals(sourceService) || StorageService.gcs.equals(destinationService)) {
-                    this.storage = StorageUtil.storage();
-                }
-                if(StorageService.s3.equals(sourceService) || StorageService.s3.equals(destinationService)) {
-                    this.s3 = S3Util.storage(this.s3Parameters.getAccessKey(), this.s3Parameters.getSecretKey(), this.s3Parameters.getRegion());
-                }
-                if(StorageService.drive.equals(destinationService)) {
-                    this.drive = DriveUtil.drive(driveParameters.getUser(), DriveScopes.DRIVE_FILE, DriveScopes.DRIVE_READONLY);
-                } else if(StorageService.drive.equals(sourceService)) {
-                    this.drive = DriveUtil.drive(driveParameters.getUser(), DriveScopes.DRIVE_READONLY);
-                }
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) throws Exception {
-                final T element = c.element();
-                final Map<String, Object> map = mapConverter.convert(element);
-                final String destinationPath = TemplateUtil.executeStrictTemplate(this.templateDestination, map);
-
-                try {
-                    if (StorageService.field.equals(sourceService)) {
-                        LOG.info("Copy field value to " + destinationService + ": " + destinationPath);
-                        final byte[] bytes = this.bytesGetter.getAsBytes(element, source);
-                        switch (destinationService) {
-                            case s3 -> writeS3(destinationPath, bytes, map);
-                            case gcs -> writeGcs(destinationPath, bytes, map);
-                            case drive -> writeDrive(destinationPath, bytes, map);
-                        }
-                    } else {
-                        final String sourcePath = TemplateUtil.executeStrictTemplate(this.templateSource, map);
-                        LOG.info("Copy file from " + sourceService + ": " + sourcePath + " to " + destinationService + ": " + destinationPath);
-                        switch (sourceService) {
-                            case s3 -> {
-                                switch (destinationService) {
-                                    case s3 -> {
-                                        final Map<String, Object> attributes = new HashMap<>();
-                                        for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
-                                            final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), map);
-                                            attributes.put(entry.getKey(), value);
-                                        }
-                                        S3Util.copy(s3, sourcePath, destinationPath, attributes);
-                                    }
-                                    case gcs -> {
-                                        final byte[] bytes = S3Util.readBytes(s3, sourcePath);
-                                        writeGcs(destinationPath, bytes, map);
-                                    }
-                                    case drive -> {
-                                        final byte[] bytes = S3Util.readBytes(s3, sourcePath);
-                                        writeDrive(destinationPath, bytes, map);
-                                    }
-                                }
-                            }
-                            case gcs -> {
-                                switch (destinationService) {
-                                    case s3 -> {
-                                        final byte[] bytes = StorageUtil.readBytes(storage, sourcePath);
-                                        writeS3(destinationPath, bytes, map);
-                                    }
-                                    case gcs -> {
-                                        final Map<String, Object> attributes = new HashMap<>();
-                                        for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
-                                            final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), map);
-                                            attributes.put(entry.getKey(), value);
-                                        }
-                                        StorageUtil.copy(storage, sourcePath, destinationPath, attributes);
-                                    }
-                                    case drive -> {
-                                        final byte[] bytes = StorageUtil.readBytes(storage, sourcePath);
-                                        writeDrive(destinationPath, bytes, map);
-                                    }
-                                }
-                            }
-                            case drive -> {
-                                switch (destinationService) {
-                                    case s3 -> {
-                                        final byte[] bytes = DriveUtil.download(drive, sourcePath);
-                                        writeS3(destinationPath, bytes, map);
-                                    }
-                                    case gcs -> {
-                                        final byte[] bytes = DriveUtil.download(drive, sourcePath);
-                                        writeGcs(destinationPath, bytes, map);
-                                    }
-                                    case drive -> {
-                                        final Map<String, Object> attributes = new HashMap<>();
-                                        for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
-                                            final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), map);
-                                            attributes.put(entry.getKey(), value);
-                                        }
-                                        DriveUtil.copy(drive, sourcePath, destinationPath, attributes);
-                                    }
-                                }
-                            }
-                        }
+                if (StorageService.field.equals(sourceService)) {
+                    LOG.info("Copy field value to {}: {}", destinationService, destinationPath);
+                    final ByteBuffer bytes = element.getAsBytes(source);
+                    if(bytes == null) {
+                        return;
                     }
-
-                    c.output(c.element());
-
-                } catch (final Exception e) {
-                    final String message = "Failed to copy file to " + destinationService + ": " + destinationPath + ", cause: " + e.getMessage();
-                    LOG.error(message);
-                    if(failFast) {
-                        throw new IllegalStateException(message, e);
+                    switch (destinationService) {
+                        case s3 -> writeS3(destinationPath, bytes.array(), templateValues);
+                        case gcs -> writeGcs(destinationPath, bytes.array(), templateValues);
+                        case drive -> writeDrive(destinationPath, bytes.array(), templateValues);
                     }
-                    c.output(failureTag, c.element());
-                }
-
-            }
-
-            private void writeGcs(final String gcsDestinationPath, final byte[] bytes, final Map<String, Object> record) {
-                final StorageObject object = new StorageObject();
-                final String[] gcsPaths = StorageUtil.parseGcsPath(gcsDestinationPath);
-                object.setBucket(gcsPaths[0]);
-                object.setName(gcsPaths[1]);
-                for(final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
-                    final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), record);
-                    object.set(entry.getKey(), value);
-                }
-                if(object.getContentType() == null) {
-                    object.setContentType("application/octet-stream");
-                }
-
-                StorageUtil.writeObject(storage, object, bytes);
-            }
-
-            private void writeS3(final String s3DestinationPath, final byte[] bytes, final Map<String, Object> record) {
-                final Map<String, Object> attributes = new HashMap<>();
-                for(final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
-                    final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), record);
-                    attributes.put(entry.getKey(), value);
-                }
-                final String contentType;
-                if(templateAttributes.containsKey("contentType")) {
-                    contentType = TemplateUtil.executeStrictTemplate(templateAttributes.get("contentType"), record);
                 } else {
-                    contentType = "application/octet-stream";
+                    final String sourcePath = TemplateUtil.executeStrictTemplate(this.templateSource, templateValues);
+                    LOG.info("Copy file from {}: {} to {}: {}", sourceService, sourcePath, destinationService, destinationPath);
+                    switch (sourceService) {
+                        case s3 -> {
+                            switch (destinationService) {
+                                case s3 -> {
+                                    final Map<String, Object> attributes = new HashMap<>();
+                                    for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
+                                        final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), templateValues);
+                                        attributes.put(entry.getKey(), value);
+                                    }
+                                    S3Util.copy(s3, sourcePath, destinationPath, attributes);
+                                }
+                                case gcs -> {
+                                    final byte[] bytes = S3Util.readBytes(s3, sourcePath);
+                                    writeGcs(destinationPath, bytes, templateValues);
+                                }
+                                case drive -> {
+                                    final byte[] bytes = S3Util.readBytes(s3, sourcePath);
+                                    writeDrive(destinationPath, bytes, templateValues);
+                                }
+                            }
+                        }
+                        case gcs -> {
+                            switch (destinationService) {
+                                case s3 -> {
+                                    final byte[] bytes = StorageUtil.readBytes(storage, sourcePath);
+                                    writeS3(destinationPath, bytes, templateValues);
+                                }
+                                case gcs -> {
+                                    final Map<String, Object> attributes = new HashMap<>();
+                                    for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
+                                        final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), templateValues);
+                                        attributes.put(entry.getKey(), value);
+                                    }
+                                    StorageUtil.copy(storage, sourcePath, destinationPath, attributes);
+                                }
+                                case drive -> {
+                                    final byte[] bytes = StorageUtil.readBytes(storage, sourcePath);
+                                    writeDrive(destinationPath, bytes, templateValues);
+                                }
+                            }
+                        }
+                        case drive -> {
+                            switch (destinationService) {
+                                case s3 -> {
+                                    final byte[] bytes = DriveUtil.download(drive, sourcePath);
+                                    writeS3(destinationPath, bytes, templateValues);
+                                }
+                                case gcs -> {
+                                    final byte[] bytes = DriveUtil.download(drive, sourcePath);
+                                    writeGcs(destinationPath, bytes, templateValues);
+                                }
+                                case drive -> {
+                                    final Map<String, Object> attributes = new HashMap<>();
+                                    for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
+                                        final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), templateValues);
+                                        attributes.put(entry.getKey(), value);
+                                    }
+                                    DriveUtil.copy(drive, sourcePath, destinationPath, attributes);
+                                }
+                            }
+                        }
+                    }
                 }
-                S3Util.writeBytes(s3, s3DestinationPath, bytes, contentType, attributes, new HashMap<>());
-            }
 
-            private void writeDrive(final String parent, final byte[] bytes, final Map<String, Object> record) {
-                final File file = new File();
-                file.setParents(Arrays.asList(parent));
-                for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
-                    final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), record);
-                    file.set(entry.getKey(), value);
+                //c.output();
+
+            } catch (final Throwable e) {
+                ERROR_COUNTER.inc();
+                final MFailure failure = MFailure
+                        .of(jobName, name, element.toString(), e, c.timestamp());
+                final String errorMessage = String.format("Failed to copy file for input: %s, error: %s", failure.getInput(), failure.getError());
+                LOG.error(errorMessage);
+
+                if(failFast) {
+                    throw new IllegalStateException(errorMessage, e);
                 }
-                if(file.getMimeType() == null) {
-                    file.setMimeType("application/octet-stream");
-                }
-                DriveUtil.createFile(drive, file, bytes);
+                c.output(failureTag, failure.toElement(c.timestamp()));
             }
 
         }
 
+        private void writeGcs(final String gcsDestinationPath, final byte[] bytes, final Map<String, Object> templateValues) {
+            final StorageObject object = new StorageObject();
+            final String[] gcsPaths = StorageUtil.parseGcsPath(gcsDestinationPath);
+            object.setBucket(gcsPaths[0]);
+            object.setName(gcsPaths[1]);
+            for(final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
+                final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), templateValues);
+                object.set(entry.getKey(), value);
+            }
+            if(object.getContentType() == null) {
+                object.setContentType("application/octet-stream");
+            }
+            StorageUtil.writeObject(storage, object, bytes);
+        }
+
+        private void writeS3(final String s3DestinationPath, final byte[] bytes, final Map<String, Object> templateValues) {
+            final Map<String, Object> attributes = new HashMap<>();
+            for(final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
+                final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), templateValues);
+                attributes.put(entry.getKey(), value);
+            }
+            final String contentType;
+            if(templateAttributes.containsKey("contentType")) {
+                contentType = TemplateUtil.executeStrictTemplate(templateAttributes.get("contentType"), templateValues);
+            } else {
+                contentType = "application/octet-stream";
+            }
+            S3Util.writeBytes(s3, s3DestinationPath, bytes, contentType, attributes, new HashMap<>());
+        }
+
+        private void writeDrive(final String parent, final byte[] bytes, final Map<String, Object> record) {
+            final File file = new File();
+            file.setParents(Arrays.asList(parent));
+            for (final Map.Entry<String, Template> entry : templateAttributes.entrySet()) {
+                final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), record);
+                file.set(entry.getKey(), value);
+            }
+            if(file.getMimeType() == null) {
+                file.setMimeType("application/octet-stream");
+            }
+            DriveUtil.createFile(drive, file, bytes);
+        }
+
+    }
+
+    private static Schema createOutputSchema() {
+        return Schema.builder()
+                .withField("source", Schema.FieldType.STRING.withNullable(true))
+                .withField("destination", Schema.FieldType.STRING.withNullable(true))
+                .build();
     }
 
 }

@@ -2,24 +2,26 @@ package com.mercari.solution.util.pipeline.aggregation;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.SchemaUtil;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
-import org.apache.beam.sdk.schemas.Schema;
+import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Sum implements Aggregator {
+public class Sum implements AggregateFunction {
 
-    private List<Schema.Field> outputFields;
-    private Schema.Field sumField;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
 
     private String name;
     private String field;
     private String expression;
     private String condition;
+
+    private List<Range> ranges;
 
     private Boolean ignore;
 
@@ -27,57 +29,64 @@ public class Sum implements Aggregator {
     private transient Set<String> variables;
     private transient Filter.ConditionNode conditionNode;
 
-
-    public static Sum of(final String name,
-                         final Schema inputSchema,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore) {
+    public static Sum of(
+            final String name,
+            final List<Schema.Field> inputFields,
+            final String field,
+            final String expression,
+            final String condition,
+            final List<Range> ranges,
+            final Boolean ignore) {
 
         final Sum sum = new Sum();
         sum.name = name;
         sum.field = field;
         sum.expression = expression;
         sum.condition = condition;
+        sum.ranges = ranges;
         sum.ignore = ignore;
 
-        sum.outputFields = new ArrayList<>();
-        if(field != null) {
-            final Schema.Field inputField = inputSchema.getField(field);
-            sum.sumField = Schema.Field.of(name, inputField.getType().withNullable(true));
-            sum.outputFields.add(sum.sumField);
+        sum.inputFields = new ArrayList<>();
+        if (field != null) {
+            final Schema.Field inputField = Schema.getField(inputFields, field);
+            sum.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
+            sum.outputFieldType = inputField.getFieldType();
         } else {
-            sum.sumField = Schema.Field.of(name, Schema.FieldType.DOUBLE.withNullable(true));
-            sum.outputFields.add(sum.sumField);
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                sum.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+            }
+            sum.outputFieldType = Schema.FieldType.FLOAT64;
         }
 
         return sum;
     }
 
     @Override
-    public Op getOp() {
-        return Op.sum;
-    }
-
-    @Override
     public String getName() {
-        return name;
+        return this.name;
     }
 
     @Override
-    public Boolean getIgnore() {
-        return ignore;
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
-    public Boolean filter(final UnionValue unionValue) {
-        return Aggregator.filter(conditionNode, unionValue);
+    public Boolean filter(final MElement element) {
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     @Override
     public List<String> validate(int parent, int index) {
         final List<String> errorMessages = new ArrayList<>();
+        if (name == null) {
+            errorMessages.add("aggregations[" + parent + "].fields[" + index + "].name must not be null");
+        }
         return errorMessages;
     }
 
@@ -88,53 +97,88 @@ public class Sum implements Aggregator {
             this.variables = variables;
             this.exp = ExpressionUtil.createDefaultExpression(this.expression, variables);
         }
-        if(this.condition != null) {
+        if (this.condition != null) {
             this.conditionNode = Filter.parse(new Gson().fromJson(this.condition, JsonElement.class));
         }
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final UnionValue input, final SchemaUtil.PrimitiveValueGetter valueGetter) {
-        final Object prevValue = accumulator.get(sumField.getType(), name);
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Object inputValue;
         if(field != null) {
-            inputValue = valueGetter.getValue(input.getValue(), sumField.getType(), field);
+            inputValue = input.getPrimitiveValue(field);
         } else {
-            inputValue = Aggregator.eval(this.exp, variables, input);
+            inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
 
-        final Object sumNext = Aggregator.sum(prevValue, inputValue);
-        accumulator.put(sumField.getType(), name, sumNext);
+        if(getRanges().isEmpty()) {
+            final Object prevValue = accumulator.get(name);
+            final Object sumNext = AggregateFunction.sum(prevValue, inputValue);
+            accumulator.put(name, sumNext);
+        } else {
+            for(final Range range : getRanges()) {
+                if(!range.filter(timestamp, input.getTimestamp(), count)) {
+                    continue;
+                }
+                final Object prevValue = accumulator.get(range.name);
+                final Object sumNext = AggregateFunction.sum(prevValue, inputValue);
+                accumulator.put(range.name, sumNext);
+            }
+        }
         return accumulator;
     }
 
     @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
+    }
+
+    @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
-        final Object stateValue = base.get(sumField.getType(), name);
-        final Object accumValue = input.get(sumField.getType(), name);
-        final Object sum = Aggregator.sum(stateValue, accumValue);
-        base.put(sumField.getType(), name, sum);
+        final Object stateValue = base.get(name);
+        final Object accumValue = input.get(name);
+        final Object sum = AggregateFunction.sum(stateValue, accumValue);
+        base.put(name, sum);
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
-                                            final Map<String, Object> values,
-                                            final SchemaUtil.PrimitiveValueConverter converter) {
-
-        final Object maxValue = accumulator.get(sumField.getType(), name);
-        final Object fieldValue = converter.convertPrimitive(sumField.getType(), maxValue);
-        if(fieldValue == null) {
-            values.put(name, Accumulator.convertNumberValue(sumField.getType(), 0D));
+    public Object extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+        final Object sum = accumulator.get(name);
+        if(sum == null) {
+            return convertNumberValue(outputFieldType, 0D);
         } else {
-            values.put(name, fieldValue);
+            return sum;
         }
-        return values;
+    }
+
+    public static Object convertNumberValue(Schema.FieldType fieldType, Double value) {
+        if(value == null) {
+            return null;
+        }
+        return switch (fieldType.getType()) {
+            case float32 -> value.floatValue();
+            case float64 -> value;
+            case int16 -> value.shortValue();
+            case int32 -> value.intValue();
+            case int64 -> value.longValue();
+            default -> null;
+        };
     }
 
 }

@@ -170,12 +170,21 @@ public class StorageUtil {
         }
     }
 
+    public static List<StorageObject> listFilesWithMatch(final String gcsPath, final String matchGlob) {
+        final String[] paths = parseGcsPath(gcsPath);
+        return listFiles(paths[0], paths[1], matchGlob);
+    }
+
     public static List<StorageObject> listFiles(final String gcsPath) {
         final String[] paths = parseGcsPath(gcsPath);
         return listFiles(paths[0], paths[1]);
     }
 
     public static List<StorageObject> listFiles(final String bucket, final String object) {
+        return listFiles(bucket, object, null);
+    }
+
+    public static List<StorageObject> listFiles(final String bucket, final String object, final String matchGlob) {
         final String prefix;
         if(object.endsWith("*")) {
             prefix = object.replace("*", "");
@@ -183,10 +192,14 @@ public class StorageUtil {
             prefix = object;
         }
         try {
-            final List<StorageObject> objects = storage()
+            Storage.Objects.List list = storage()
                     .objects()
                     .list(bucket)
-                    .setPrefix(prefix)
+                    .setPrefix(prefix);
+            if(matchGlob != null) {
+                list = list.setMatchGlob(matchGlob);
+            }
+            final List<StorageObject> objects = list
                     .execute()
                     .getItems();
             if(objects == null) {
@@ -313,6 +326,39 @@ public class StorageUtil {
     }
 
     public static Schema getParquetSchema(final String bucket, final String object) {
+        InputFile inputFile = new InputFile() {
+            @Override
+            public long getLength() throws IOException {
+                return 0;
+            }
+
+            @Override
+            public SeekableInputStream newStream() throws IOException {
+                return null;
+            }
+        };
+
+        // TODO
+        /*
+        try {
+            final InputStream is = storage()
+                    .objects()
+                    .get(bucket, object)
+                    .executeMediaAsInputStream();
+
+            com.google.cloud.storage.Storage storage = StorageOptions.newBuilder().build().getService();
+            storage.reader()
+
+
+            final ParquetMetadata metadata = ParquetFileReader.readFooter(inputFile, ParquetReadOptions.builder().build(), is);
+            MessageType messageType = metadata.getFileMetaData().getSchema();
+            return new AvroSchemaConverter().convert(messageType);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed", e);
+        }
+
+         */
+
         try(final ParquetFileReader f = ParquetFileReader.open(new ParquetStream(readBytes(storage(), bucket, object)))) {
             return new AvroSchemaConverter().convert(f.getFooter().getFileMetaData().getSchema());
         } catch (Exception e) {

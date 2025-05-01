@@ -15,8 +15,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class Maps implements SelectFunction {
+public class Maps  {
 
+    /*
     private static final Logger LOG = LoggerFactory.getLogger(Maps.class);
 
     private final String name;
@@ -114,6 +115,8 @@ public class Maps implements SelectFunction {
         }
         return output;
     }
+
+     */
 
 }
 

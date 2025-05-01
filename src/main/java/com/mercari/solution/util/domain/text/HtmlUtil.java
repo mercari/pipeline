@@ -1,6 +1,5 @@
 package com.mercari.solution.util.domain.text;
 
-import com.mercari.solution.util.XmlUtil;
 import com.mercari.solution.util.domain.text.analyzer.TokenAnalyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;

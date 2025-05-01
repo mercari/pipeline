@@ -1,32 +1,26 @@
-# SelectField
+# Select Transform Module
 
-SelectField is the definition for limiting the fields to be output, changing field names, and making slight modifications.
+Select transform module can be used to filter rows by specified filter condition and process field values by specified select condition.
 
-## SelectField common parameters
+## Transform module common parameters
 
-| parameter | optional | type    | description                                                                                                                  |
-|-----------|----------|---------|------------------------------------------------------------------------------------------------------------------------------|
-| name      | required | String  | Specify the name of the field in the aggregate result. Must be unique.                                                       |
-| func      | optional | Enum    | Specify the processing function. Parameters differ depending on the `func`. Refer to following table of supported functions. |
-| ignore    | optional | Boolean | Specify true if you do not want to execute this select processing                                                            |
+| parameter  | optional | type                                        | description                                                                                                 |
+|------------|----------|---------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| name       | required | String                                      | Step name. specified to be unique in config file.                                                           |
+| module     | required | String                                      | Specified `select`                                                                                          |
+| inputs     | required | Array<String\>                              | Specify the names of the step from which you want to process the data, including the name of the transform. |
+| parameters | required | Map<String,Object\>                         | Specify the following individual parameters.                                                                |
+| strategy   | optional | [Windowing Strategy](../common/strategy.md) | Specify [windowing strategy](https://beam.apache.org/documentation/programming-guide/#windowing)            |
 
-### Supported Select functions
+## Filter transform module parameters
 
-`pass`, `rename`, `cast`, `constant`, and `expression` can omit parameter `func`.
-(It is automatically inferred from the other parameters specified)
+| parameter   | optional           | type                                       | description                                                                                                      |
+|-------------|--------------------|--------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| filter      | selective required | [FilterCondition](../common/filter.md)     | Specify the conditions for filtering rows.                                                                       |
+| select      | selective required | Array<[SelectField](../common/select.md)\> | Specify a list of field definitions if you want to refine, rename, or apply some processing to the input fields. |
+| groupFields | optional           | Array<String\>                             | Specify the names of fields to be referenced to group the data.　                                                 |
 
-| func              | description                                                                                                                                           | additional parameters        |
-|-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------|
-| pass              | Holds the value of the field specified by `name`                                                                                                      | -                            |
-| rename            | Renames the specified `field` to the specified `name`.                                                                                                | `field`                      |
-| cast              | Cast the data type of the field specified by `name` (or `field` if you want to change the field name too) to the type specified by `type`.            | `type`, `field`              |
-| constant          | Generates a field with the specified `type` and `value`. As type values, `boolean`, `string`, `long`, `double`, `date` and `timestamp` are supported. | `type`, `value`              |
-| expression        | Embeds input data in the formula specified by the `expression` parameter and outputs the result of the calculation as a double type.                  | `expression`                 |
-| text              | Generates text by embedding input data in the template specified by the `text` parameter.                                                             | `text`                       |
-| event_timestamp   | Generates a field with a event timestamp value                                                                                                        | -                            |
-| current_timestamp | Generates a field with a current timestamp value                                                                                                      | -                            |
-| concat            | Concatenates values of the specified `fields` as a string. if `delimiter` is specified, it will be combined using the value.                          | `fields`, `delimiter`        |
-| uuid              | Generates a field with uuid string value                                                                                                              | -                            |
-| hash              | Generates a hashed string of the values of the specified `fields` as a string. if `size` is specified, returns it in the length of the string.        | (`fields` or `text`), `size` |
-| struct            | Generate nested structure field by defining the `fields` of select. If you want to generate an array of structures, specify `repeated` in `mode`.     | `fields`, `mode`, `each`     |
-| json              | Generate nested json field by defining the `fields` of select. If you want to generate an array of structures, specify `repeated` in `mode`.          | `fields`, `mode`, `each`     |
+
+## Related example config files
+
+* [Avro to filter to Avro](../../../../examples/avro-to-filter-to-avro.json)

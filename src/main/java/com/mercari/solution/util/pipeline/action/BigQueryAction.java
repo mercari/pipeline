@@ -5,11 +5,12 @@ import com.google.api.services.bigquery.model.Job;
 import com.google.api.services.bigquery.model.JobConfiguration;
 import com.google.api.services.bigquery.model.JobConfigurationLoad;
 import com.google.api.services.bigquery.model.JobConfigurationQuery;
+import com.mercari.solution.config.options.DataflowOptions;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.gcp.BigQueryUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
-import org.apache.beam.sdk.schemas.Schema;
+import org.apache.beam.sdk.options.PipelineOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +18,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
+
 
 public class BigQueryAction implements Action {
 
@@ -121,9 +122,9 @@ public class BigQueryAction implements Action {
             return errorMessages;
         }
 
-        public void setDefaults(final DataflowPipelineOptions options, final String config) {
+        public void setDefaults(final PipelineOptions options, final String config) {
             if(this.projectId == null) {
-                this.projectId = options.getProject();
+                this.projectId = DataflowOptions.getProject(options);
             }
             if(this.wait == null) {
                 this.wait = true;
@@ -170,16 +171,16 @@ public class BigQueryAction implements Action {
     }
 
     @Override
-    public UnionValue action() {
+    public MElement action() {
         return action(parameters);
     }
 
     @Override
-    public UnionValue action(final UnionValue unionValue) {
+    public MElement action(final MElement unionValue) {
         return action(parameters);
     }
 
-    private static UnionValue action(final Parameters parameters) {
+    private static MElement action(final Parameters parameters) {
         switch (parameters.getOp()) {
             case query -> query(parameters);
             case load -> load(parameters);

@@ -2,7 +2,7 @@ package com.mercari.solution.module;
 
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.cloud.spanner.Type;
-import com.mercari.solution.util.converter.*;
+import com.mercari.solution.util.schema.converter.*;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
@@ -149,7 +149,7 @@ public class FCollection<T> {
         if(this.schema != null) {
             return schema;
         } else if(this.avroSchema != null) {
-            return RecordToRowConverter.convertSchema(avroSchema);
+            return AvroToRowConverter.convertSchema(avroSchema);
         } else if(this.spannerType != null) {
             return StructToRowConverter.convertSchema(spannerType);
         } else {
@@ -166,7 +166,7 @@ public class FCollection<T> {
         } else if(this.schema != null) {
             return RowToRecordConverter.convertSchema(schema);
         } else if(this.spannerType != null) {
-            return StructToRecordConverter.convertSchema(spannerType);
+            return StructToAvroConverter.convertSchema(spannerType);
         } else {
             switch (dataType) {
                 case MUTATION:
@@ -181,7 +181,7 @@ public class FCollection<T> {
         if(this.spannerType != null) {
             return spannerType;
         } else if(this.avroSchema != null) {
-            return RecordToMutationConverter.convertSchema(this.avroSchema);
+            return AvroToMutationConverter.convertSchema(this.avroSchema);
         } else if(this.schema != null) {
             return RowToMutationConverter.convertSchema(this.schema);
         } else {
@@ -198,7 +198,7 @@ public class FCollection<T> {
         if(this.schema != null) {
             return RowToTableRowConverter.convertTableSchema(schema);
         } else if(this.avroSchema != null) {
-            return RecordToTableRowConverter.convertSchema(avroSchema);
+            return AvroToTableRowConverter.convertSchema(avroSchema);
         } else if(this.spannerType != null) {
             return StructToTableRowConverter.convertSchema(spannerType);
         } else {

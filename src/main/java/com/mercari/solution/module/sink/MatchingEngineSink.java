@@ -8,10 +8,9 @@ import com.google.gson.Gson;
 import com.mercari.solution.config.SinkConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
-import com.mercari.solution.util.OptionUtil;
 import com.mercari.solution.util.gcp.IAMUtil;
 import com.mercari.solution.util.gcp.vertexai.MatchingEngineUtil;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.schema.*;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.KvCoder;
@@ -38,7 +37,7 @@ import java.net.http.HttpClient;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class MatchingEngineSink implements SinkModule {
+public class MatchingEngineSink {
 
     private static final Logger LOG = LoggerFactory.getLogger(MatchingEngineSink.class);
 
@@ -189,7 +188,6 @@ public class MatchingEngineSink implements SinkModule {
         return "matchingEngine";
     }
 
-    @Override
     public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
         if(inputs == null || inputs.size() != 1) {
             throw new IllegalArgumentException("matchingEngine sink module requires input parameter");
@@ -198,7 +196,7 @@ public class MatchingEngineSink implements SinkModule {
 
         final MatchingEngineSinkParameters parameters = new Gson().fromJson(config.getParameters(), MatchingEngineSinkParameters.class);
         parameters.validate();
-        final String defaultProject = OptionUtil.getProject(input.getCollection());
+        final String defaultProject = OptionUtil.getDefaultProject();
         parameters.setDefaults(defaultProject);
 
         final FCollection output;

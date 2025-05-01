@@ -6,8 +6,8 @@ import org.apache.avro.generic.GenericRecordBuilder;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.values.Row;
 import org.joda.time.Instant;
-import org.neo4j.graphdb.Node;
-import org.neo4j.graphdb.Relationship;
+//import org.neo4j.graphdb.Node;
+//import org.neo4j.graphdb.Relationship;
 
 import java.io.Serializable;
 import java.util.*;
@@ -143,6 +143,7 @@ public class Neo4jSchemaUtil implements Serializable {
                 }
             }
             case ROW -> {
+                /*
                 if (value instanceof Node) {
                     final Node node = (Node) value;
                     return convert(fieldType.getRowSchema(), node.getAllProperties());
@@ -154,6 +155,9 @@ public class Neo4jSchemaUtil implements Serializable {
                 } else {
                     throw new IllegalStateException("Could not convert to row: " + value);
                 }
+
+                 */
+                throw new RuntimeException();
             }
             case ARRAY, ITERABLE -> {
                 if (value instanceof List) {
@@ -298,6 +302,7 @@ public class Neo4jSchemaUtil implements Serializable {
                 }
             }
             case RECORD -> {
+                /*
                 if (value instanceof Node) {
                     final Node node = (Node) value;
                     return convert(fieldSchema, node.getAllProperties());
@@ -309,6 +314,8 @@ public class Neo4jSchemaUtil implements Serializable {
                 } else {
                     throw new IllegalStateException("Could not convert to row: " + value);
                 }
+                 */
+                throw new RuntimeException();
             }
             case ARRAY -> {
                 if (value instanceof List) {

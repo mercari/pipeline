@@ -1,862 +1,487 @@
 package com.mercari.solution.module.source;
 
-import com.google.api.client.util.BackOff;
-import com.google.api.client.util.Sleeper;
-import com.google.api.gax.rpc.ServerStream;
 import com.google.api.services.bigquery.Bigquery;
 import com.google.api.services.bigquery.model.*;
-import com.google.api.services.bigquery.model.TableSchema;
-import com.google.cloud.bigquery.storage.v1.*;
-import com.google.gson.Gson;
-import com.mercari.solution.config.SourceConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SourceModule;
+import com.google.cloud.bigquery.storage.v1.DataFormat;
+import com.mercari.solution.MPipeline;
+import com.mercari.solution.config.options.DataflowOptions;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.OptionUtil;
-import com.mercari.solution.util.converter.DataTypeTransform;
-import com.mercari.solution.util.converter.TableRowToRecordConverter;
+import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.gcp.BigQueryUtil;
+import com.mercari.solution.util.gcp.ParameterManagerUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
-import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericDatumReader;
+import com.mercari.solution.util.pipeline.MicroBatch;
+import com.mercari.solution.util.pipeline.OptionUtil;
+import com.mercari.solution.util.schema.AvroSchemaUtil;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.io.BinaryDecoder;
-import org.apache.avro.io.DatumReader;
-import org.apache.avro.io.DecoderFactory;
+import org.apache.beam.sdk.coders.VarLongCoder;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
-import org.apache.beam.sdk.extensions.gcp.options.GcpOptions;
-import org.apache.beam.sdk.extensions.gcp.util.BackOffAdapter;
-import org.apache.beam.sdk.extensions.protobuf.ProtoCoder;
+import org.apache.beam.sdk.extensions.avro.coders.AvroGenericCoder;
+import org.apache.beam.sdk.io.GenerateSequence;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.bigquery.SchemaAndRecord;
-import org.apache.beam.sdk.transforms.*;
-import org.apache.beam.sdk.util.FluentBackoff;
+import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.stream.Collectors;
 
 
-public class BigQuerySource implements SourceModule {
+@Source.Module(name="bigquery")
+public class BigQuerySource extends Source {
 
-    private static class BigQuerySourceParameters implements Serializable {
+    private static final Logger LOG = LoggerFactory.getLogger(BigQuerySource.class);
 
+    private static class Parameters implements Serializable {
+
+        // for query read
         private String query;
         private BigQueryIO.TypedRead.QueryPriority queryPriority;
         private String queryTempDataset;
         private String queryLocation;
-        private String project;
-        private String dataset;
+
+        // for table read
+        private String projectId;
+        private String datasetId;
         private String table;
         private List<String> fields;
         private String rowRestriction;
+
+        // for microBatch parameter
+        private MicroBatch.MicroBatchParameter microBatch;
+
+        // for view parameter
+        private ViewParameter view;
+
+        // common
+        private Mode mode;
         private String kmsKey;
         private BigQueryIO.TypedRead.Method method;
         private DataFormat format;
+        private String queryRunProjectId;
 
-        // for microbatch
-        private Integer intervalSecond;
-        private Integer gapSecond;
-        private Integer maxDurationMinute;
-        private Integer catchupIntervalSecond;
-        private String startDatetime;
-        private String outputCheckpoint;
-        private Boolean useCheckpointAsStartDatetime;
+        //@Deprecated
+        //private String table; // use projectId, datasetId, tableId
 
 
-        public String getQuery() {
-            return query;
+        private static class ViewParameter implements Serializable {
+
+            private String keyField;
+            private Integer intervalMinute;
+
+            public List<String> validate(String name) {
+
+                final List<String> errorMessages = new ArrayList<>();
+                if(keyField == null) {
+                    errorMessages.add("bigquery source module[" + name + "].view requires 'keyField' parameter");
+                }
+                return errorMessages;
+            }
+
+            private void setDefaults() {
+                if(intervalMinute == null) {
+                    intervalMinute = 60;
+                }
+            }
+
         }
 
-        public BigQueryIO.TypedRead.QueryPriority getQueryPriority() {
-            return queryPriority;
-        }
+        private void validate(final String name) {
 
-        public String getQueryTempDataset() {
-            return queryTempDataset;
-        }
-
-        public String getQueryLocation() {
-            return queryLocation;
-        }
-
-        public String getProject() {
-            return project;
-        }
-
-        public String getDataset() {
-            return dataset;
-        }
-
-        public String getTable() {
-            return table;
-        }
-
-        public List<String> getFields() {
-            return fields;
-        }
-
-        public String getRowRestriction() {
-            return rowRestriction;
-        }
-
-        public String getKmsKey() {
-            return kmsKey;
-        }
-
-        public BigQueryIO.TypedRead.Method getMethod() {
-            return method;
-        }
-
-        public DataFormat getFormat() {
-            return format;
-        }
-
-        public Integer getIntervalSecond() {
-            return intervalSecond;
-        }
-
-        public Integer getGapSecond() {
-            return gapSecond;
-        }
-
-        public Integer getMaxDurationMinute() {
-            return maxDurationMinute;
-        }
-
-        public Integer getCatchupIntervalSecond() {
-            return catchupIntervalSecond;
-        }
-
-        public String getStartDatetime() {
-            return startDatetime;
-        }
-
-        public String getOutputCheckpoint() {
-            return outputCheckpoint;
-        }
-
-        public Boolean getUseCheckpointAsStartDatetime() {
-            return useCheckpointAsStartDatetime;
-        }
-
-
-        private void validateBatch() {
             // check required parameters filled
             final List<String> errorMessages = new ArrayList<>();
-            if(query == null && table == null) {
-                errorMessages.add("Parameter must contain query or table");
+            if(mode != null) {
+                switch (mode) {
+                    case batch -> {
+                        if(query == null && (table == null && datasetId == null)) {
+                            errorMessages.add("parameters.query or table is required");
+                        }
+                    }
+                    case microBatch -> {
+                        if(microBatch == null) {
+                            errorMessages.add("parameters.microBatch is required if mode is 'microBatch'");
+                        } else {
+                            errorMessages.addAll(microBatch.validate(name));
+                        }
+                    }
+                    case view -> {
+                        if(query == null) {
+                            errorMessages.add("parameters.query or table is required");
+                        }
+                        if(view == null) {
+                            errorMessages.add("parameters.view is required if mode is 'microBatch'");
+                        } else {
+                            errorMessages.addAll(view.validate(name));
+                        }
+                    }
+                }
             }
 
             if(!errorMessages.isEmpty()) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
-        private void setDefaultsBatch() {
+        private void setDefaults(final PInput input) {
+            if(projectId == null) {
+                projectId = DataflowOptions.getProject(input.getPipeline().getOptions());
+            }
             if(queryPriority == null) {
                 this.queryPriority = BigQueryIO.TypedRead.QueryPriority.INTERACTIVE;
             }
-        }
-
-        private void validateMicroBatch() {
-            // check required parameters filled
-            final List<String> errorMessages = new ArrayList<>();
-            if(this.query == null) {
-                errorMessages.add("BigQuery source module[microbatch mode] parameters must contain query");
+            if(mode == null) {
+                mode = Mode.batch;
             }
-            if(queryTempDataset == null) {
-                errorMessages.add("BigQuery source module[microbatch mode] parameters must contain queryTempDataset");
+            if(queryRunProjectId == null) {
+                queryRunProjectId = DataflowOptions.getProject(input.getPipeline().getOptions());
             }
-            if (!errorMessages.isEmpty()) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+            if(view != null) {
+                view.setDefaults();
             }
-        }
-
-        private void setDefaultsMicroBatch() {
-            if (queryLocation == null) {
-                queryLocation = "US";
-            }
-            //
-            if(intervalSecond == null) {
-                this.intervalSecond = 60;
-            }
-            if(gapSecond == null) {
-                this.gapSecond = 30;
-            }
-            if(maxDurationMinute == null) {
-                this.maxDurationMinute = 60;
-            }
-            if(catchupIntervalSecond == null) {
-                this.catchupIntervalSecond = intervalSecond;
-            }
-            if(useCheckpointAsStartDatetime == null) {
-                this.useCheckpointAsStartDatetime = false;
-            }
-        }
-
-        public static BigQuerySourceParameters of(SourceConfig config) {
-            final BigQuerySourceParameters parameters = new Gson().fromJson(config.getParameters(), BigQuerySourceParameters.class);
-            if(parameters == null) {
-                throw new IllegalArgumentException("BigQuery source[" + config.getName() + "].parameters must not be empty!");
-            }
-            if(config.getMicrobatch() != null && config.getMicrobatch()) {
-                parameters.validateMicroBatch();
-                parameters.setDefaultsMicroBatch();
-            } else {
-                parameters.validateBatch();
-                parameters.setDefaultsBatch();
-            }
-            return parameters;
         }
     }
 
-    public String getName() { return "bigquery"; }
-
-    public Map<String, FCollection<?>> expand(PBegin begin, SourceConfig config, PCollection<Long> beats, List<FCollection<?>> waits) {
-        final BigQuerySourceParameters parameters = BigQuerySourceParameters.of(config);
-        if(config.getMicrobatch() != null && config.getMicrobatch()) {
-            return Collections.singletonMap(config.getName(), microbatch(beats, config, parameters));
-        } else if(parameters.getQuery() == null && parameters.getTable() == null) {
-            return Collections.singletonMap(config.getName(), batchAll(begin, config, parameters));
-        } else {
-            return Collections.singletonMap(config.getName(), batch(begin, config, parameters, waits));
-        }
+    private enum Mode {
+        batch,
+        microBatch,
+        view
     }
 
-    private static FCollection<GenericRecord> batch(final PBegin begin, final SourceConfig config, final BigQuerySourceParameters parameters, final List<FCollection<?>> wait) {
-        if(wait == null) {
-            final BigQueryBatchSource source = new BigQueryBatchSource(config, parameters);
-            final PCollection<GenericRecord> output = begin.apply(config.getName(), source);
-            return FCollection.of(config.getName(), output, DataType.AVRO, source.avroSchema);
-        } else {
-            final BigQueryBatchQueryWaitSource source = new BigQueryBatchQueryWaitSource(config, wait);
-            final PCollection<GenericRecord> output = begin.apply(config.getName(), source);
-            return FCollection.of(config.getName(), output, DataType.AVRO, source.avroSchema);
-        }
-    }
 
-    private static FCollection<GenericRecord> batchAll(final PBegin begin, final SourceConfig config, final BigQuerySourceParameters parameters) {
-        final BigQueryBatchAllSource source = new BigQueryBatchAllSource(config, parameters);
-        final PCollectionTuple outputs = begin.apply(config.getName(), source);
-        return FCollection.of(config.getName(), new HashMap<>(), outputs, source.dataTypes, source.avroSchemas);
-    }
+    @Override
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
-    private static FCollection<GenericRecord> microbatch(final PCollection<Long> beats, final SourceConfig config, final BigQuerySourceParameters parameters) {
-        final BigQueryMicrobatchRead source = new BigQueryMicrobatchRead(config, parameters);
-        final PCollection<GenericRecord> output = beats.apply(config.getName(), source);
-        return FCollection.of(config.getName(), output, DataType.AVRO, source.schema);
-    }
+        final Parameters parameters = getParameters(Parameters.class);
+        parameters.validate(getName());
+        parameters.setDefaults(begin);
 
-    public static class BigQueryBatchSource extends PTransform<PBegin, PCollection<GenericRecord>> {
+        final TupleTag<MElement> outputTag = new TupleTag<>(){};
+        final TupleTag<MElement> failureTag = new TupleTag<>(){};
 
-        private Schema avroSchema;
+        return switch (parameters.mode) {
+            case batch -> {
+                final KV<org.apache.avro.Schema, BigQueryIO.TypedRead<GenericRecord>> schemaAndRead = createRead(
+                        parameters, getTemplateArgs(), getRunner(), errorHandler);
+                final org.apache.avro.Schema outputAvroSchema = schemaAndRead.getKey();
+                if(outputAvroSchema == null) {
+                    throw new IllegalModuleException("Could not create schema from bigquery source");
+                }
+                final BigQueryIO.TypedRead<GenericRecord> read = schemaAndRead.getValue();
+                if(read == null) {
+                    throw new IllegalModuleException("Could not create BigQueryIO.Read");
+                }
 
-        private final String timestampAttribute;
-        private final String timestampDefault;
-        private final BigQuerySourceParameters parameters;
-        private final Map<String, Object> templateArgs;
+                final PCollection<GenericRecord> records = begin
+                        .apply("ReadBigQuery", read)
+                        .setCoder(AvroCoder.of(outputAvroSchema));
 
-        private BigQueryBatchSource(final SourceConfig config, final BigQuerySourceParameters parameters) {
-            this.timestampAttribute = config.getTimestampAttribute();
-            this.timestampDefault = config.getTimestampDefault();
-            this.templateArgs = config.getArgs();
-            this.parameters = parameters;
-        }
+                final Schema outputSchema = Schema.of(outputAvroSchema);
+                final PCollection<MElement> elements = records
+                        .apply("Format", ParDo.of(new FormatDoFn()))
+                        .setCoder(ElementCoder.of(outputSchema));
 
-        @Override
-        public PCollection<GenericRecord> expand(final PBegin begin) {
+                if(getTimestampAttribute() != null) {
+                    if(!outputSchema.hasField(getTimestampAttribute())) {
+                        throw new IllegalModuleException("BigQuery source module: " + getName() + " is specified timestampAttribute: " + getTimestampAttribute() + ", but not found in input schema: " + outputAvroSchema);
+                    }
+                }
 
-            final String project = begin.getPipeline().getOptions().as(GcpOptions.class).getProject();
-            final PCollection<GenericRecord> records;
-            if(parameters.getQuery() != null) {
+                yield MCollectionTuple
+                        .of(elements, outputSchema);
+            }
+            case view -> {
                 final String query;
-                if(parameters.getQuery().startsWith("gs://")) {
-                    final String rawQuery = StorageUtil.readString(parameters.getQuery());
-                    query = TemplateUtil.executeStrictTemplate(rawQuery, templateArgs);
+                if(parameters.query.startsWith("gs://")) {
+                    final String rawQuery = StorageUtil.readString(parameters.query);
+                    query = TemplateUtil.executeStrictTemplate(rawQuery, getTemplateArgs());
                 } else {
-                    query = parameters.getQuery();
+                    query = parameters.query;
                 }
-
-                final TableSchema tableSchema = BigQueryUtil.getTableSchemaFromQuery(project, query);
-                this.avroSchema = AvroSchemaUtil.convertSchema(tableSchema);
-
-                final BigQueryIO.TypedRead.Method method;
-                if(parameters.getMethod() != null) {
-                    method = parameters.getMethod();
-                } else if(OptionUtil.isDirectRunner(begin.getPipeline().getOptions())) {
-                    method = BigQueryIO.TypedRead.Method.EXPORT;
-                } else {
-                    method = BigQueryIO.TypedRead.Method.DIRECT_READ;
-                }
-
-                BigQueryIO.TypedRead<GenericRecord> read = BigQueryIO
-                        .read(SchemaAndRecord::getRecord)
-                        .fromQuery(query)
-                        .usingStandardSql()
-                        .useAvroLogicalTypes()
-                        .withMethod(method)
-                        .withQueryPriority(parameters.getQueryPriority())
-                        .withoutValidation()
-                        .withCoder(AvroCoder.of(avroSchema));
-
-                if(parameters.getKmsKey() != null) {
-                    read = read.withKmsKey(parameters.getKmsKey());
-                }
-                if(parameters.getQueryTempDataset() != null) {
-                    read = read.withQueryTempDataset(parameters.getQueryTempDataset());
-                }
-                if(parameters.getQueryLocation() != null) {
-                    read = read.withQueryLocation(parameters.getQueryLocation());
-                }
-                if(parameters.getFormat() != null) {
-                    read = read.withFormat(parameters.getFormat());
-                }
-
-                records = begin
-                        .apply("QueryToBigQuery", read)
-                        .setCoder(AvroCoder.of(avroSchema))
-                        .setTypeDescriptor(TypeDescriptor.of(GenericRecord.class));
-
-            } else if(parameters.getTable() != null) {
-                final String[] table = parameters.getTable().trim().replaceAll(":", ".").split("\\.");
-                final TableReference tableReference;
-                if(table.length == 3) {
-                    tableReference = new TableReference().setProjectId(table[0]).setDatasetId(table[1]).setTableId(table[2]);
-                } else if(table.length == 2) {
-                    tableReference = new TableReference().setProjectId(project).setDatasetId(table[0]).setTableId(table[1]);
-                } else {
-                    throw new IllegalArgumentException("Illegal table parameter: " + parameters.getTable() + ". should contains at least dataset and table (ex: `dataset_id.table_name`)");
-                }
-
-                final List<String> fields;
-                if(parameters.getFields() != null) {
-                    fields = parameters.getFields().stream()
-                            .map(String::trim)
-                            .collect(Collectors.toList());
-                } else {
-                    fields = null;
-                }
-                this.avroSchema = BigQueryUtil.getTableSchemaFromTableStorage(
-                        tableReference, project, fields, parameters.getRowRestriction());
-
-                final BigQueryIO.TypedRead.Method method;
-                if(parameters.getMethod() != null) {
-                    method = parameters.getMethod();
-                } else if(OptionUtil.isDirectRunner(begin.getPipeline().getOptions())) {
-                    if(parameters.getFields() != null || parameters.getRowRestriction() != null) {
-                        method = BigQueryIO.TypedRead.Method.DIRECT_READ;
-                    } else {
-                        method = BigQueryIO.TypedRead.Method.EXPORT;
-                    }
-                } else {
-                    method = BigQueryIO.TypedRead.Method.DIRECT_READ;
-                }
-
-                BigQueryIO.TypedRead<GenericRecord> read = BigQueryIO
-                        .read(SchemaAndRecord::getRecord)
-                        .from(tableReference)
-                        .useAvroLogicalTypes()
-                        .withMethod(method)
-                        .withoutValidation()
-                        .withCoder(AvroCoder.of(avroSchema));
-
-                if(parameters.getFields() != null) {
-                    read = read.withSelectedFields(fields);
-                }
-                if(parameters.getRowRestriction() != null) {
-                    read = read.withRowRestriction(parameters.getRowRestriction());
-                }
-
-                records = begin
-                        .apply("ReadBigQueryTable", read)
-                        .setCoder(AvroCoder.of(avroSchema))
-                        .setTypeDescriptor(TypeDescriptor.of(GenericRecord.class));
-
-            } else {
-                throw new IllegalArgumentException("bigquery module support only query or table");
+                parameters.query = query;
+                final ViewSource source = new ViewSource(getJobName(), getName(), parameters, outputTag, failureTag);
+                final PCollectionTuple outputs = begin.apply("View", source);
+                yield MCollectionTuple.of(outputs.get(outputTag), source.schema);
             }
-
-            if(timestampAttribute == null) {
-                return records;
-            } else {
-                if(avroSchema.getField(timestampAttribute) == null) {
-                    throw new IllegalArgumentException("BigQuery source module: " + name + " is specified timestampAttribute: " + timestampAttribute + ", but not found in input schema: " + avroSchema.toString());
-                }
-                return records.apply("WithTimestamp", DataTypeTransform
-                        .withTimestamp(DataType.AVRO, timestampAttribute, timestampDefault));
-            }
-
-        }
-
+            default -> throw new IllegalArgumentException();
+        };
     }
 
-    public static class BigQueryBatchAllSource extends PTransform<PBegin, PCollectionTuple> {
+    private class FormatDoFn extends DoFn<GenericRecord, MElement> {
 
-        private Map<TupleTag<?>, Schema> avroSchemas;
-        private Map<TupleTag<?>, DataType> dataTypes;
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final MElement output = MElement.of(c.element(), c.timestamp());
+            if(getTimestampAttribute() != null) {
+                final Instant eventTime = output.getAsJodaInstant(getTimestampAttribute());
+                final MElement outputWithTimestamp = output.withEventTime(eventTime);
+                c.outputWithTimestamp(outputWithTimestamp, eventTime);
+            } else {
+                c.output(output);
+            }
+        }
+    }
 
-        private final BigQuerySourceParameters parameters;
-        private final Map<String, Object> templateArgs;
+    private static KV<org.apache.avro.Schema, BigQueryIO.TypedRead<GenericRecord>> createRead(
+            final Parameters parameters,
+            final Map<String, String> templateArgs,
+            final MPipeline.Runner runner,
+            final MErrorHandler errorHandler) {
 
-        private BigQueryBatchAllSource(final SourceConfig config, final BigQuerySourceParameters parameters) {
-            this.templateArgs = config.getArgs();
+        BigQueryIO.TypedRead<GenericRecord> read = BigQueryIO
+                .read(SchemaAndRecord::getRecord)
+                .useAvroLogicalTypes()
+                .withoutValidation();
+
+        if(parameters.kmsKey != null) {
+            read = read.withKmsKey(parameters.kmsKey);
+        }
+
+        if(parameters.query != null) {
+            final String query;
+            if(parameters.query.startsWith("gs://")) {
+                LOG.info("query parameter is GCS path: {}", parameters.query);
+                final String rawQuery = StorageUtil.readString(parameters.query);
+                query = TemplateUtil.executeStrictTemplate(rawQuery, templateArgs);
+            } else if(ParameterManagerUtil.isParameterVersionResource(parameters.query)) {
+                LOG.info("query parameter is Parameter Manager resource: {}", parameters.query);
+                final ParameterManagerUtil.Version version = ParameterManagerUtil.getParameterVersion(parameters.query);
+                if(version.payload == null) {
+                    throw new IllegalModuleException("query resource does not exists for: " + parameters.query);
+                }
+                query = new String(version.payload, StandardCharsets.UTF_8);
+            } else {
+                query = parameters.query;
+            }
+
+            read = read
+                    .fromQuery(query)
+                    .usingStandardSql()
+                    .withQueryPriority(parameters.queryPriority);
+
+            if(parameters.queryLocation != null) {
+                read = read.withQueryLocation(parameters.queryLocation);
+            }
+            if(parameters.queryTempDataset != null) {
+                if(parameters.queryTempDataset.contains(".")) {
+                    final String[] strs = parameters.queryTempDataset.split("\\.", 2);
+                    read = read.withQueryTempProjectAndDataset(strs[0], strs[1]);
+                } else {
+                    read = read.withQueryTempDataset(parameters.queryTempDataset);
+                }
+            }
+
+            final TableSchema tableSchema = BigQueryUtil.getTableSchemaFromQuery(parameters.queryRunProjectId, query);
+            final org.apache.avro.Schema avroSchema = AvroSchemaUtil.convertSchema(tableSchema);
+
+            final BigQueryIO.TypedRead.Method method = Optional
+                    .ofNullable(parameters.method)
+                    .orElseGet(() -> BigQueryUtil.getPreferReadMethod(tableSchema));
+            read = read.withMethod(method);
+
+            errorHandler.apply(read);
+
+            return KV.of(avroSchema, read.withCoder(AvroGenericCoder.of(avroSchema)));
+        } else if(parameters.table != null || (parameters.datasetId != null)) {
+            final TableReference tableReference = createTableReference(parameters);
+            read = read
+                    .from(tableReference)
+                    .withoutValidation();
+            if(parameters.fields != null) {
+                read = read.withSelectedFields(parameters.fields);
+            }
+            if(parameters.rowRestriction != null) {
+                read = read.withRowRestriction(parameters.rowRestriction);
+            }
+            if(parameters.format != null) {
+                read = read.withFormat(parameters.format);
+            }
+            final BigQueryIO.TypedRead.Method method = Optional
+                    .ofNullable(parameters.method)
+                    .orElse(BigQueryIO.TypedRead.Method.DIRECT_READ);
+            read = read.withMethod(method);
+
+            errorHandler.apply(read);
+
+            return switch (runner) {
+                case direct -> {
+                    final TableSchema tableSchema = BigQueryUtil.getTableSchemaFromTable(tableReference);
+                    final org.apache.avro.Schema avroSchema = AvroSchemaUtil.convertSchema(tableSchema);
+                    yield KV.of(avroSchema, read.withCoder(AvroGenericCoder.of(avroSchema)));
+                }
+                case dataflow -> {
+                    final org.apache.avro.Schema avroSchema = BigQueryUtil.getTableSchemaFromTableStorage(
+                            tableReference, parameters.queryRunProjectId, parameters.fields, parameters.rowRestriction);
+                    yield KV.of(avroSchema, read.withCoder(AvroGenericCoder.of(avroSchema)));
+                }
+                default -> throw new IllegalArgumentException();
+            };
+        } else {
+            throw new IllegalModuleException("bigquery module support only query or table");
+        }
+    }
+
+    private static class ViewSource extends PTransform<PBegin, PCollectionTuple> {
+
+        private final String jobName;
+        private final String moduleName;
+        private final Parameters parameters;
+        private final TupleTag<MElement> outputTag;
+        private final TupleTag<MElement> failuresTag;
+
+        private transient Schema schema;
+
+        ViewSource(
+                final String jobName,
+                final String moduleName,
+                final Parameters parameters,
+                final TupleTag<MElement> outputTag,
+                final TupleTag<MElement> failuresTag) {
+
+            this.jobName = jobName;
+            this.moduleName = moduleName;
             this.parameters = parameters;
+            this.outputTag = outputTag;
+            this.failuresTag = failuresTag;
         }
 
         @Override
-        public PCollectionTuple expand(final PBegin begin) {
-            final BigQueryIO.TypedRead.Method method;
-            if(OptionUtil.isDirectRunner(begin.getPipeline().getOptions())) {
-                if(parameters.getFields() != null || parameters.getRowRestriction() != null) {
-                    method = BigQueryIO.TypedRead.Method.DIRECT_READ;
-                } else {
-                    method = BigQueryIO.TypedRead.Method.EXPORT;
-                }
+        public PCollectionTuple expand(PBegin begin) {
+
+            final TableSchema tableSchema = BigQueryUtil.getTableSchemaFromQuery(
+                    parameters.queryRunProjectId, parameters.query);
+            this.schema = Schema.of(tableSchema);
+
+            final PCollection<Long> sequence;
+            if(OptionUtil.isStreaming(begin)) {
+                sequence = begin
+                        .apply("Generate", GenerateSequence
+                                .from(0)
+                                .withRate(1, Duration.standardMinutes(parameters.view.intervalMinute)));
             } else {
-                method = BigQueryIO.TypedRead.Method.DIRECT_READ;
+                sequence = begin
+                        .apply("Create", Create.of(0L).withCoder(VarLongCoder.of()));
             }
 
-            this.avroSchemas = new HashMap<>();
-            this.dataTypes = new HashMap<>();
-            PCollectionTuple outputs = PCollectionTuple.empty(begin.getPipeline());
-
-            final List<Table> tables = BigQueryUtil.getTables(parameters.getProject(), parameters.getDataset());
-            for(final Table table : tables) {
-                final Schema schema = AvroSchemaUtil.convertSchema(table.getSchema(), table.getTableReference().getTableId());
-                final BigQueryIO.TypedRead<GenericRecord> read = BigQueryIO
-                        .read(SchemaAndRecord::getRecord)
-                        .from(table.getTableReference())
-                        .useAvroLogicalTypes()
-                        .withMethod(method)
-                        .withoutValidation()
-                        .withCoder(AvroCoder.of(schema));
-
-                final TupleTag<GenericRecord> tag = new TupleTag<>() {};
-                this.avroSchemas.put(tag, schema);
-                this.dataTypes.put(tag, DataType.AVRO);
-                final PCollection<GenericRecord> records = begin.apply("Read_" + table.getTableReference().getTableId(), read);
-                outputs = outputs.and(tag, records);
-            }
-
-            return outputs;
+            return sequence
+                    .apply(ParDo.of(new QueryMapDoFn(jobName, moduleName, parameters, failuresTag))
+                            .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
         }
 
-    }
+        private static class QueryMapDoFn extends DoFn<Long, MElement> {
 
-    private static class BigQueryBatchQueryWaitSource extends PTransform<PBegin, PCollection<GenericRecord>> {
+            private final String job;
+            private final String name;
+            private final Parameters parameters;
+            private final TupleTag<MElement> failuresTag;
 
-        private Schema avroSchema;
+            private transient TableSchema schema;
 
-        private final String timestampAttribute;
-        private final String timestampDefault;
-        private final BigQuerySourceParameters parameters;
-        private final List<FCollection<?>> wait;
+            QueryMapDoFn(
+                    final String job,
+                    final String name,
+                    final Parameters parameters,
+                    final TupleTag<MElement> failuresTag) {
 
-        private BigQueryBatchQueryWaitSource(final SourceConfig config, final List<FCollection<?>> wait) {
-            this.timestampAttribute = config.getTimestampAttribute();
-            this.timestampDefault = config.getTimestampDefault();
-            this.wait = wait;
-            this.parameters = new Gson().fromJson(config.getParameters(), BigQuerySourceParameters.class);
-        }
-
-
-        @Override
-        public PCollection<GenericRecord> expand(final PBegin begin) {
-            final String project = begin.getPipeline().getOptions().as(GcpOptions.class).getProject();
-            final String query = parameters.getQuery();
-
-            final Bigquery bigquery = BigQueryUtil.getBigquery();
-            final Job dryRunJob = BigQueryUtil.getQueryDryRunJob(bigquery, project, query);
-            final TableSchema tableSchema = dryRunJob.getStatistics().getQuery().getSchema();
-            this.avroSchema = AvroSchemaUtil.convertSchema(tableSchema);
-
-            final String queryLocation;
-            if(parameters.getQueryLocation() == null) {
-                final TableReference tableReference = dryRunJob.getStatistics().getQuery().getReferencedTables().get(0);
-                try {
-                    final Table table = bigquery.tables()
-                            .get(tableReference.getProjectId(), tableReference.getDatasetId(), tableReference.getTableId())
-                            .execute();
-                    queryLocation = table.getLocation();
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            } else {
-                queryLocation = parameters.getQueryLocation();
-            }
-
-            final List<PCollection<?>> pwait = wait.stream()
-                    .map(FCollection::getCollection)
-                    .collect(Collectors.toList());
-
-            final String table = UUID.randomUUID().toString().replaceAll("-", "");
-            final String dataset;
-            final boolean deleteDataset;
-            if(parameters.getQueryTempDataset() == null) {
-                dataset = table;
-                deleteDataset = true;
-            } else {
-                dataset = parameters.getQueryTempDataset();
-                deleteDataset = false;
-            }
-
-            final PCollection<GenericRecord> records = begin
-                    .apply("Seed", Create.of("seed"))
-                    .apply("Wait", Wait.on(pwait))
-                    .apply("ExecuteQuery", ParDo.of(new QueryDoFn(
-                            project, query, queryLocation, dataset, table, deleteDataset, parameters.getKmsKey())))
-                    .setCoder(ProtoCoder.of(ReadStream.class))
-                    .apply("ReadRecord", ParDo.of(new ReadDoFn(this.avroSchema.toString())))
-                    .setCoder(AvroCoder.of(avroSchema));
-
-            records.apply("Sample", Sample.any(1))
-                    .apply("CleanUp", ParDo.of(new CleanDoFn(project, dataset, table, deleteDataset)));
-
-            if(timestampAttribute == null) {
-                return records;
-            } else {
-                return records.apply("WithTimestamp", DataTypeTransform
-                        .withTimestamp(DataType.AVRO, timestampAttribute, timestampDefault));
-            }
-        }
-
-        private static class QueryDoFn extends DoFn<String, ReadStream> {
-
-            private final String project;
-            private final String query;
-            private final String queryLocation;
-            private final String dataset;
-            private final String table;
-            private final boolean createDataset;
-            private final String kmsKey;
-
-            public QueryDoFn(final String project,
-                             final String query,
-                             final String queryLocation,
-                             final String dataset,
-                             final String table,
-                             final boolean createDataset,
-                             final String kmsKey) {
-
-                this.project = project;
-                this.query = query;
-                this.queryLocation = queryLocation;
-                this.dataset = dataset;
-                this.table = table;
-                this.createDataset = createDataset;
-                this.kmsKey = kmsKey;
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) {
-                final Bigquery bigquery = BigQueryUtil.getBigquery();
-                try {
-                    TableReference destinationTable;
-                    if(createDataset) {
-                        bigquery.datasets().insert(project, new Dataset()
-                                .setDatasetReference(new DatasetReference()
-                                        .setProjectId(project)
-                                        .setDatasetId(dataset))
-                                .setDefaultTableExpirationMs(1000 * 60 * 60 * 24L)
-                                .setLocation(queryLocation))
-                                .execute();
-                        destinationTable = new TableReference()
-                                .setProjectId(project)
-                                .setDatasetId(dataset)
-                                .setTableId(table);
-                    } else {
-                        destinationTable = new TableReference()
-                                .setProjectId(project)
-                                .setDatasetId(dataset)
-                                .setTableId(table);
-                    }
-
-                    final JobConfigurationQuery jobConfigurationQuery = new JobConfigurationQuery()
-                            .setQuery(query)
-                            .setDestinationTable(destinationTable)
-                            .setAllowLargeResults(true)
-                            .setCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED.name())
-                            .setWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_TRUNCATE.name())
-                            .setPriority(BigQueryIO.TypedRead.QueryPriority.INTERACTIVE.name())
-                            .setUseLegacySql(false);
-
-                    if(kmsKey != null) {
-                        jobConfigurationQuery.setDestinationEncryptionConfiguration(new EncryptionConfiguration().setKmsKeyName(kmsKey));
-                    }
-
-                    final Job queryJob = bigquery.jobs().insert(project, new Job()
-                            .setConfiguration(new JobConfiguration().setQuery(jobConfigurationQuery)))
-                            .execute();
-
-                    final BackOff backOff = BackOffAdapter.toGcpBackOff(
-                            FluentBackoff.DEFAULT
-                                    .withMaxRetries(9)
-                                    .withInitialBackoff(Duration.standardSeconds(1))
-                                    .withMaxBackoff(Duration.standardMinutes(1))
-                                    .backoff());
-
-                    final Job resultJob = BigQueryUtil.pollJob(bigquery, queryJob.getJobReference(), Sleeper.DEFAULT, backOff);
-                    if(!BigQueryUtil.isJobResultSucceeded(resultJob)) {
-                        throw new RuntimeException(String.format("Query job %s failed, status: %s", "", resultJob.getStatus()));
-                    }
-
-                    final CreateReadSessionRequest request = CreateReadSessionRequest.newBuilder()
-                            .setParent(String.format("projects/%s", project))
-                            .setReadSession(ReadSession.newBuilder()
-                                    .setTable(String.format("projects/%s/datasets/%s/tables/%s",
-                                            destinationTable.getProjectId(), destinationTable.getDatasetId(), destinationTable.getTableId()))
-                                    .setDataFormat(DataFormat.AVRO))
-                            .setMaxStreamCount(0)
-                            .build();
-
-                    final ReadSession readSession;
-                    try (BigQueryReadClient storageClient = BigQueryReadClient.create()) {
-                        readSession = storageClient.createReadSession(request);
-                    }
-
-                    for(final ReadStream readStream : readSession.getStreamsList()) {
-                        c.output(readStream);
-                    }
-
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-
-            }
-        }
-
-        private static class ReadDoFn extends DoFn<ReadStream, GenericRecord> {
-
-            private final String schemaString;
-
-            private transient Schema schema;
-            private transient DatumReader<GenericRecord> datumReader;
-            private transient BigQueryReadClient client;
-
-            private transient BinaryDecoder decoder;
-            private transient GenericRecord record;
-
-            public ReadDoFn(final String schemaString) {
-                this.schemaString = schemaString;
-            }
-
-            @Setup
-            public void setup() throws IOException {
-                this.schema = new Schema.Parser().parse(this.schemaString);
-                this.datumReader = new GenericDatumReader<>(schema);
-                this.client = BigQueryReadClient.create();
-                this.decoder = null;
-                this.record = null;
-            }
-
-            @ProcessElement
-            public void processElement(ProcessContext c) throws IOException {
-                final ReadStream readStream = c.element();
-
-                final ReadRowsRequest readRowsRequest = ReadRowsRequest.newBuilder()
-                        .setReadStream(readStream.getName())
-                        .build();
-
-                final ServerStream<ReadRowsResponse> stream = client.readRowsCallable().call(readRowsRequest);
-                for (final ReadRowsResponse response : stream) {
-                    decoder = DecoderFactory.get()
-                            .binaryDecoder(response.getAvroRows().getSerializedBinaryRows().toByteArray(), decoder);
-
-                    while (!decoder.isEnd()) {
-                        record = datumReader.read(record, decoder);
-                        c.output(record);
-                    }
-                }
-
-            }
-        }
-
-        private static class CleanDoFn extends DoFn<GenericRecord, Void> {
-
-            private final String project;
-            private final String dataset;
-            private final String table;
-            private final boolean deleteDataset;
-
-            public CleanDoFn(final String project, final String dataset, final String table, final boolean deleteDataset) {
-                this.project = project;
-                this.dataset = dataset;
-                this.table = table;
-                this.deleteDataset = deleteDataset;
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) {
-
-                final Bigquery bigquery = BigQueryUtil.getBigquery();
-
-                try {
-                    bigquery.tables().delete(project, dataset, table).execute();
-                } catch (IOException e) {
-
-                }
-
-                if(deleteDataset) {
-                    try {
-                        bigquery.datasets().delete(project, dataset).execute();
-                    } catch (IOException e) {
-
-                    }
-                }
-            }
-        }
-
-    }
-
-    private static class BigQueryMicrobatchRead extends PTransform<PCollection<Long>, PCollection<GenericRecord>> {
-
-        private Schema schema;
-
-        private final String timestampAttribute;
-        private final BigQuerySourceParameters parameters;
-
-        public BigQueryMicrobatchRead(final SourceConfig config, final BigQuerySourceParameters parameters) {
-            this.timestampAttribute = config.getTimestampAttribute();
-            this.parameters = parameters;
-        }
-
-        public PCollection<GenericRecord> expand(final PCollection<Long> beat) {
-
-            final String sampleQuery = MicrobatchQuery.createQuery(MicrobatchQuery.createTemplate(
-                    parameters.getQuery()), Instant.now(), Instant.now().plus(1));
-
-            final String projectId = beat.getPipeline().getOptions().as(GcpOptions.class).getProject();
-            this.schema = BigQueryUtil.getAvroSchemaFromQuery(projectId, sampleQuery);
-
-            return beat
-                    .apply("MicrobatchQuery", MicrobatchQuery.of(
-                            parameters.getQuery(),
-                            parameters.getStartDatetime(),
-                            parameters.getIntervalSecond(),
-                            parameters.getGapSecond(),
-                            parameters.getMaxDurationMinute(),
-                            parameters.getOutputCheckpoint(),
-                            parameters.getCatchupIntervalSecond(),
-                            parameters.getUseCheckpointAsStartDatetime(),
-                            new MicrobatchQueryDoFn(
-                                    projectId,
-                                    parameters.getQueryTempDataset(),
-                                    parameters.getQueryLocation(),
-                                    1000L,
-                                    schema,
-                                    timestampAttribute)))
-                    .setCoder(AvroCoder.of(schema));
-        }
-
-        private static class MicrobatchQueryDoFn extends DoFn<KV<KV<Integer, KV<Long, Instant>>, String>, GenericRecord> {
-
-            private static final Logger LOG = LoggerFactory.getLogger(MicrobatchQueryDoFn.class);
-
-            private final String projectId;
-            private final String dataset;
-            private final String location;
-            private final Long timeoutMs;
-            private final String schemaString;
-            private final String timestampAttribute;
-
-            private transient Schema schema;
-            private transient Bigquery bigquery;
-            private transient DatasetReference datasetReference;
-
-            private MicrobatchQueryDoFn(final String projectId,
-                                        final String dataset,
-                                        final String location,
-                                        final Long timeoutMs,
-                                        final Schema schema,
-                                        final String timestampAttribute) {
-
-                this.projectId = projectId;
-                this.dataset = dataset;
-                this.location = location;
-                this.timeoutMs = timeoutMs;
-                this.schemaString = schema.toString();
-                this.timestampAttribute = timestampAttribute;
+                this.job = job;
+                this.name = name;
+                this.parameters = parameters;
+                this.failuresTag = failuresTag;
             }
 
             @Setup
             public void setup() {
-                this.schema = new Schema.Parser().parse(schemaString);
-                this.bigquery = BigQueryUtil.getBigquery();
-                this.datasetReference = BigQueryUtil.getDatasetReference(dataset, projectId);
+                try {
+                    this.schema = BigQueryUtil.getTableSchemaFromQuery(
+                            parameters.queryRunProjectId, parameters.query);
+                } catch (final Throwable e) {
+                    ERROR_COUNTER.inc();
+                    LOG.error("BigQuery source view setup error: {}", MFailure.convertThrowableMessage(e));
+                }
             }
 
             @ProcessElement
-            public void processElement(ProcessContext c) throws Exception {
+            public void processElement(ProcessContext c) {
+                try {
+                    long startMillis = Instant.now().getMillis();
+                    final Bigquery bigquery = BigQueryUtil.getBigquery();
+                    final QueryRequest queryRequest = new QueryRequest()
+                            .setQuery(parameters.query)
+                            .setUseLegacySql(false);
+                    if(parameters.queryLocation != null) {
+                        queryRequest.setLocation(parameters.queryLocation);
+                    }
 
-                final Instant start = Instant.now();
-                final String query = c.element().getValue();
-                final QueryResponse response = this.bigquery.jobs()
-                        .query(projectId, new QueryRequest()
-                                .setQuery(query)
-                                .setUseLegacySql(false)
-                                .setTimeoutMs(timeoutMs)
-                                .setLocation(location)
-                                .setUseQueryCache(false)
-                                .setMaxResults(5000L)
-                                .setDefaultDataset(datasetReference))
-                        .execute();
+                    final List<TableRow> tableRows = BigQueryUtil.queryBatch(
+                            bigquery,
+                            parameters.queryRunProjectId,
+                            queryRequest);
 
-                final String jobId = response.getJobReference().getJobId();
+                    final Map<String, Object> map = new HashMap<>();
+                    for(final TableRow tableRow : tableRows) {
+                        final Map<String, Object> values = BigQueryUtil.parseAsPrimitiveValues(schema, tableRow);
+                        final String key = Optional.ofNullable(values.get(parameters.view.keyField)).map(Object::toString).orElse("");
+                        map.put(key, values);
+                    }
+                    final MElement element = MElement.of(map, c.timestamp());
+                    c.output(element);
 
-                GetQueryResultsResponse queryResults = bigquery.jobs().getQueryResults(projectId, jobId).execute();
-                while(!queryResults.getJobComplete()) {
-                    Thread.sleep(1000L);
-                    queryResults = bigquery.jobs().getQueryResults(projectId, jobId).execute();
+                    LOG.info("BigQuery source view query took: {} millis", Instant.now().getMillis() - startMillis);
+                } catch (final Throwable e) {
+                    ERROR_COUNTER.inc();
+                    LOG.error("BigQuery source view error: {}", MFailure.convertThrowableMessage(e));
+                    final MElement failure = MFailure
+                            .of(job, name, "view query: " + parameters.query, e, c.timestamp())
+                            .toElement(c.timestamp());
+                    c.output(failuresTag, failure);
                 }
 
-                if(queryResults.getTotalRows().longValue() == 0) {
-                    final long time = Instant.now().getMillis() - start.getMillis();
-                    LOG.info(String.format("Query [%s] result zero, took [%d] millisec to execute the query.",
-                            query, time));
-                    c.output(new TupleTag<>("checkpoint"), c.element().getKey());
-                    return;
-                }
-
-                queryResults.getRows().stream()
-                        .map(tableRow -> TableRowToRecordConverter.convertQueryResult(schema, tableRow))
-                        .forEach(c::output);
-
-                while(queryResults.getPageToken() != null) {
-                    queryResults = bigquery.jobs()
-                            .getQueryResults(projectId, jobId)
-                            .setPageToken(queryResults.getPageToken())
-                            .execute();
-                    queryResults.getRows().stream()
-                            .map(tableRow -> TableRowToRecordConverter.convertQueryResult(schema, tableRow))
-                            .forEach(c::output);
-                }
-
-                final long time = Instant.now().getMillis() - start.getMillis();
-                LOG.info(String.format("Query [%s] result num [%d], took [%d] millisec to execute the query.",
-                        query, queryResults.getTotalRows().longValue(), time));
-
-                c.output(new TupleTag<>("checkpoint"), c.element().getKey());
-            }
-
-            @Override
-            public org.joda.time.Duration getAllowedTimestampSkew() {
-                if (timestampAttribute != null) {
-                    return org.joda.time.Duration.standardDays(365);
-                } else {
-                    return super.getAllowedTimestampSkew();
-                }
             }
 
         }
+    }
+
+    private static TableReference createTableReference(final Parameters parameters) {
+
+        final TableReference tableReference = new TableReference();
+        if(parameters.table != null) {
+            final String[] table = parameters.table.trim().replaceAll(":", ".").split("\\.");
+            if(table.length == 3) {
+                tableReference
+                        .setProjectId(table[0])
+                        .setDatasetId(table[1])
+                        .setTableId(table[2]);
+            } else if(table.length == 2) {
+                final String project = parameters.queryRunProjectId;
+                tableReference
+                        .setProjectId(project)
+                        .setDatasetId(table[0])
+                        .setTableId(table[1]);
+            } else if(table.length == 1 && parameters.datasetId != null) {
+                final String projectId = Optional
+                        .ofNullable(parameters.projectId)
+                        .orElse(parameters.queryRunProjectId);
+                tableReference
+                        .setProjectId(projectId)
+                        .setDatasetId(parameters.datasetId)
+                        .setTableId(parameters.table);
+            } else {
+                throw new IllegalArgumentException("Illegal table parameter: " + parameters.table + ". should contains at least dataset and table (ex: `dataset_id.table`)");
+            }
+        } else {
+            throw new IllegalArgumentException("parameters.table must not be null");
+        }
+        return tableReference;
     }
 
 }

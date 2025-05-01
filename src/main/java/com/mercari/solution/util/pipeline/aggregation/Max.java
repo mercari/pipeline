@@ -2,19 +2,19 @@ package com.mercari.solution.util.pipeline.aggregation;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.SchemaUtil;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
-import org.apache.beam.sdk.schemas.Schema;
+import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Max implements Aggregator {
+public class Max implements AggregateFunction {
 
-    private List<Schema.Field> outputFields;
-    private Schema.Field maxField;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
 
     private String name;
     private String field;
@@ -22,78 +22,76 @@ public class Max implements Aggregator {
     private String condition;
 
     private Boolean opposite;
+
+    private List<Range> ranges;
+
     private Boolean ignore;
 
     private transient Expression exp;
     private transient Set<String> variables;
     private transient Filter.ConditionNode conditionNode;
 
-    public static Max of(final String name,
-                         final Schema inputSchema,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore) {
-
-        return of(name, inputSchema, field, expression, condition, ignore, false);
+    @Override
+    public String getName() {
+        return this.name;
     }
 
-    public static Max of(final String name,
-                         final Schema inputSchema,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore,
-                         final Boolean opposite) {
+    @Override
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
+    }
 
-        if(field == null && expression == null) {
-            throw new IllegalArgumentException("Aggregation max: " + name + " requires field or expression parameter");
-        }
+    @Override
+    public Boolean filter(final MElement element) {
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
+    }
+
+
+    public static Max of(
+            final String name,
+            final List<Schema.Field> inputFields,
+            final String field,
+            final String expression,
+            final String condition,
+            final List<Range> ranges,
+            final Boolean ignore,
+            final Boolean opposite) {
 
         final Max max = new Max();
         max.name = name;
         max.field = field;
         max.expression = expression;
         max.condition = condition;
+        max.ranges = ranges;
         max.ignore = ignore;
         max.opposite = opposite;
 
-        max.outputFields = new ArrayList<>();
-        if(field != null) {
-            final Schema.Field inputField = inputSchema.getField(field);
-            max.maxField = Schema.Field.of(name, inputField.getType().withNullable(true));
-            max.outputFields.add(max.maxField);
+        max.inputFields = new ArrayList<>();
+        if (field != null) {
+            final Schema.Field inputField = Schema.getField(inputFields, field);
+            max.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
+            max.outputFieldType = inputField.getFieldType();
         } else {
-            max.maxField = Schema.Field.of(name, Schema.FieldType.DOUBLE.withNullable(true));
-            max.outputFields.add(max.maxField);
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                max.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+            }
+            max.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
         }
 
         return max;
     }
 
     @Override
-    public Op getOp() {
-        return this.opposite ? Op.min : Op.max;
-    }
-
-    @Override
-    public String getName() {
-        return name;
-    }
-
-    @Override
-    public Boolean getIgnore() {
-        return ignore;
-    }
-
-    @Override
-    public Boolean filter(final UnionValue unionValue) {
-        return Aggregator.filter(conditionNode, unionValue);
-    }
-
-    @Override
     public List<String> validate(int parent, int index) {
         final List<String> errorMessages = new ArrayList<>();
+        if (name == null) {
+            errorMessages.add("aggregations[" + parent + "].fields[" + index + "].name must not be null");
+        }
         return errorMessages;
     }
 
@@ -104,49 +102,70 @@ public class Max implements Aggregator {
             this.variables = variables;
             this.exp = ExpressionUtil.createDefaultExpression(this.expression, variables);
         }
-        if(this.condition != null) {
+        if (this.condition != null) {
             this.conditionNode = Filter.parse(new Gson().fromJson(this.condition, JsonElement.class));
         }
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final UnionValue input, final SchemaUtil.PrimitiveValueGetter valueGetter) {
-        final Object prevValue = accumulator.get(maxField.getType(), name);
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
         final Object inputValue;
         if(field != null) {
-            inputValue = valueGetter.getValue(input.getValue(), maxField.getType(), field);//UnionValue.getFieldValue(input, field);
+            inputValue = input.getPrimitiveValue(field);
         } else {
-            inputValue = Aggregator.eval(this.exp, variables, input);
+            inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
 
-        final Object maxNext = Aggregator.max(prevValue, inputValue, opposite);
-        accumulator.put(maxField.getType(), name, maxNext);
+        if(getRanges().isEmpty()) {
+            final Object prevValue = accumulator.get(name);
+            final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
+            accumulator.put(name, maxNext);
+        } else {
+            for(final Range range : getRanges()) {
+                if(!range.filter(timestamp, input.getTimestamp(), count)) {
+                    continue;
+                }
+                final Object prevValue = accumulator.get(range.name);
+                final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
+                accumulator.put(range.name, maxNext);
+            }
+        }
         return accumulator;
+
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
     }
 
     @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
-        final Object stateValue = base.get(maxField.getType(), name);
-        final Object accumValue = input.get(maxField.getType(), name);
-        final Object max = Aggregator.max(stateValue, accumValue, opposite);
-        base.put(maxField.getType(), name, max);
+        final Object stateValue = base.get(name);
+        final Object accumValue = input.get(name);
+        final Object max = AggregateFunction.max(stateValue, accumValue, opposite);
+        base.put(name, max);
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
-                                            final Map<String, Object> values,
-                                            final SchemaUtil.PrimitiveValueConverter converter) {
-
-        final Object maxValue = accumulator.get(maxField.getType(), name);
-        final Object fieldValue = converter.convertPrimitive(maxField.getType(), maxValue);
-        values.put(name, fieldValue);
-        return values;
+    public Object extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+        return accumulator.get(name);
     }
 
 }

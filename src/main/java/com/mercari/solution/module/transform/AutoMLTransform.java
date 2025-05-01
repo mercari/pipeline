@@ -13,12 +13,8 @@ import com.google.protobuf.NullValue;
 import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
-import com.mercari.solution.util.OptionUtil;
-import com.mercari.solution.util.converter.EntityToJsonConverter;
-import com.mercari.solution.util.converter.RecordToJsonConverter;
-import com.mercari.solution.util.converter.RowToJsonConverter;
-import com.mercari.solution.util.converter.StructToJsonConverter;
+import com.mercari.solution.util.pipeline.OptionUtil;
+import com.mercari.solution.util.schema.converter.*;
 import com.mercari.solution.util.gcp.IAMUtil;
 import com.mercari.solution.util.gcp.VertexAIUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
@@ -45,7 +41,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class AutoMLTransform implements TransformModule {
+public class AutoMLTransform {
 
     private static final Logger LOG = LoggerFactory.getLogger(AutoMLTransform.class);
 
@@ -379,7 +375,7 @@ public class AutoMLTransform implements TransformModule {
                             parameters,
                             outputSchema.toString(),
                             AvroSchemaUtil::convertSchema,
-                            RecordToJsonConverter::convertObject,
+                            AvroToJsonConverter::convertObject,
                             setter,
                             AvroSchemaUtil::getAsString,
                             AvroCoder.of(input.getAvroSchema()));
@@ -716,7 +712,7 @@ public class AutoMLTransform implements TransformModule {
                 instances = withKey;
             }
 
-            final Boolean isGCP = !OptionUtil.isDirectRunner(input.getPipeline().getOptions());
+            final Boolean isGCP = !OptionUtil.isDirectRunner(input);
             final PCollectionTuple predictions;
             if (parameters.getBatchSize() > 1) {
                 predictions = instances.apply("Predict", ParDo

@@ -2,9 +2,9 @@ package com.mercari.solution.util.pipeline.select;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.schema.RowSchemaUtil;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import org.joda.time.Instant;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -140,17 +140,17 @@ public class Scrape implements SelectFunction {
                 childFields.add(childField);
             }
             outputFieldType = Schema.FieldType
-                    .row(Schema.builder().addFields(childFields).build())
+                    .element(Schema.builder().withFields(childFields).build())
                     .withNullable(true);
         } else {
-            outputFieldType = Types.createOutputFieldType(type);
+            outputFieldType = Schema.FieldType.type(type);
         }
 
         final List<Schema.Field> scrapeInputFields = new ArrayList<>();
         if(field != null && inputFields != null) {
             final boolean fieldIsInInputFields = inputFields.stream().anyMatch(f -> field.equals(f.getName()));
             if(fieldIsInInputFields) {
-                final Schema.FieldType inputFieldType = SelectFunction.getInputFieldType(field, inputFields);
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(field, inputFields);
                 if(inputFieldType == null) {
                     throw new IllegalArgumentException("SelectField scrape: " + name + " missing inputField: " + field + " in input fields: " + inputFields);
                 }
@@ -233,7 +233,7 @@ public class Scrape implements SelectFunction {
 
     private static Object extract(final Element element, final Scrape scrape) {
 
-        if(Schema.TypeName.ROW.equals(scrape.outputFieldType.getTypeName())) {
+        if(Schema.Type.element.equals(scrape.outputFieldType.getType())) {
             final Map<String, Object> values = new HashMap<>();
             for(final Scrape field : scrape.fields) {
                 final Elements childElements = element.select(field.selector);
@@ -284,26 +284,18 @@ public class Scrape implements SelectFunction {
             return null;
         }
 
-        final Object output = switch (scrape.outputFieldType.getTypeName()) {
-            case STRING -> scrape.trim ? text.trim() : text;
-            case BOOLEAN -> Boolean.parseBoolean(text.trim());
-            case INT32 -> Integer.parseInt(text.trim().replaceAll(",", ""));
-            case INT64 -> Long.parseLong(text.trim().replaceAll(",", ""));
-            case FLOAT -> Float.parseFloat(text.trim().replaceAll(",", ""));
-            case DOUBLE -> Double.parseDouble(text.trim().replaceAll(",", ""));
-            case BYTES -> Base64.getDecoder().decode(text.getBytes(StandardCharsets.UTF_8));
-            case LOGICAL_TYPE -> {
-                if(RowSchemaUtil.isLogicalTypeDate(scrape.outputFieldType)) {
-                    yield DateTimeUtil.toLocalDate(text.trim()).toEpochDay();
-                } else if(RowSchemaUtil.isLogicalTypeTime(scrape.outputFieldType)) {
-                    yield DateTimeUtil.toMicroOfDay(DateTimeUtil.toLocalTime(text.trim()));
-                } else if(RowSchemaUtil.isLogicalTypeEnum(scrape.outputFieldType)) {
-                    yield text.trim();
-                } else {
-                    throw new IllegalArgumentException("Not supported type: " + scrape.outputFieldType.getTypeName());
-                }
-            }
-            default -> throw new IllegalArgumentException("Not supported type: " + scrape.outputFieldType.getTypeName());
+        final Object output = switch (scrape.outputFieldType.getType()) {
+            case string -> scrape.trim ? text.trim() : text;
+            case bool -> Boolean.parseBoolean(text.trim());
+            case int32 -> Integer.parseInt(text.trim().replaceAll(",", ""));
+            case int64 -> Long.parseLong(text.trim().replaceAll(",", ""));
+            case float32 -> Float.parseFloat(text.trim().replaceAll(",", ""));
+            case float64 -> Double.parseDouble(text.trim().replaceAll(",", ""));
+            case bytes -> Base64.getDecoder().decode(text.getBytes(StandardCharsets.UTF_8));
+            case date -> Long.valueOf(DateTimeUtil.toLocalDate(text.trim()).toEpochDay()).intValue();
+            case time -> DateTimeUtil.toLocalTime(text.trim()).toNanoOfDay() / 1000L;
+            case enumeration -> scrape.outputFieldType.getSymbolIndex(text.trim());
+            default -> throw new IllegalArgumentException("Not supported type: " + scrape.outputFieldType.getType());
         };
 
         return output;

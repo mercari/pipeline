@@ -1,54 +1,37 @@
 package com.mercari.solution.module.sink;
 
-import com.google.cloud.spanner.Struct;
-import com.google.datastore.v1.Entity;
-import com.google.firestore.v1.Document;
-import com.google.gson.Gson;
-import com.mercari.solution.config.SinkConfig;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
+import com.google.gson.JsonObject;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.converter.*;
+import com.mercari.solution.util.schema.converter.ElementToJsonConverter;
 import freemarker.template.Template;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.beam.sdk.io.gcp.spanner.MutationGroup;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.Row;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.beam.sdk.values.PCollectionList;
+import org.apache.beam.sdk.values.PDone;
+import org.slf4j.*;
 
 import java.io.Serializable;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
-
-public class DebugSink  implements SinkModule {
+@Sink.Module(name="debug")
+public class DebugSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(DebugSink.class);
 
-    private static class DebugSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private LogLevel logLevel;
         private String logTemplate;
 
-        public LogLevel getLogLevel() {
-            return logLevel;
-        }
-
-        public String getLogTemplate() {
-            return logTemplate;
-        }
-
         private void setDefaults() {
             if(this.logLevel == null) {
-               this.logLevel = LogLevel.debug;
+                this.logLevel = LogLevel.debug;
             }
         }
 
@@ -63,101 +46,51 @@ public class DebugSink  implements SinkModule {
     }
 
     @Override
-    public String getName() { return "debug"; }
-
-    @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
-        if(inputs == null || inputs.size() != 1) {
-            throw new IllegalArgumentException("debug sink module requires input parameter");
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            MErrorHandler errorHandler) {
+        if (inputs.size() == 0) {
+            throw new IllegalArgumentException("debug sink module requires inputs parameter");
         }
-        final FCollection<?> input = inputs.get(0);
-        return Collections.singletonMap(config.getName(), write(input, config, waits));
-    }
 
-    private FCollection<?> write(final FCollection<?> input, final SinkConfig config, final List<FCollection<?>> waits) {
-        final DebugSinkParameters parameters = new Gson().fromJson(config.getParameters(), DebugSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.setDefaults();
 
-        switch (input.getDataType()) {
-            case AVRO -> {
-                final FCollection<GenericRecord> inputCollection = (FCollection<GenericRecord>) input;
-                final PCollection output = inputCollection.getCollection()
-                        .apply(config.getName(), ParDo.of(new DebugDoFn<>(
-                                config.getName(),
-                                parameters.getLogTemplate(),
-                                parameters.getLogLevel(),
-                                RecordToJsonConverter::convert)));
-                return FCollection.update(input, output);
-            }
-            case ROW -> {
-                final FCollection<Row> inputCollection = (FCollection<Row>) input;
-                final PCollection output = inputCollection.getCollection()
-                        .apply(config.getName(), ParDo.of(new DebugDoFn<>(
-                                config.getName(),
-                                parameters.getLogTemplate(),
-                                parameters.getLogLevel(),
-                                RowToJsonConverter::convert)));
-                return FCollection.update(input, output);
-            }
-            case STRUCT -> {
-                final FCollection<Struct> inputCollection = (FCollection<Struct>) input;
-                final PCollection output = inputCollection.getCollection()
-                        .apply(config.getName(), ParDo.of(new DebugDoFn<>(
-                                config.getName(),
-                                parameters.getLogTemplate(),
-                                parameters.getLogLevel(),
-                                StructToJsonConverter::convert)));
-                return FCollection.update(input, output);
-            }
-            case DOCUMENT -> {
-                final FCollection<Document> inputCollection = (FCollection<Document>) input;
-                final PCollection output = inputCollection.getCollection()
-                        .apply(config.getName(), ParDo.of(new DebugDoFn<>(
-                                config.getName(),
-                                parameters.getLogTemplate(),
-                                parameters.getLogLevel(),
-                                DocumentToJsonConverter::convert)));
-                return FCollection.update(input, output);
-            }
-            case ENTITY -> {
-                final FCollection<Entity> inputCollection = (FCollection<Entity>) input;
-                final PCollection output = inputCollection.getCollection()
-                        .apply(config.getName(), ParDo.of(new DebugDoFn<>(
-                                config.getName(),
-                                parameters.getLogTemplate(),
-                                parameters.getLogLevel(),
-                                EntityToJsonConverter::convert)));
-                return FCollection.update(input, output);
-            }
-            case MUTATIONGROUP -> {
-                final FCollection<MutationGroup> inputCollection = (FCollection<MutationGroup>) input;
-                final PCollection output = inputCollection.getCollection()
-                        .apply(config.getName(), ParDo.of(new DebugDoFn<>(
-                                config.getName(),
-                                parameters.getLogTemplate(),
-                                parameters.getLogLevel(),
-                                MutationToJsonConverter::convertJsonString)));
-                return FCollection.update(input, output);
-            }
-            default -> throw new IllegalArgumentException("Debug sink not supported data type: " + input.getDataType());
+        PCollectionList<Void> voids = PCollectionList.empty(inputs.getPipeline());
+        for(final String tag : inputs.getAllInputs()) {
+            final Schema schema = inputs.getSchema(tag);
+            final PCollection<MElement> element = inputs.get(tag);
+            final String name = String.format("%s.%s", getName(), tag);
+            final PCollection<Void> done = element
+                    .apply("Debug" + tag, ParDo.of(new DebugDoFn(getJobName(), name, schema, parameters)));
+            voids = voids.and(done);
         }
+
+        return MCollectionTuple
+                .done(PDone.in(inputs.getPipeline()));
     }
 
-    private static class DebugDoFn<T> extends DoFn<T, Void> {
+    private static class DebugDoFn extends DoFn<MElement, Void> {
 
+        private final String jobName;
         private final String name;
+        private final Schema schema;
         private final String templateText;
         private final LogLevel logLevel;
 
-        private final JsonConverter<T> converter;
-
         private transient Template template;
 
-        DebugDoFn(final String name, final String templateText, final LogLevel logLevel, final JsonConverter<T> converter) {
+        DebugDoFn(
+                final String jobName,
+                final String name,
+                final Schema schema,
+                final Parameters parameters) {
+
+            this.jobName = jobName;
             this.name = name;
-            this.templateText = templateText;
-            this.logLevel = logLevel;
-            this.converter = converter;
+            this.schema = schema;
+            this.templateText = parameters.logTemplate;
+            this.logLevel = parameters.logLevel;
         }
 
         @Setup
@@ -171,10 +104,54 @@ public class DebugSink  implements SinkModule {
 
         @ProcessElement
         public void processElement(final ProcessContext c, final BoundedWindow window) {
+            final MElement element = c.element();
+            if(element == null) {
+                return;
+            }
             final String text;
-            final String json = converter.convert(c.element());
+            JsonObject json;
+            try {
+                json = ElementToJsonConverter.convert(schema, element.asPrimitiveMap());
+            } catch (final Throwable e) {
+                json = new JsonObject();
+                try {
+                    json.addProperty("input", element.toString());
+                } catch (Throwable ee) {
+                    LOG.error("failed to convert text: " + MFailure.convertThrowableMessage(ee));
+                }
+                json.addProperty("error", MFailure.convertThrowableMessage(e));
+            }
             if(this.template == null) {
-                text = json;
+                final JsonObject output = new JsonObject();
+                output.add("data", json);
+                {
+                    final JsonObject paneJson = new JsonObject();
+                    paneJson.addProperty("timing", c.pane().getTiming().toString());
+                    paneJson.addProperty("isFirst", c.pane().isFirst());
+                    paneJson.addProperty("isLast", c.pane().isLast());
+                    paneJson.addProperty("isUnknown", c.pane().isUnknown());
+                    paneJson.addProperty("nonSpeculativeIndex", c.pane().getNonSpeculativeIndex());
+                    if (!c.pane().isFirst() || !c.pane().isLast()) {
+                        paneJson.addProperty("index", c.pane().getIndex());
+                    } else {
+                        paneJson.addProperty("index", -1);
+                    }
+                    output.add("pane", paneJson);
+                }
+                {
+                    final JsonObject windowJson = new JsonObject();
+                    if(window == GlobalWindow.INSTANCE)  {
+                        windowJson.addProperty("type", "global");
+                    } else if(window instanceof IntervalWindow) {
+                        windowJson.addProperty("type", "interval");
+                        windowJson.addProperty("maxTimestamp", window.maxTimestamp().toString());
+                        final IntervalWindow iw = ((IntervalWindow)window);
+                        windowJson.addProperty("start", iw.start().toString());
+                        windowJson.addProperty("end", iw.end().toString());
+                    }
+                    output.add("window", windowJson);
+                }
+                text = output.toString();
             } else {
                 final Map<String, Object> data = new HashMap<>();
                 data.put("data", json);
@@ -204,19 +181,16 @@ public class DebugSink  implements SinkModule {
 
                 text = TemplateUtil.executeStrictTemplate(template, data);
             }
+
+            final String message = String.format("%s: %s", name, text);
             switch (logLevel) {
-                case trace -> LOG.trace(text);
-                case debug -> LOG.debug(text);
-                case info -> LOG.info(text);
-                case warn -> LOG.warn(text);
-                case error -> LOG.error(text);
+                case trace -> LOG.trace(message);
+                case debug -> LOG.debug(message);
+                case info -> LOG.info(message);
+                case warn -> LOG.warn(message);
+                case error -> LOG.error(message);
             }
         }
 
     }
-
-    private interface JsonConverter<T> extends Serializable {
-        String convert(final T value);
-    }
-
 }

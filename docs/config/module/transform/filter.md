@@ -1,10 +1,6 @@
 # Filter Transform Module
 
-Filter transform module can be used to filter rows by specified criteria or to retrieve only specified columns.
-
-This module provides two methods for field selection: `fields` and `select`.
-Use `fields` (and `renameFields`) to refine or rename fields without modifying the fields.
-If you want to do slight modification in addition to the refinement and renaming, use `select`.
+Filter transform module can be used to filter rows by specified filter condition and process field values by specified select condition.
 
 ## Transform module common parameters
 
@@ -17,16 +13,14 @@ If you want to do slight modification in addition to the refinement and renaming
 
 ## Filter transform module parameters
 
-| parameter    | optional           | type                                  | description                                                                                                       |
-|--------------|--------------------|---------------------------------------|-------------------------------------------------------------------------------------------------------------------|
-| filters      | selective required | [FilterCondition](filtercondition.md) | Specify the conditions for filtering rows.                                                                        |
-| select       | selective required | Array<[SelectField](select.md)\>      | Specify a list of field definitions if you want to refine, rename, or apply some processing to the source fields. |
-| fields       | selective required | Array<String\>                        | Specify a list of field names to be passed through. You can also specify nested fields by joining them with dots. |
-| renameFields | optional           | Map<String,String\>                   | To rename fields, specify the original name as the key and the name to be changed as the value.                   |
+| parameter    | optional           | type                                       | description                                                                                                      |
+|--------------|--------------------|--------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| filter       | selective required | [FilterCondition](../common/filter.md)     | Specify the conditions for filtering rows.                                                                       |
+| select       | selective required | Array<[SelectField](../common/select.md)\> | Specify a list of field definitions if you want to refine, rename, or apply some processing to the input fields. |
 
 * It is not possible to not specify both `filters` and (`select` or `fields`)
 
 
 ## Related example config files
 
-* [Split Avro records to Cloud Spanner](../../../../examples/avro-to-filter-to-avro.json)
+* [Avro to filter to Avro](../../../../examples/avro-to-filter-to-avro.json)

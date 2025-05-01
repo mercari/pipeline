@@ -2,7 +2,7 @@ package com.mercari.solution.util.gcp;
 
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.converter.ResultSetToRecordConverter;
+import com.mercari.solution.util.schema.converter.ResultSetToRecordConverter;
 import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
@@ -160,7 +160,7 @@ public class JdbcUtil {
                         getColumnType(f.schema(), db, keyFields.contains(f.name())),
                         AvroSchemaUtil.isNullable(f.schema()) ? "" : " NOT NULL")));
 
-        if(keyFields == null || keyFields.size() == 0) {
+        if(keyFields == null || keyFields.isEmpty()) {
             sb.deleteCharAt(sb.length() - 1);
             sb.append(");");
         } else {
@@ -503,7 +503,7 @@ public class JdbcUtil {
                 final String primaryKeyName = resultSet.getString("COLUMN_NAME");
                 primaryKeyNames.put(primaryKeySeq, primaryKeyName);
             }
-            if(primaryKeyNames.size() == 0) {
+            if(primaryKeyNames.isEmpty()) {
                 LOG.warn("No primary key");
                 try(final ResultSet resultSetRowKey = metaData.getBestRowIdentifier(database, namespace, table, DatabaseMetaData.bestRowUnknown, true)) {
                     int i = 0;
@@ -749,11 +749,11 @@ public class JdbcUtil {
         }
 
         List<IndexOffset> parentOffsets = new ArrayList<>();
-        if(parents != null && parents.size() > 0) {
+        if(parents != null && !parents.isEmpty()) {
             parentOffsets.addAll(parents);
         }
 
-        if(splitOffsets.size() == 0) {
+        if(splitOffsets.isEmpty()) {
             if(from.size() > 1 && to.size() > 1 && false) {
                 // TODO recursive splitting
                 return splitIndexRange(parentOffsets, from.subList(1, from.size()), to.subList(1, to.size()), splitNum);
@@ -930,12 +930,12 @@ public class JdbcUtil {
     }
 
     public static List<IndexOffset> splitString(final String name, String min, String max, final boolean ascending, final int splitNum, final boolean isCaseSensitive) {
-        if(min == null || min.length() == 0) {
+        if(min == null || min.isEmpty()) {
             final StringBuilder sb = new StringBuilder();
             sb.append(String.valueOf((char) 33).repeat(32));
             min = sb.toString();
         }
-        if(max == null || max.length() == 0) {
+        if(max == null || max.isEmpty()) {
             final StringBuilder sb = new StringBuilder();
             if(isCaseSensitive) {
                 sb.append(String.valueOf((char) 126).repeat(32));

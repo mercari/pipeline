@@ -3,24 +3,28 @@ package com.mercari.solution.util.pipeline.aggregation;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.SchemaUtil;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
-import org.apache.beam.sdk.schemas.Schema;
+import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Avg implements Aggregator {
+public class Avg implements AggregateFunction {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
+
     private String name;
     private String field;
     private String expression;
     private String weightField;
     private String weightExpression;
     private String condition;
+
+    private List<Range> ranges;
 
     private Boolean ignore;
 
@@ -36,28 +40,46 @@ public class Avg implements Aggregator {
     private transient Filter.ConditionNode conditionNode;
 
 
-    public static Avg of(final String name,
-                         final String field,
-                         final String expression,
-                         final String condition,
-                         final Boolean ignore,
-                         final JsonObject params) {
+    public static Avg of(
+            final String name,
+            final List<Schema.Field> inputFields,
+            final String field,
+            final String expression,
+            final String condition,
+            final List<Range> ranges,
+            final Boolean ignore,
+            final JsonObject params) {
 
         final Avg avg = new Avg();
         avg.name = name;
         avg.field = field;
         avg.expression = expression;
         avg.condition = condition;
+        avg.ranges = ranges;
         avg.ignore = ignore;
 
-        avg.outputFields = new ArrayList<>();
-        avg.outputFields.add(Schema.Field.of(name, Schema.FieldType.DOUBLE.withNullable(true)));
+        avg.inputFields = new ArrayList<>();
+        if (field != null) {
+            final Schema.Field inputField = Schema.getField(inputFields, field);
+            avg.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
+        } else {
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                avg.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+            }
+        }
 
         if(params.has("weightField")) {
             avg.weightField = params.get("weightField").getAsString();
+            final Schema.Field inputField = Schema.getField(inputFields, avg.weightField);
+            avg.inputFields.add(Schema.Field.of(avg.weightField, inputField.getFieldType()));
         } else if(params.has("weightExpression")) {
             avg.weightExpression = params.get("weightExpression").getAsString();
+            for(final String variable : ExpressionUtil.estimateVariables(avg.weightExpression)) {
+                avg.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+            }
         }
+
+        avg.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
 
         avg.weightKeyName = name + ".weight";
 
@@ -65,23 +87,23 @@ public class Avg implements Aggregator {
     }
 
     @Override
-    public Op getOp() {
-        return Op.avg;
-    }
-
-    @Override
     public String getName() {
-        return name;
+        return this.name;
     }
 
     @Override
-    public Boolean getIgnore() {
-        return ignore;
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
-    public Boolean filter(final UnionValue unionValue) {
-        return Aggregator.filter(conditionNode, unionValue);
+    public Boolean filter(final MElement element) {
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     @Override
@@ -108,60 +130,72 @@ public class Avg implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final UnionValue input, final SchemaUtil.PrimitiveValueGetter valueGetter) {
-        final Double prevAvg = accumulator.getDouble(name);
-        final Double prevWeight = Optional.ofNullable(accumulator.getDouble(weightKeyName)).orElse(0D);
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
+        final Double prevAvg = (Double) accumulator.get(name);
+        final Double prevWeight = Optional.ofNullable((Double)accumulator.get(weightKeyName)).orElse(0D);
         final Double inputValue;
         if(field != null) {
-            inputValue = input.getDouble(field);
+            inputValue = input.getAsDouble(field);
         } else {
-            inputValue = Aggregator.eval(this.exp, variables, input);
+            inputValue = AggregateFunction.eval(this.exp, variables, input);
         }
         final Double inputWeight;
         if(weightField != null) {
-            inputWeight = input.getDouble(weightField);
+            inputWeight = input.getAsDouble(weightField);
         } else if(weightExpression != null) {
-            inputWeight = Aggregator.eval(this.weightExp, weightVariables, input);
+            inputWeight = AggregateFunction.eval(this.weightExp, weightVariables, input);
         } else {
             inputWeight = 1D;
         }
 
-        final Double avgNext = Aggregator.avg(prevAvg, prevWeight, inputValue, inputWeight);
-        accumulator.putDouble(name, avgNext);
+        final Double avgNext = AggregateFunction.avg(prevAvg, prevWeight, inputValue, inputWeight);
+        accumulator.put(name, avgNext);
         if(inputValue != null) {
-            accumulator.putDouble(weightKeyName, prevWeight + inputWeight);
+            accumulator.put(weightKeyName, prevWeight + inputWeight);
         } else {
-            accumulator.putDouble(weightKeyName, prevWeight);
+            accumulator.put(weightKeyName, prevWeight);
         }
         return accumulator;
     }
 
     @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
+    }
+
+    @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator input) {
-        final Double baseAvg = base.getDouble(name);
-        final Double baseWeight = base.getDouble(weightKeyName);
-        final Double inputAvg = input.getDouble(name);
-        final Double inputWeight = input.getDouble(weightKeyName);
-        final Double avg = Aggregator.avg(baseAvg, baseWeight, inputAvg, inputWeight);
+        final Double baseAvg = (Double) base.get(name);
+        final Double baseWeight = (Double) base.get(weightKeyName);
+        final Double inputAvg = (Double) input.get(name);
+        final Double inputWeight = (Double) input.get(weightKeyName);
+        final Double avg = AggregateFunction.avg(baseAvg, baseWeight, inputAvg, inputWeight);
         final Double weight = Optional.ofNullable(baseWeight).orElse(0D) + Optional.ofNullable(inputWeight).orElse(0D);
-        base.putDouble(name, avg);
-        base.putDouble(weightKeyName, weight);
+        base.put(name, avg);
+        base.put(weightKeyName, weight);
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
-                                            final Map<String, Object> values,
-                                            final SchemaUtil.PrimitiveValueConverter converter) {
+    public Object extractOutput(final Accumulator accumulator,
+                                            final Map<String, Object> values) {
 
-        final Double avg = accumulator.getDouble(name);
-        values.put(name, avg);
-        return values;
+        return accumulator.get(name);
     }
 
 }

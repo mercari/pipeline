@@ -29,9 +29,11 @@ public class PubSubUtil {
 
     private static final Logger LOG = LoggerFactory.getLogger(PubSubUtil.class);
 
-    private static final Pattern PATTERN_SUBSCRIPTION = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/subscriptions\\/[a-zA-Z0-9_-]+$");
+    private static final Pattern PATTERN_TOPIC = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/topics\\/[a-zA-Z0-9_-]+$");
+    private static final Pattern PATTERN_SUBSCRIPTION = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/subscriptions\\/[.a-zA-Z0-9_-]+$");
+    private static final Pattern PATTERN_SNAPSHOT = Pattern.compile("^projects\\/[a-zA-Z0-9_-]+\\/snapshots\\/[a-zA-Z0-9_-]+$");
 
-    public static Pubsub pubsub() {
+    public static Pubsub pubsub(final String rootUrl) {
         final HttpTransport transport = new NetHttpTransport();
         final JsonFactory jsonFactory = GsonFactory.getDefaultInstance();
         try {
@@ -40,12 +42,21 @@ public class PubSubUtil {
                     new HttpCredentialsAdapter(credential),
                     // Do not log 404. It clutters the output and is possibly even required by the caller.
                     new RetryHttpRequestInitializer(ImmutableList.of(404)));
-            return new Pubsub.Builder(transport, jsonFactory, initializer)
-                    .setApplicationName("PubSubClient")
-                    .build();
+
+            final Pubsub.Builder builder = new Pubsub.Builder(transport, jsonFactory, initializer)
+                    .setApplicationName("PubSubClient");
+            if(rootUrl == null) {
+                return builder.build();
+            } else {
+                return builder.setRootUrl(rootUrl).build();
+            }
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public static Pubsub pubsub() {
+        return pubsub(null);
     }
 
     public static Schema getSchemaFromTopic(final String topic) {
@@ -55,12 +66,16 @@ public class PubSubUtil {
     public static Schema getSchemaFromTopic(final Pubsub pubsub, final String topicResource) {
         try {
             final Topic topic = pubsub.projects().topics().get(topicResource).execute();
+            if(topic.getSchemaSettings() == null || topic.getSchemaSettings().getSchema() == null) {
+                throw new IllegalArgumentException("Unable to get schema from topic: " + topicResource);
+            }
             final String schemaResource = topic.getSchemaSettings().getSchema();
             final com.google.api.services.pubsub.model.Schema topicSchema = pubsub.projects().schemas().get(schemaResource).execute();
-            if(!"AVRO".equals(topicSchema.getType())) {
-                throw new IllegalArgumentException();
-            }
-            return AvroSchemaUtil.convertSchema(topicSchema.getDefinition());
+            return switch (topicSchema.getType().toLowerCase()) {
+                case "avro" -> AvroSchemaUtil.convertSchema(topicSchema.getDefinition());
+                case "protocol-buffer" -> throw new IllegalArgumentException("Not supported protobuf yet");
+                default -> throw new IllegalArgumentException("Not supported topic schema type: " + topicSchema.getType());
+            };
         } catch (IOException e) {
             throw new IllegalArgumentException("Failed to get schema for topic: " + topicResource, e);
         }
@@ -109,8 +124,16 @@ public class PubSubUtil {
         }
     }
 
+    public static boolean isTopicResource(final String name) {
+        return PATTERN_TOPIC.matcher(name).find();
+    }
+
     public static boolean isSubscriptionResource(final String name) {
         return PATTERN_SUBSCRIPTION.matcher(name).find();
+    }
+
+    public static boolean isSnapshotResource(final String name) {
+        return PATTERN_SNAPSHOT.matcher(name).find();
     }
 
     public static List<String> publish(
@@ -155,6 +178,141 @@ public class PubSubUtil {
         }
 
         return response.getReceivedMessages();
+    }
+
+    public static SeekResponse seek(
+            final String subscription,
+            final String time,
+            final String snapshot) throws IOException {
+
+        return seek(pubsub(), subscription, time, snapshot);
+    }
+
+    public static SeekResponse seek(
+            final Pubsub pubsub,
+            final String subscription,
+            final String time,
+            final String snapshot) throws IOException {
+
+        if(time == null && snapshot == null) {
+            throw new IllegalArgumentException("seek operation requires time or snapshot. both are null");
+        }
+
+        final SeekRequest seekRequest = new SeekRequest();
+        if(time != null) {
+            seekRequest.setTime(time);
+        }
+        if(snapshot != null) {
+            if(!isSnapshotResource(snapshot)) {
+                throw new IllegalArgumentException("seek.snapshot resource name is illegal: " + snapshot);
+            }
+            seekRequest.setSnapshot(snapshot);
+        }
+
+        return pubsub
+                .projects()
+                .subscriptions()
+                .seek(subscription, seekRequest)
+                .execute();
+    }
+
+    public static boolean existsSubscription(final String subscription) {
+        return existsSubscription(pubsub(), subscription);
+    }
+
+    public static boolean existsSubscription(
+            final Pubsub pubsub,
+            final String subscription) {
+
+        if(!isSubscriptionResource(subscription)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + subscription);
+        }
+        try {
+            final Subscription s = pubsub.projects().subscriptions().get(subscription).execute();
+            return true;
+        } catch (GoogleJsonResponseException e) {
+            if(e.getStatusCode() == 404) {
+                return false;
+            }
+            throw new IllegalStateException(e);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    public static Subscription createSubscription(
+            final String topic,
+            final String name) {
+
+        return createSubscription(pubsub(), topic, name);
+    }
+
+    public static Subscription createSubscription(
+            final Pubsub pubsub,
+            final String topic,
+            final String name) {
+
+        if(!isTopicResource(topic)) {
+            throw new IllegalArgumentException("topic resource name is illegal: " + topic);
+        }
+        if(!isSubscriptionResource(name)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + name);
+        }
+
+        final Subscription content = new Subscription();
+        content.setTopic(topic);
+        try {
+            return pubsub
+                    .projects()
+                    .subscriptions()
+                    .create(name, content)
+                    .execute();
+        } catch (final IOException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    public static Snapshot createSnapshot(
+            final Pubsub pubsub,
+            final String subscription,
+            final String name) {
+
+        if(!isSubscriptionResource(subscription)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + subscription);
+        }
+        if(!isSnapshotResource(name)) {
+            throw new IllegalArgumentException("snapshot resource name is illegal: " + name);
+        }
+
+        final CreateSnapshotRequest request = new CreateSnapshotRequest();
+        request.setSubscription(subscription);
+        try {
+            return pubsub
+                    .projects()
+                    .snapshots()
+                    .create(name, request)
+                    .execute();
+        } catch (final IOException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    public static void deleteSubscription(final String subscription) {
+        deleteSubscription(pubsub(), subscription);
+    }
+
+    public static void deleteSubscription(
+            final Pubsub pubsub,
+            final String subscription) {
+
+        if(!isSubscriptionResource(subscription)) {
+            throw new IllegalArgumentException("subscription resource name is illegal: " + subscription);
+        }
+        try {
+            pubsub.projects().subscriptions().delete(subscription).execute();
+        } catch (final IOException e) {
+            throw new IllegalArgumentException(e);
+        }
     }
 
     public static String getTextMessage(final String subscription) throws IOException {

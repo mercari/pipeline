@@ -1,11 +1,12 @@
 package com.mercari.solution.util.domain.search;
 
+/*
 import com.google.common.reflect.ClassPath;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.mercari.solution.module.MElement;
 import com.mercari.solution.util.gcp.StorageUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
@@ -24,10 +25,7 @@ import org.neo4j.io.layout.Neo4jLayout;
 import org.neo4j.kernel.api.procedure.GlobalProcedures;
 import org.neo4j.kernel.impl.transaction.log.files.TransactionLogFiles;
 import org.neo4j.kernel.internal.GraphDatabaseAPI;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.io.*;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.HttpClient;
@@ -38,9 +36,15 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+ */
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.*;
+import java.util.*;
 
 
 public class Neo4jUtil implements Serializable {
@@ -210,6 +214,7 @@ public class Neo4jUtil implements Serializable {
         zip
     }
 
+    /*
     public static void query(final HttpClient client, final String username, final String password, final String endpoint, final String database, final String cypher) {
         final String url = String.format("%s/db/%s/tx/commit", endpoint, database);
 
@@ -237,7 +242,7 @@ public class Neo4jUtil implements Serializable {
     }
 
     public static void index(final GraphDatabaseService graphDB,
-                             final List<UnionValue> buffer,
+                             final List<MElement> buffer,
                              final List<NodeConfig> nodes,
                              final List<RelationshipConfig> relationships,
                              final List<String> inputNames) {
@@ -249,8 +254,8 @@ public class Neo4jUtil implements Serializable {
 
         int countNode = 0;
         try(final Transaction tx = graphDB.beginTx()) {
-            for(final UnionValue unionValue : buffer) {
-                final int index = unionValue.getIndex();
+            for(final MElement element : buffer) {
+                final int index = element.getIndex();
                 if(inputNames.size() <= index) {
                     throw new IllegalStateException("UnionValue index: " + index + " is over inputs size: " + inputNames.size());
                 }
@@ -261,8 +266,8 @@ public class Neo4jUtil implements Serializable {
                         continue;
                     }
 
-                    final Node node = getNode(tx, nodeConfig.getLabels(), nodeConfig.getKeyFields(), unionValue);
-                    final Map<String, Object> properties = unionValue.getMap(nodeConfig.getPropertyFields());
+                    final Node node = getNode(tx, nodeConfig.getLabels(), nodeConfig.getKeyFields(), element);
+                    final Map<String, Object> properties = element.asPrimitiveMap(nodeConfig.getPropertyFields());
                     for(final Map.Entry<String, Object> property : properties.entrySet()) {
                         final Object propertyValue = formatValue(property.getValue());
                         node.setProperty(property.getKey(), propertyValue);
@@ -276,8 +281,8 @@ public class Neo4jUtil implements Serializable {
         // update relationships
         int countRelationship = 0;
         try(final Transaction tx = graphDB.beginTx()) {
-            for(final UnionValue unionValue : buffer) {
-                final int index = unionValue.getIndex();
+            for(final MElement element : buffer) {
+                final int index = element.getIndex();
                 if(inputNames.size() <= index) {
                     throw new IllegalStateException("UnionValue index: " + index + " is over inputs size: " + inputNames.size());
                 }
@@ -289,9 +294,9 @@ public class Neo4jUtil implements Serializable {
                     }
 
                     final RelationshipNodeConfig sourceConfig = relationshipConfig.getSource();
-                    final Node source = getNode(tx, sourceConfig.getLabels(), sourceConfig.getKeyFields(), unionValue);
-                    if(sourceConfig.getPropertyFields().size() > 0) {
-                        Map<String, Object> properties = unionValue.getMap(sourceConfig.getPropertyFields());
+                    final Node source = getNode(tx, sourceConfig.getLabels(), sourceConfig.getKeyFields(), element);
+                    if(!sourceConfig.getPropertyFields().isEmpty()) {
+                        Map<String, Object> properties = element.asPrimitiveMap(sourceConfig.getPropertyFields());
                         for(final Map.Entry<String, Object> property : properties.entrySet()) {
                             final Object propertyValue = formatValue(property.getValue());
                             source.setProperty(property.getKey(), propertyValue);
@@ -299,9 +304,9 @@ public class Neo4jUtil implements Serializable {
                     }
 
                     final RelationshipNodeConfig targetConfig = relationshipConfig.getTarget();
-                    final Node target = getNode(tx, targetConfig.getLabels(), targetConfig.getKeyFields(), unionValue);
+                    final Node target = getNode(tx, targetConfig.getLabels(), targetConfig.getKeyFields(), element);
                     if(targetConfig.getPropertyFields().size() > 0) {
-                        Map<String, Object> properties = unionValue.getMap(targetConfig.getPropertyFields());
+                        Map<String, Object> properties = element.asPrimitiveMap(targetConfig.getPropertyFields());
                         for(final Map.Entry<String, Object> property : properties.entrySet()) {
                             final Object propertyValue = formatValue(property.getValue());
                             target.setProperty(property.getKey(), propertyValue);
@@ -309,8 +314,8 @@ public class Neo4jUtil implements Serializable {
                     }
 
                     final Relationship relationship = getRelationship(tx, source, target,
-                            relationshipConfig.getType(), relationshipConfig.getKeyFields(), unionValue);
-                    final Map<String, Object> properties = unionValue.getMap(relationshipConfig.getPropertyFields());
+                            relationshipConfig.getType(), relationshipConfig.getKeyFields(), element);
+                    final Map<String, Object> properties = element.asPrimitiveMap(relationshipConfig.getPropertyFields());
                     for(final Map.Entry<String, Object> property : properties.entrySet()) {
                         final Object propertyValue = formatValue(property.getValue());
                         relationship.setProperty(property.getKey(), propertyValue);
@@ -408,12 +413,12 @@ public class Neo4jUtil implements Serializable {
                 .collect(Collectors.toSet());
     }
 
-    private static Node getNode(final Transaction tx, final List<String> labelNames, final List<String> keyFields, final UnionValue unionValue) {
+    private static Node getNode(final Transaction tx, final List<String> labelNames, final List<String> keyFields, final MElement element) {
         final Label[] labels = labelNames
                 .stream()
                 .map(Label::label)
                 .toArray(Label[]::new);
-        final Map<String, Object> keyProperties = unionValue.getMap(keyFields);
+        final Map<String, Object> keyProperties = element.asPrimitiveMap(keyFields);
         try(final ResourceIterator<Node> nodes = tx.findNodes(labels[0], keyProperties)) {
             if(nodes.hasNext()) {
                 return nodes.next();
@@ -428,11 +433,11 @@ public class Neo4jUtil implements Serializable {
         }
     }
 
-    private static Relationship getRelationship(final Transaction tx, final Node source, final Node target, final String type, final List<String> keyFields, final UnionValue unionValue) {
+    private static Relationship getRelationship(final Transaction tx, final Node source, final Node target, final String type, final List<String> keyFields, final MElement element) {
         final RelationshipType relationshipType = RelationshipType.withName(type);
         final Map<String, Object> keyProperties;
         if(keyFields != null && !keyFields.isEmpty()) {
-            keyProperties = unionValue.getMap(keyFields);
+            keyProperties = element.asPrimitiveMap(keyFields);
             try(final ResourceIterator<Relationship> relationships = tx.findRelationships(relationshipType, keyProperties)) {
                 if(relationships.hasNext()) {
                     return relationships.next();
@@ -539,5 +544,7 @@ public class Neo4jUtil implements Serializable {
             out.write(buffer, 0, n);
         }
     }
+
+     */
 
 }

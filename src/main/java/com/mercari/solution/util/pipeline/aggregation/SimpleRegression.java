@@ -3,18 +3,20 @@ package com.mercari.solution.util.pipeline.aggregation;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.SchemaUtil;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import net.objecthunter.exp4j.Expression;
-import org.apache.beam.sdk.schemas.Schema;
+import org.joda.time.Instant;
 
 import java.util.*;
 
-public class SimpleRegression implements Aggregator {
+public class SimpleRegression implements AggregateFunction {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
+
     private String name;
     private String field;
     private String xField;
@@ -24,11 +26,11 @@ public class SimpleRegression implements Aggregator {
     private Boolean hasIntercept;
     private String condition;
 
+    private List<Range> ranges;
+
     private Boolean ignore;
 
-    private String separator;
-
-    //
+    /*
     private String outputSlopeName;
     private String outputInterceptName;
     private String outputWeightName;
@@ -40,6 +42,7 @@ public class SimpleRegression implements Aggregator {
     private String outputSumOfCrossProductsName;
     private String outputRegressionSumSquaresName;
     private String outputMeanSquareErrorName;
+     */
 
     //
     private String accumKeyCountName;
@@ -64,11 +67,12 @@ public class SimpleRegression implements Aggregator {
 
     public static SimpleRegression of(
             final String name,
+            final List<Schema.Field> inputFields,
             final String field,
             final String expression,
             final String condition,
+            final List<Range> ranges,
             final Boolean ignore,
-            final String separator,
             final JsonObject params) {
 
         final SimpleRegression regression = new SimpleRegression();
@@ -76,14 +80,8 @@ public class SimpleRegression implements Aggregator {
         regression.field = field;
         regression.expression = expression;
         regression.condition = condition;
+        regression.ranges = ranges;
         regression.ignore = ignore;
-        regression.separator = separator;
-
-        if(params.has("weightField")) {
-            regression.weightField = params.get("weightField").getAsString();
-        } else if(params.has("weightExpression")) {
-            regression.weightExpression = params.get("weightExpression").getAsString();
-        }
 
         regression.accumKeyCountName = name + ".count";
         regression.accumKeyWeightName = name + ".weight";
@@ -95,20 +93,45 @@ public class SimpleRegression implements Aggregator {
         regression.accumKeyXBarName = name + ".xBar";
         regression.accumKeyYBarName = name + ".yBar";
 
+        /*
         regression.outputSlopeName = regression.outputFieldName("Slope");
         regression.outputInterceptName = regression.outputFieldName("Intercept");
         regression.outputWeightName = regression.outputFieldName("N");
         regression.outputSumSquaredErrorsName = regression.outputFieldName("SSE");
         regression.outputMeanSquaredErrorsName = regression.outputFieldName("MSE");
         regression.outputRootMeanSquaredErrorsName = regression.outputFieldName("RMSE");
+         */
 
-        regression.outputFields = new ArrayList<>();
-        regression.outputFields.add(Schema.Field.of(regression.outputSlopeName, Schema.FieldType.DOUBLE.withNullable(true)));
-        regression.outputFields.add(Schema.Field.of(regression.outputInterceptName, Schema.FieldType.DOUBLE.withNullable(true)));
-        regression.outputFields.add(Schema.Field.of(regression.outputRootMeanSquaredErrorsName, Schema.FieldType.DOUBLE.withNullable(true)));
+        regression.inputFields = new ArrayList<>();
+
+        if(field != null) {
+            regression.inputFields.add(Schema.Field.of(field, Schema.getField(inputFields, field).getFieldType()));
+        } else {
+            for(final String variable : ExpressionUtil.estimateVariables(expression)) {
+                regression.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+            }
+        }
+
+        if(params.has("weightField")) {
+            regression.weightField = params.get("weightField").getAsString();
+            regression.inputFields.add(Schema.Field.of(regression.weightField, Schema.getField(inputFields, regression.weightField).getFieldType()));
+        } else if(params.has("weightExpression")) {
+            regression.weightExpression = params.get("weightExpression").getAsString();
+            for(final String variable : ExpressionUtil.estimateVariables(regression.weightExpression)) {
+                regression.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+            }
+        }
+
+        regression.outputFieldType = Schema.FieldType.element(List.of(
+                Schema.Field.of("Slope", Schema.FieldType.FLOAT64.withNullable(true)),
+                Schema.Field.of("Intercept", Schema.FieldType.FLOAT64.withNullable(true)),
+                Schema.Field.of("RMSE", Schema.FieldType.FLOAT64.withNullable(true)),
+                Schema.Field.of("N", Schema.FieldType.INT64.withNullable(true))
+        ));
 
         if(params.has("xField")) {
             regression.xField = params.get("xField").getAsString();
+            regression.inputFields.add(Schema.Field.of(regression.xField, Schema.getField(inputFields, regression.xField).getFieldType()));
         } else {
             regression.xField = null;
         }
@@ -123,23 +146,23 @@ public class SimpleRegression implements Aggregator {
     }
 
     @Override
-    public Op getOp() {
-        return Op.regression;
-    }
-
-    @Override
     public String getName() {
-        return name;
+        return this.name;
     }
 
     @Override
-    public Boolean getIgnore() {
-        return ignore;
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
-    public Boolean filter(final UnionValue unionValue) {
-        return Aggregator.filter(conditionNode, unionValue);
+    public Boolean filter(final MElement element) {
+        return AggregateFunction.filter(conditionNode, element);
+    }
+
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
     }
 
     @Override
@@ -167,22 +190,31 @@ public class SimpleRegression implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accumulator, final UnionValue input, final SchemaUtil.PrimitiveValueGetter valueGetter) {
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
 
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer co, final Instant timestamp) {
         final Double y;
         if(field != null) {
-            y = input.getDouble(field);
+            y = input.getAsDouble(field);
         } else {
-            y = Aggregator.eval(this.exp, variables, input);
+            y = AggregateFunction.eval(this.exp, variables, input);
         }
         final Double x;
         if(xField != null) {
-            x = input.getDouble(xField);
+            x = input.getAsDouble(xField);
         } else {
             x = Long.valueOf(input.getEpochMillis()).doubleValue();
         }
@@ -193,9 +225,9 @@ public class SimpleRegression implements Aggregator {
 
         final double inputWeight;
         if(weightField != null) {
-            inputWeight = Optional.ofNullable(input.getDouble(weightField)).orElse(0D);
+            inputWeight = Optional.ofNullable(input.getAsDouble(weightField)).orElse(0D);
         } else if(weightExpression != null) {
-            inputWeight = Optional.ofNullable(Aggregator.eval(this.weightExp, weightVariables, input)).orElse(0D);
+            inputWeight = Optional.ofNullable(AggregateFunction.eval(this.weightExp, weightVariables, input)).orElse(0D);
         } else {
             inputWeight = 1D;
         }
@@ -234,17 +266,22 @@ public class SimpleRegression implements Aggregator {
         sumX += x;
         sumY += y;
 
-        accumulator.putDouble(accumKeyCountName, count + 1);
-        accumulator.putDouble(accumKeyWeightName, weight + inputWeight);
-        accumulator.putDouble(accumKeyXBarName, xBar);
-        accumulator.putDouble(accumKeyYBarName, yBar);
-        accumulator.putDouble(accumKeySumXName, sumX);
-        accumulator.putDouble(accumKeySumYName, sumY);
-        accumulator.putDouble(accumKeySumXXName, sumXX);
-        accumulator.putDouble(accumKeySumYYName, sumYY);
-        accumulator.putDouble(accumKeySumXYName, sumXY);
+        accumulator.put(accumKeyCountName, count + 1);
+        accumulator.put(accumKeyWeightName, weight + inputWeight);
+        accumulator.put(accumKeyXBarName, xBar);
+        accumulator.put(accumKeyYBarName, yBar);
+        accumulator.put(accumKeySumXName, sumX);
+        accumulator.put(accumKeySumYName, sumY);
+        accumulator.put(accumKeySumXXName, sumXX);
+        accumulator.put(accumKeySumYYName, sumYY);
+        accumulator.put(accumKeySumXYName, sumXY);
 
         return accumulator;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input) {
+        return addInput(accumulator, input, null, null);
     }
 
     @Override
@@ -254,11 +291,11 @@ public class SimpleRegression implements Aggregator {
         if(inputWeight == 0) {
             return base;
         } else if(baseWeight == 0) {
-            base.putDouble(accumKeyXBarName, Optional.ofNullable(input.getDouble(accumKeyXBarName)).orElse(0D));
-            base.putDouble(accumKeyYBarName, Optional.ofNullable(input.getDouble(accumKeyYBarName)).orElse(0D));
-            base.putDouble(accumKeySumXXName, Optional.ofNullable(input.getDouble(accumKeySumXXName)).orElse(0D));
-            base.putDouble(accumKeySumYYName, Optional.ofNullable(input.getDouble(accumKeySumYYName)).orElse(0D));
-            base.putDouble(accumKeySumXYName, Optional.ofNullable(input.getDouble(accumKeySumXYName)).orElse(0D));
+            base.put(accumKeyXBarName, Optional.ofNullable(input.getAsDouble(accumKeyXBarName)).orElse(0D));
+            base.put(accumKeyYBarName, Optional.ofNullable(input.getAsDouble(accumKeyYBarName)).orElse(0D));
+            base.put(accumKeySumXXName, Optional.ofNullable(input.getAsDouble(accumKeySumXXName)).orElse(0D));
+            base.put(accumKeySumYYName, Optional.ofNullable(input.getAsDouble(accumKeySumYYName)).orElse(0D));
+            base.put(accumKeySumXYName, Optional.ofNullable(input.getAsDouble(accumKeySumXYName)).orElse(0D));
         } else {
             if(hasIntercept) {
                 final double fact1 = inputWeight / (baseWeight + inputWeight);
@@ -270,41 +307,42 @@ public class SimpleRegression implements Aggregator {
                 final double sumXY = getDouble(base, accumKeySumXYName, 0D) + (getDouble(input, accumKeySumXYName, 0D) + dx * dy * fact2);
                 final double xBar = getDouble(base, accumKeyXBarName, 0D) + dx * fact1;
                 final double yBar = getDouble(base, accumKeyYBarName, 0D) + dy * fact1;
-                base.putDouble(accumKeySumXXName, sumXX);
-                base.putDouble(accumKeySumYYName, sumYY);
-                base.putDouble(accumKeySumXYName, sumXY);
-                base.putDouble(accumKeyXBarName, xBar);
-                base.putDouble(accumKeyYBarName, yBar);
+                base.put(accumKeySumXXName, sumXX);
+                base.put(accumKeySumYYName, sumYY);
+                base.put(accumKeySumXYName, sumXY);
+                base.put(accumKeyXBarName, xBar);
+                base.put(accumKeyYBarName, yBar);
             } else {
                 final double sumXX = getDouble(base, accumKeySumXXName, 0D) + getDouble(input, accumKeySumXXName, 0D);
                 final double sumYY = getDouble(base, accumKeySumYYName, 0D) + getDouble(input, accumKeySumYYName, 0D);
                 final double sumXY = getDouble(base, accumKeySumXYName, 0D) + getDouble(input, accumKeySumXYName, 0D);
-                base.putDouble(accumKeySumXXName, sumXX);
-                base.putDouble(accumKeySumYYName, sumYY);
-                base.putDouble(accumKeySumXYName, sumXY);
+                base.put(accumKeySumXXName, sumXX);
+                base.put(accumKeySumYYName, sumYY);
+                base.put(accumKeySumXYName, sumXY);
             }
         }
 
         final double sumX = getDouble(base, accumKeySumXName, 0D) + getDouble(input, accumKeySumXName, 0D);
         final double sumY = getDouble(base, accumKeySumYName, 0D) + getDouble(input, accumKeySumYName, 0D);
-        base.putDouble(accumKeySumXName, sumX);
-        base.putDouble(accumKeySumYName, sumY);
-        base.putDouble(accumKeyWeightName, baseWeight + inputWeight);
-        base.putDouble(accumKeyCountName, getDouble(base, accumKeyCountName, 0D) + getDouble(input, accumKeyCountName, 0D));
+        base.put(accumKeySumXName, sumX);
+        base.put(accumKeySumYName, sumY);
+        base.put(accumKeyWeightName, baseWeight + inputWeight);
+        base.put(accumKeyCountName, getDouble(base, accumKeyCountName, 0D) + getDouble(input, accumKeyCountName, 0D));
 
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator,
-                                            final Map<String, Object> values,
-                                            final SchemaUtil.PrimitiveValueConverter converter) {
+    public Object extractOutput(final Accumulator accumulator,
+                                            final Map<String, Object> values) {
 
+        final Map<String, Object> output = new HashMap<>();
         final double slope = getSlope(accumulator);
-        values.put(outputSlopeName, slope);
-        values.put(outputInterceptName, getIntercept(accumulator, slope));
-        values.put(outputRootMeanSquaredErrorsName, getRootMeanSumSquaredErrors(accumulator));
-        return values;
+        output.put("Slope", slope);
+        output.put("Intercept", getIntercept(accumulator, slope));
+        output.put("RMSE", getRootMeanSumSquaredErrors(accumulator));
+        output.put("N", getDouble(accumulator, accumKeyCountName, 0D));
+        return output;
     }
 
     private double getSlope(final Accumulator accumulator) {
@@ -372,11 +410,7 @@ public class SimpleRegression implements Aggregator {
     }
 
     private static double getDouble(final Accumulator input, final String keyName, final Double defaultValue) {
-        return Optional.ofNullable(input.getDouble(keyName)).orElse(defaultValue);
-    }
-
-    private String outputFieldName(String field) {
-        return String.format("%s%s%s", name, separator, field);
+        return Optional.ofNullable(input.getAsDouble(keyName)).orElse(defaultValue);
     }
 
 }

@@ -1,58 +1,64 @@
 package com.mercari.solution.util.pipeline.aggregation;
 
+
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.SchemaUtil;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.Filter;
+import org.joda.time.Instant;
 
 import java.util.*;
 
-public class Count implements Aggregator {
+public class Count implements AggregateFunction {
 
-    private List<Schema.Field> outputFields;
+    private List<Schema.Field> inputFields;
+    private Schema.FieldType outputFieldType;
 
     private String name;
     private String condition;
 
     private Boolean ignore;
 
+    private List<Range> ranges;
+
     private transient Filter.ConditionNode conditionNode;
 
-    public Count() {
-
-    }
-
-    public Aggregator.Op getOp() {
-        return Aggregator.Op.count;
-    }
 
     @Override
     public String getName() {
-        return name;
+        return this.name;
     }
 
     @Override
-    public Boolean getIgnore() {
-        return this.ignore;
+    public boolean ignore() {
+        return Optional.ofNullable(this.ignore).orElse(false);
     }
 
     @Override
-    public Boolean filter(final UnionValue unionValue) {
-        return Aggregator.filter(conditionNode, unionValue);
+    public Boolean filter(final MElement element) {
+        return AggregateFunction.filter(conditionNode, element);
     }
 
+    @Override
+    public List<Range> getRanges() {
+        return ranges;
+    }
 
-    public static Count of(final String name, final String condition, final Boolean ignore) {
+    public static Count of(
+            final String name,
+            final String condition,
+            final List<Range> ranges,
+            final Boolean ignore) {
 
         final Count count = new Count();
         count.name = name;
         count.condition = condition;
+        count.ranges = ranges;
         count.ignore = ignore;
 
-        count.outputFields = new ArrayList<>();
-        count.outputFields.add(Schema.Field.of(name, Schema.FieldType.INT64.withNullable(true)));
+        count.inputFields = new ArrayList<>();
+        count.outputFieldType = Schema.FieldType.INT64.withNullable(true);
 
         return count;
     }
@@ -74,35 +80,54 @@ public class Count implements Aggregator {
     }
 
     @Override
-    public List<Schema.Field> getOutputFields() {
-        return this.outputFields;
+    public Object apply(Map<String, Object> input, Instant timestamp) {
+        return null;
     }
 
     @Override
-    public Accumulator addInput(final Accumulator accum, final UnionValue input, final SchemaUtil.PrimitiveValueGetter valueGetter) {
-        final Long countPrev = accum.getLong(name);
-        accum.putLong(name, Optional.ofNullable(countPrev).orElse(0L) + 1L);
-        return accum;
+    public List<Schema.Field> getInputFields() {
+        return inputFields;
+    }
+
+    @Override
+    public Schema.FieldType getOutputFieldType() {
+        return outputFieldType;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accumulator, final MElement input, final Integer count, final Instant timestamp) {
+        final Object countPrev = accumulator.get(name);
+        final long countNext;
+        if(countPrev == null) {
+            countNext = 1L;
+        } else {
+            countNext = (Long) countPrev + 1L;
+        }
+        accumulator.put(name, countNext);
+        return accumulator;
+    }
+
+    @Override
+    public Accumulator addInput(final Accumulator accum, final MElement input) {
+        return addInput(accum, input, null, null);
     }
 
     @Override
     public Accumulator mergeAccumulator(final Accumulator base, final Accumulator accum) {
 
-        final Long stateValue = base.getLong(name);
-        final Long accumValue = accum.getLong(name);
+        final Long stateValue = (Long) base.get(name);
+        final Long accumValue = (Long) accum.get(name);
 
         final Long count = Optional.ofNullable(stateValue).orElse(0L) + Optional.ofNullable(accumValue).orElse(0L);
-        base.putLong(name, count);
+        base.put(name, count);
         return base;
     }
 
     @Override
-    public Map<String,Object> extractOutput(final Accumulator accumulator, final Map<String, Object> values, final SchemaUtil.PrimitiveValueConverter converter) {
-        final Long count = Optional
-                .ofNullable(accumulator.getLong(name))
+    public Object extractOutput(final Accumulator accumulator, final Map<String, Object> outputs) {
+        return Optional
+                .ofNullable((Long)accumulator.get(name))
                 .orElse(0L);
-        values.put(name, count);
-        return values;
     }
 
 }

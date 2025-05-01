@@ -4,44 +4,55 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>com.mercari</groupId>
-  <artifactId>solution</artifactId>
-  <version>0.11.0</version>
-  <name>Mercari Dataflow Template</name>
+  <groupId>com.mercari.solution</groupId>
+  <artifactId>pipeline</artifactId>
+  <version>1.0.0-alpha1</version>
+  <name>Mercari Pipeline</name>
 
-  <packaging>jar</packaging>
+  <packaging>${packaging}</packaging>
 
   <properties>
-    <beam.version>2.58.0</beam.version>
+    <beam.version>2.64.0</beam.version>
 
-    <freemarker.version>2.3.33</freemarker.version>
-    <hadoop.version>3.3.6</hadoop.version>
-    <hbase.version>2.5.8</hbase.version>
-    <onnxruntime.version>1.18.0</onnxruntime.version>
-    <onnx.version>1.15.0-1.5.10</onnx.version>
-    <solr.version>9.6.1</solr.version>
-    <lucene.version>9.10.0</lucene.version>
-    <neo4j.version>5.19.0</neo4j.version>
-    <h2.version>2.2.224</h2.version>
-    <pdfbox.version>3.0.2</pdfbox.version>
-    <jts.version>1.19.0</jts.version>
-    <mysql-connector.version>8.4.0</mysql-connector.version>
-    <postgresql-connector.version>42.7.3</postgresql-connector.version>
-    <sqlserver-connector.version>8.4.1.jre11</sqlserver-connector.version>
-    <jdbc-socket-factory.version>1.19.1</jdbc-socket-factory.version>
-    <secretmanager.version>2.45.0</secretmanager.version>
-    <iamcredentials.version>2.45.0</iamcredentials.version>
-    <drive.version>v3-rev20221023-2.0.0</drive.version>
+    <hadoop.version>3.4.1</hadoop.version>
+    <hbase.version>2.6.2</hbase.version>
+    <onnxruntime.version>1.21.0</onnxruntime.version>
+    <onnxruntime-extensions.version>0.13.0</onnxruntime-extensions.version>
+    <onnx.version>1.17.0-1.5.11</onnx.version>
+
+    <freemarker.version>2.3.34</freemarker.version>
     <exp4j.version>0.4.8</exp4j.version>
-    <jsoup.version>1.18.1</jsoup.version>
+    <jsoup.version>1.19.1</jsoup.version>
+    <snakeyaml.version>2.9</snakeyaml.version>
+    <commons-math3.version>3.6.1</commons-math3.version>
+    <lucene.version>10.1.0</lucene.version>
+    <pdfbox.version>3.0.4</pdfbox.version>
+
+    <mysql-connector.version>8.4.0</mysql-connector.version>
+    <postgresql-connector.version>42.7.4</postgresql-connector.version>
+    <sqlserver-connector.version>8.4.1.jre11</sqlserver-connector.version>
+    <alloydb-connector.version>1.1.8</alloydb-connector.version>
+    <jdbc-socket-factory.version>1.21.0</jdbc-socket-factory.version>
+    <h2.version>2.3.232</h2.version>
+    <drive.version>v3-rev20250220-2.0.0</drive.version>
+
+    <slf4j.version>2.0.16</slf4j.version>
     <junit.version>4.13.1</junit.version>
+    <mockito.version>3.0.0</mockito.version>
+
+    <maven-jib-plugin.version>3.4.4</maven-jib-plugin.version>
     <maven-compiler-plugin.version>3.8.1</maven-compiler-plugin.version>
-    <maven-exec-plugin.version>1.6.0</maven-exec-plugin.version>
     <maven-jar-plugin.version>3.0.2</maven-jar-plugin.version>
     <maven-shade-plugin.version>3.1.0</maven-shade-plugin.version>
-    <mockito.version>3.0.0</mockito.version>
-    <slf4j.version>1.7.30</slf4j.version>
     <maven-surefire-plugin.version>2.21.0</maven-surefire-plugin.version>
+
+    <jakarta-servlet.version>6.1.0</jakarta-servlet.version>
+
+    <packaging>jar</packaging>
+    <jib.entrypoint>INHERIT</jib.entrypoint>
+    <jib.image>gcr.io/dataflow-templates-base/java21-template-launcher-base:latest</jib.image>
+    <jib.appRoot>/template/MPipeline</jib.appRoot>
+
   </properties>
 
   <repositories>
@@ -65,8 +76,8 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <version>${maven-compiler-plugin.version}</version>
         <configuration>
-          <source>17</source>
-          <target>17</target>
+          <source>21</source>
+          <target>21</target>
         </configuration>
       </plugin>
 
@@ -134,6 +145,7 @@
       <plugin>
         <groupId>com.google.cloud.tools</groupId>
         <artifactId>jib-maven-plugin</artifactId>
+        <version>${maven-jib-plugin.version}</version>
         <executions>
           <execution>
             <phase>package</phase>
@@ -144,13 +156,14 @@
         </executions>
         <configuration>
           <from>
-            <image>gcr.io/dataflow-templates-base/java17-template-launcher-base:latest</image>
+            <image>${jib.image}</image>
           </from>
           <container>
-            <appRoot>/template/FlexPipeline</appRoot>
-            <entrypoint>INHERIT</entrypoint>
+            <appRoot>${jib.appRoot}</appRoot>
+            <entrypoint>${jib.entrypoint}</entrypoint>
             <environment>
-              <DATAFLOW_JAVA_COMMAND_SPEC>/template/FlexPipeline/resources/command-spec.json</DATAFLOW_JAVA_COMMAND_SPEC>
+              <APP_VERSION>${project.version}</APP_VERSION>
+              <DATAFLOW_JAVA_COMMAND_SPEC>/template/MPipeline/resources/command-spec.json</DATAFLOW_JAVA_COMMAND_SPEC>
             </environment>
             <jvmFlags>
               <jvmFlag>-Xms2048m</jvmFlag>
@@ -164,104 +177,257 @@
 
     </plugins>
 
-    <pluginManagement>
-      <plugins>
-        <plugin>
-          <groupId>org.codehaus.mojo</groupId>
-          <artifactId>exec-maven-plugin</artifactId>
-          <version>${maven-exec-plugin.version}</version>
-          <configuration>
-            <cleanupDaemonThreads>false</cleanupDaemonThreads>
-          </configuration>
-        </plugin>
-      </plugins>
-    </pluginManagement>
   </build>
 
   <profiles>
-    <profile>
-      <id>direct-runner</id>
-      <activation>
-        <activeByDefault>false</activeByDefault>
-      </activation>
-      <!-- Makes the DirectRunner available when running a pipeline. -->
-      <dependencies>
-        <dependency>
-          <groupId>org.apache.beam</groupId>
-          <artifactId>beam-runners-direct-java</artifactId>
-          <version>${beam.version}</version>
-          <scope>runtime</scope>
-        </dependency>
-      </dependencies>
-    </profile>
 
-   <profile>
-      <id>portable-runner</id>
-      <activation>
-        <activeByDefault>false</activeByDefault>
-      </activation>
-      <!-- Makes the PortableRunner available when running a pipeline. -->
-      <dependencies>
-        <dependency>
-          <groupId>org.apache.beam</groupId>
-          <artifactId>beam-runners-portability-java</artifactId>
-          <version>${beam.version}</version>
-          <scope>runtime</scope>
-        </dependency>
-      </dependencies>
-    </profile>
-
+    <!-- Makes the DataflowRunner available when running a dataflow pipeline job. -->
     <profile>
-      <id>dataflow-runner</id>
+      <id>dataflow</id>
       <activation>
         <activeByDefault>true</activeByDefault>
       </activation>
-      <!-- Makes the DataflowRunner available when running a pipeline. -->
       <dependencies>
         <dependency>
           <groupId>org.apache.beam</groupId>
           <artifactId>beam-runners-google-cloud-dataflow-java</artifactId>
-          <version>${beam.version}</version>
+          <scope>runtime</scope>
         </dependency>
       </dependencies>
     </profile>
 
+    <!-- Makes the DirectRunner available when running a local pipeline job. -->
+    <profile>
+      <id>direct</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <jib.entrypoint>java,-cp,/template/MPipeline/libs/*:/template/MPipeline/classes:/template/MPipeline/resources/libs/*,-Xmx4096m,com.mercari.solution.MPipeline,--runner=DirectRunner</jib.entrypoint>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.google.cloud.tools</groupId>
+            <artifactId>jib-maven-plugin</artifactId>
+            <configuration>
+              <container>
+                <environment>
+                  <GOOGLE_APPLICATION_CREDENTIALS>/mnt/gcloud/application_default_credentials.json</GOOGLE_APPLICATION_CREDENTIALS>
+                </environment>
+              </container>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-direct-java</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
+    <!-- Makes the PrismRunner available when running a local pipeline job. -->
+    <profile>
+      <id>prism</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <jib.entrypoint>java,-cp,/template/MPipeline/libs/*:/template/MPipeline/classes:/template/MPipeline/resources/libs/*,-Xmx4096m,com.mercari.solution.MPipeline,--runner=PrismRunner</jib.entrypoint>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.google.cloud.tools</groupId>
+            <artifactId>jib-maven-plugin</artifactId>
+            <configuration>
+              <container>
+                <environment>
+                  <GOOGLE_APPLICATION_CREDENTIALS>/mnt/gcloud/application_default_credentials.json</GOOGLE_APPLICATION_CREDENTIALS>
+                </environment>
+              </container>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-prism-java</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
+    <!-- Makes the PortableRunner available when running a portable pipeline job. -->
+    <profile>
+      <id>portable</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <jib.entrypoint>java,-cp,/template/MPipeline/libs/*:/template/MPipeline/classes:/template/MPipeline/resources/libs/*,-Xmx4096m,com.mercari.solution.MPipeline,--runner=PortableRunner</jib.entrypoint>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-portability-java</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
+    <!-- Makes the FlinkRunner available when running a flink pipeline job. -->
+    <profile>
+      <id>flink</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <flink.version>1.19</flink.version>
+        <jib.image>apache/beam_flink${flink.version}_job_server</jib.image>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-flink-${flink.version}</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
+    <!-- Makes the SparkRunner available when running a spark pipeline job. -->
+    <profile>
+      <id>spark</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <jib.entrypoint>java,-cp,/template/MPipeline/libs/*:/template/MPipeline/classes:/template/MPipeline/resources/libs/*,-Xmx4096m,com.mercari.solution.MPipeline,--runner=SparkRunner</jib.entrypoint>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-spark-3</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+
+    <!-- Makes the Config Builder on Jetty available. -->
+    <profile>
+      <id>server</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <packaging>war</packaging>
+        <jetty.version>11.0.25</jetty.version>
+        <jib.image>jetty:${jetty.version}-jdk21</jib.image>
+        <jib.entrypoint>java,-jar,/usr/local/jetty/start.jar</jib.entrypoint>
+        <jib.appRoot>/var/lib/jetty/webapps/ROOT</jib.appRoot>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-direct-java</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-maven-plugin</artifactId>
+            <version>${jetty.version}</version>
+          </plugin>
+        </plugins>
+      </build>
+
+    </profile>
+
   </profiles>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-google-cloud-platform-bom</artifactId>
+        <version>${beam.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <!-- Adds a dependency on the Beam SDK. -->
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-core</artifactId>
-      <version>${beam.version}</version>
     </dependency>
 
     <!-- Adds a dependency on the Beam Google Cloud Platform IO module. -->
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-io-google-cloud-platform</artifactId>
-      <version>${beam.version}</version>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-amazon-web-services2 -->
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-io-amazon-web-services2</artifactId>
-      <version>${beam.version}</version>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-jdbc -->
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-jdbc</artifactId>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-parquet -->
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-parquet</artifactId>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-kafka -->
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-kafka</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-iceberg</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-managed</artifactId>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-rrio -->
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-rrio</artifactId>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-extensions-sql -->
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-extensions-sql</artifactId>
-      <version>${beam.version}</version>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-extensions-sql-zetasql -->
+    <!-- remove comment out if zetasql planner is needed -->
+    <!--
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-extensions-sql-zetasql</artifactId>
-      <version>${beam.version}</version>
       <exclusions>
         <exclusion>
           <groupId>com.google.protobuf</groupId>
@@ -269,61 +435,37 @@
         </exclusion>
       </exclusions>
     </dependency>
-
-    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-jdbc -->
-    <dependency>
-      <groupId>org.apache.beam</groupId>
-      <artifactId>beam-sdks-java-io-jdbc</artifactId>
-      <version>${beam.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-parquet -->
-    <dependency>
-      <groupId>org.apache.beam</groupId>
-      <artifactId>beam-sdks-java-io-parquet</artifactId>
-      <version>${beam.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-rrio -->
-    <dependency>
-      <groupId>org.apache.beam</groupId>
-      <artifactId>beam-sdks-java-io-rrio</artifactId>
-      <version>${beam.version}</version>
-    </dependency>
+    -->
 
     <!-- Big Data -->
-    <!-- https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-client -->
+    <!-- https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-mapreduce-client-core -->
+    <!--
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-mapreduce-client-core</artifactId>
       <version>${hadoop.version}</version>
       <exclusions>
         <exclusion>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-yarn-client</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-yarn-common</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-hdfs-client</artifactId>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
+    -->
 
-    <!-- https://mvnrepository.com/artifact/org.apache.hbase/hbase-client -->
+    <!-- https://mvnrepository.com/artifact/org.apache.hbase/hbase-common -->
     <dependency>
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-common</artifactId>
       <version>${hbase.version}</version>
+      <!--
       <exclusions>
         <exclusion>
-          <groupId>com.sun.jersey</groupId>
+          <groupId>io.opentelemetry</groupId>
           <artifactId>*</artifactId>
         </exclusion>
       </exclusions>
+        -->
     </dependency>
 
     <!-- Machine Learning -->
@@ -334,6 +476,13 @@
       <version>${onnxruntime.version}</version>
     </dependency>
 
+    <!-- https://mvnrepository.com/artifact/com.microsoft.onnxruntime/onnxruntime-extensions -->
+    <dependency>
+      <groupId>com.microsoft.onnxruntime</groupId>
+      <artifactId>onnxruntime-extensions</artifactId>
+      <version>${onnxruntime-extensions.version}</version>
+    </dependency>
+
     <!-- https://mvnrepository.com/artifact/org.bytedeco/onnx-platform -->
     <dependency>
       <groupId>org.bytedeco</groupId>
@@ -342,46 +491,22 @@
     </dependency>
 
     <!-- Search Engine -->
-    <!-- https://mvnrepository.com/artifact/org.apache.solr/solr-core -->
-    <dependency>
-      <groupId>org.apache.solr</groupId>
-      <artifactId>solr-core</artifactId>
-      <version>${solr.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/org.apache.lucene/lucene-analysis-kuromoji -->
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-analysis-kuromoji</artifactId>
       <version>${lucene.version}</version>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.apache.lucene/lucene-analysis-opennlp -->
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-analysis-opennlp</artifactId>
       <version>${lucene.version}</version>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.apache.lucene/lucene-analysis-icu -->
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-analysis-icu</artifactId>
       <version>${lucene.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/org.neo4j/neo4j -->
-    <dependency>
-      <groupId>org.neo4j</groupId>
-      <artifactId>neo4j</artifactId>
-      <version>${neo4j.version}</version>
-    </dependency>
-
-    <!-- https://mvnrepository.com/artifact/com.h2database/h2 -->
-    <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2</artifactId>
-      <version>${h2.version}</version>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/org.apache.pdfbox/pdfbox -->
@@ -391,26 +516,29 @@
       <version>${pdfbox.version}</version>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.locationtech.jts/jts-core -->
+    <!-- Google Services -->
+    <!-- https://mvnrepository.com/artifact/com.google.cloud/google-cloud-dataflow -->
     <dependency>
-      <groupId>org.locationtech.jts</groupId>
-      <artifactId>jts-core</artifactId>
-      <version>${jts.version}</version>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>google-cloud-dataflow</artifactId>
     </dependency>
 
-    <!-- Google Services -->
     <!-- https://mvnrepository.com/artifact/com.google.cloud/google-cloud-secretmanager -->
     <dependency>
       <groupId>com.google.cloud</groupId>
       <artifactId>google-cloud-secretmanager</artifactId>
-      <version>${secretmanager.version}</version>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/com.google.cloud/google-cloud-iamcredentials -->
     <dependency>
       <groupId>com.google.cloud</groupId>
       <artifactId>google-cloud-iamcredentials</artifactId>
-      <version>${iamcredentials.version}</version>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/com.google.cloud/google-cloud-kms -->
+    <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>google-cloud-kms</artifactId>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/com.google.apis/google-api-services-drive -->
@@ -466,6 +594,20 @@
       <scope>runtime</scope>
     </dependency>
 
+    <!-- https://mvnrepository.com/artifact/com.google.cloud/alloydb-jdbc-connector -->
+    <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>alloydb-jdbc-connector</artifactId>
+      <version>${alloydb-connector.version}</version>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/com.h2database/h2 -->
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>${h2.version}</version>
+    </dependency>
+
     <!-- Utils -->
     <!-- https://mvnrepository.com/artifact/org.freemarker/freemarker -->
     <dependency>
@@ -488,18 +630,18 @@
       <version>${jsoup.version}</version>
     </dependency>
 
-    <!-- for solr dependency conflict -->
-    <!-- https://mvnrepository.com/artifact/jakarta.xml.bind/jakarta.xml.bind-api -->
+    <!-- https://mvnrepository.com/artifact/org.snakeyaml/snakeyaml-engine -->
     <dependency>
-      <groupId>jakarta.xml.bind</groupId>
-      <artifactId>jakarta.xml.bind-api</artifactId>
-      <version>4.0.2</version>
+      <groupId>org.snakeyaml</groupId>
+      <artifactId>snakeyaml-engine</artifactId>
+      <version>${snakeyaml.version}</version>
     </dependency>
 
+    <!-- https://mvnrepository.com/artifact/org.apache.commons/commons-math3 -->
     <dependency>
-      <groupId>javax.xml.bind</groupId>
-      <artifactId>jaxb-api</artifactId>
-      <version>2.3.1</version>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-math3</artifactId>
+      <version>${commons-math3.version}</version>
     </dependency>
 
     <!-- Log -->
@@ -529,14 +671,23 @@
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-runners-direct-java</artifactId>
-      <version>${beam.version}</version>
+      <scope>test</scope>
     </dependency>
 
+    <!-- Pipeline Server -->
+    <!-- https://mvnrepository.com/artifact/jakarta.servlet/jakarta.servlet-api -->
     <dependency>
-      <groupId>org.mockito</groupId>
-      <artifactId>mockito-core</artifactId>
-      <version>${mockito.version}</version>
-      <scope>test</scope>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <version>${jakarta-servlet.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/io.modelcontextprotocol.sdk/mcp -->
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp</artifactId>
+      <version>0.8.1</version>
     </dependency>
 
   </dependencies>

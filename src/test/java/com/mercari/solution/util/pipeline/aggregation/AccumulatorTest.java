@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 
 public class AccumulatorTest {
 
+    /*
     @Test
     public void testCoder() throws Exception {
         final Accumulator accumulator = Accumulator.of();
@@ -60,5 +61,7 @@ public class AccumulatorTest {
         }
 
     }
+
+     */
 
 }

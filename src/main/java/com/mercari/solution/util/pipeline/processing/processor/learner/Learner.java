@@ -3,8 +3,8 @@ package com.mercari.solution.util.pipeline.processing.processor.learner;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import com.mercari.solution.util.domain.ml.Model;
 import com.mercari.solution.util.pipeline.processing.ProcessingBuffer;
 import com.mercari.solution.util.pipeline.processing.ProcessingState;
@@ -112,7 +112,7 @@ public abstract class Learner implements Processor {
             }
             featureFields.add(featureField.getAsString());
         }
-        if(featureFields.size() == 0) {
+        if(featureFields.isEmpty()) {
             throw new IllegalArgumentException("Learner step: " + name + " requires featureFields over size zero");
         }
 
@@ -122,7 +122,7 @@ public abstract class Learner implements Processor {
                 .map(Integer::valueOf)
                 .collect(Collectors.toList());
         this.isSingleHorizon = horizonsAndIsSingle.getValue();
-        if(horizons.size() == 0) {
+        if(horizons.isEmpty()) {
             throw new IllegalArgumentException("Learner step: " + name + " requires horizons over size zero");
         }
         this.horizonMax = horizons.stream().max(Integer::compareTo).orElse(0);
@@ -157,9 +157,9 @@ public abstract class Learner implements Processor {
 
         this.targetAllVariables = new HashSet<>();
         final Set<String> set = new HashSet<>(featureFields);
-        if(targetFields.size() > 0) {
+        if(!targetFields.isEmpty()) {
             set.addAll(targetFields);
-        } else if(targetExpressions.size() > 0) {
+        } else if(!targetExpressions.isEmpty()) {
             for(int i = 0; i< targetExpressions.size(); i++) {
                 final Set<String> targetVariables = targetVariablesList.get(i);
                 set.addAll(targetVariables);
@@ -205,11 +205,11 @@ public abstract class Learner implements Processor {
     @Override
     public Map<String, Schema.FieldType> getBufferTypes(Map<String, Schema.FieldType> inputTypes) {
         final Map<String, Schema.FieldType> bufferTypes = new HashMap<>();
-        if(this.targetFields.size() > 0) {
+        if(!this.targetFields.isEmpty()) {
             for(final String targetField : targetFields) {
                 bufferTypes.put(targetField, inputTypes.get(targetField));
             }
-        } else if(this.targetExpressions.size() > 0) {
+        } else if(!this.targetExpressions.isEmpty()) {
             final Set<String> inputFields = ExpressionUtil.extractInputs(targetVariablesList, DEFAULT_VARIABLE_NAME_SEPARATOR);
             for(final String inputField : inputFields) {
                 bufferTypes.put(inputField, inputTypes.get(inputField));
@@ -241,7 +241,7 @@ public abstract class Learner implements Processor {
     @Override
     public void setup() {
         this.targetExpList = new ArrayList<>();
-        if(this.targetExpressions.size() > 0) {
+        if(!this.targetExpressions.isEmpty()) {
             for(int i = 0; i< targetExpressions.size(); i++) {
                 final String  targetExpression = targetExpressions.get(i);
                 final Set<String> targetVariables = targetVariablesList.get(i);
@@ -269,7 +269,7 @@ public abstract class Learner implements Processor {
         }
 
         // buffer expression target
-        if(targetExpList.size() > 0) {
+        if(!targetExpList.isEmpty()) {
             bufferExpressionTargets(buffer, timestamp);
         }
 
@@ -323,9 +323,9 @@ public abstract class Learner implements Processor {
     }
 
     private double[][] getTargets(final ProcessingBuffer buffer, final int horizon) {
-        if(targetFields.size() > 0) {
+        if(!targetFields.isEmpty()) {
             return buffer.getAsMatrix(targetFields, 0, trainSize, trainSizeUnit);
-        } else if(this.targetExpList.size() > 0) {
+        } else if(!this.targetExpList.isEmpty()) {
             final List<String> targetBufferNames = new ArrayList<>();
             for(int i=0; i<targetExpList.size(); i++) {
                 final String targetBufferName = createTargetBufferName(i, horizon);
@@ -338,7 +338,7 @@ public abstract class Learner implements Processor {
     }
 
     private void bufferExpressionTargets(ProcessingBuffer buffer, Instant timestamp) {
-        if(targetExpList.size() == 0) {
+        if(targetExpList.isEmpty()) {
             return;
         }
         for(int horizon : horizons) {

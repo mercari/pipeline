@@ -4,33 +4,21 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.config.SourceConfig;
-import com.mercari.solution.config.TransformConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.OptionUtil;
-import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.converter.JsonToRecordConverter;
-import com.mercari.solution.util.converter.JsonToRowConverter;
-import com.mercari.solution.util.converter.RowToRecordConverter;
+import com.mercari.solution.util.coder.ElementCoder;
+import com.mercari.solution.util.coder.UnionMapCoder;
+import com.mercari.solution.util.domain.web.HttpUtil;
+import com.mercari.solution.util.pipeline.*;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
-import com.mercari.solution.util.pipeline.union.Union;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.schema.RowSchemaUtil;
-import com.mercari.solution.util.schema.SchemaUtil;
-import freemarker.template.Template;
-import org.apache.avro.generic.GenericRecord;
+import com.mercari.solution.util.schema.converter.JsonToElementConverter;
 import org.apache.beam.io.requestresponse.*;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.RowCoder;
-import org.apache.beam.sdk.extensions.avro.coders.AvroGenericCoder;
-import org.apache.beam.sdk.schemas.Schema;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.coders.KvCoder;
+import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.windowing.AfterProcessingTime;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
+import org.apache.beam.sdk.transforms.windowing.Repeatedly;
+import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
@@ -39,71 +27,71 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.util.*;
-import java.util.stream.Collectors;
 
-public class HttpTransform implements TransformModule {
+
+@Transform.Module(name="http")
+public class HttpTransform extends Transform {
 
     private static final Logger LOG = LoggerFactory.getLogger(HttpTransform.class);
 
-    public static class HttpTransformParameters implements Serializable {
+    public static class Parameters implements Serializable {
 
-        private RequestParameters request;
-        private ResponseParameters response;
+        //private Auth.Parameters auth;
+        private HttpUtil.Request request;
+        private List<HttpUtil.Request> requests;
+        private HttpUtil.Response response;
         private RetryParameters retry;
         private Integer timeoutSecond;
         private JsonArray select;
         private JsonElement filter;
+        private String flattenField;
 
-        private DataType outputType;
-        private Boolean failFast;
-
-        public static HttpTransformParameters of(
-                final JsonElement jsonElement,
-                final String name,
-                final PInput input) {
-
-            final HttpTransformParameters parameters = new Gson().fromJson(jsonElement, HttpTransformParameters.class);
-            if (parameters == null) {
-                throw new IllegalArgumentException("HttpTransformParameters config parameters must not be empty!");
-            }
-
-            parameters.validate(name);
-            parameters.setDefaults(input);
-
-            return parameters;
-        }
-
-        public List<String> validate(final String name) {
+        public void validate() {
             final List<String> errorMessages = new ArrayList<>();
-            if(this.request == null) {
-                errorMessages.add("http transform module[" + name + "].request must not be null.");
+            if(this.request == null && (this.requests == null || this.requests.isEmpty())) {
+                errorMessages.add("parameters.request must not be null.");
+            } else if(this.request != null) {
+                errorMessages.addAll(this.request.validate(""));
             } else {
-                errorMessages.addAll(this.request.validate(name));
+                for(var req : requests) {
+                    req.validate("");
+                }
             }
 
             if(this.response == null) {
-                errorMessages.add("http transform module[" + name + "].response must not be null.");
+                errorMessages.add("parameters.response must not be null.");
             } else {
-                errorMessages.addAll(this.response.validate(name));
+                errorMessages.addAll(this.response.validate(""));
             }
 
             if(this.retry != null) {
-                errorMessages.addAll(this.retry.validate(name));
+                errorMessages.addAll(this.retry.validate());
             }
 
-            return errorMessages;
+            //if(auth != null) {
+            //    errorMessages.addAll(this.auth.validate(""));
+            //}
+
+            if(!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
+            }
         }
 
-        public void setDefaults(PInput input) {
-            this.request.setDefaults();
+        public void setDefaults() {
+            if(requests == null) {
+                requests = new ArrayList<>();
+            }
+            if(request != null) {
+                requests.add(request);
+            }
+            for(var req : requests) {
+                req.setDefaults();
+            }
             this.response.setDefaults();
             if(this.retry == null) {
                 this.retry = new RetryParameters();
@@ -112,27 +100,35 @@ public class HttpTransform implements TransformModule {
             if(this.timeoutSecond == null) {
                 this.timeoutSecond = 30;
             }
-            if(failFast == null) {
-                this.failFast = false;
-            }
-            if(outputType == null) {
-                this.outputType = OptionUtil.isStreaming(input) ? DataType.ROW : DataType.AVRO;
-            }
         }
 
+
+        /*
         private static class RequestParameters implements Serializable {
 
             private String endpoint;
             private String method;
             private Map<String,String> params;
-            private String body;
+            private JsonElement body;
             private Map<String, String> headers;
 
-            public List<String> validate(String name) {
+            // prepare requests
+            //private String name;
+            //private String path;
+            private List<RequestParameters> prepareRequests;
+
+            private transient Template templateEndpoint;
+            private transient Map<String,Template> templateParams;
+            private transient Map<String,Template> templateHeaders;
+            private transient Template templateBody;
+
+            private transient Map<String, String> prepareParameters;
+
+            public List<String> validate() {
                 final List<String> errorMessages = new ArrayList<>();
 
                 if(this.endpoint == null) {
-                    errorMessages.add("http transform module[" + name + "].endpoint must not be null.");
+                    errorMessages.add("parameters.request.endpoint must not be null.");
                 }
 
                 return errorMessages;
@@ -140,7 +136,7 @@ public class HttpTransform implements TransformModule {
 
             public void setDefaults() {
                 if(this.method == null) {
-                    this.method = "get";
+                    this.method = "GET";
                 }
                 if(this.params == null) {
                     this.params = new HashMap<>();
@@ -148,30 +144,112 @@ public class HttpTransform implements TransformModule {
                 if(this.headers == null) {
                     this.headers = new HashMap<>();
                 }
+                if(this.prepareRequests == null) {
+                    this.prepareRequests = new ArrayList<>();
+                }
+                for(final RequestParameters prepareRequest : prepareRequests) {
+                    prepareRequest.setDefaults();
+                }
             }
 
-        }
+            public void setup() {
+                this.templateEndpoint = TemplateUtil.createStrictTemplate("TemplateEndpoint", endpoint);
+                this.templateParams = new HashMap<>();
+                if(!this.params.isEmpty()) {
+                    int count = 0;
+                    for(final Map.Entry<String, String> entry : params.entrySet()) {
+                        final Template template = TemplateUtil.createStrictTemplate("TemplateParams" + count, entry.getValue());
+                        this.templateParams.put(entry.getKey(), template);
+                        count++;
+                    }
+                }
+                this.templateHeaders = new HashMap<>();
+                if(!this.headers.isEmpty()) {
+                    int count = 0;
+                    for(final Map.Entry<String, String> entry : headers.entrySet()) {
+                        final Template template = TemplateUtil.createStrictTemplate("TemplateHeaders" + count, entry.getValue());
+                        this.templateHeaders.put(entry.getKey(), template);
+                        count++;
+                    }
+                }
+                if(this.body != null) {
+                    this.templateBody = TemplateUtil.createStrictTemplate("TemplateBody", this.body.toString());
+                }
 
+                for(final RequestParameters prepareRequest : prepareRequests) {
+                    prepareRequest.setup();
+                }
+
+                //this.prepareParameters = getPrepareParameters();
+            }
+
+         */
+
+            /*
+            public Map<String, String> getPrepareParameters() {
+                final Map<String, String> prepareParameters = new HashMap<>();
+                if(prepareRequests.isEmpty()) {
+                    return prepareParameters;
+                }
+                final Map<String, Object> params = new HashMap<>();
+                TemplateUtil.setFunctions(params);
+                try(final HttpClient client = HttpClient.newBuilder().build()) {
+                    for(final RequestParameters prepareRequest : prepareRequests) {
+                        final HttpResponse<String> httpResponse = sendRequest(client, prepareRequest, params, HttpResponse.BodyHandlers.ofString());
+                        final String prepareParameter = prepareRequest.getParameter(httpResponse.body());
+                        prepareParameters.put(prepareRequest.name, prepareParameter);
+                        params.put(prepareRequest.name, prepareParameter);
+                    }
+                    return prepareParameters;
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to prepare parameter request: " + prepareRequests, e);
+                }
+            }
+
+             */
+
+            /*
+            private String getParameter(String body) {
+                if(path == null) {
+                    return body;
+                } else {
+                    try {
+                        final Object str = org.apache.beam.vendor.calcite.v1_28_0.com.jayway.jsonpath.JsonPath.read(body, path);
+                        return switch (str) {
+                            case String s -> s;
+                            case Object n -> n.toString();
+                        };
+                    } catch (Throwable e) {
+                        throw new RuntimeException("failed to get jsonPath: " + path + " from response body: " + body, e);
+                    }
+                }
+            }
+
+
+        }
+             */
+
+        /*
         private static class ResponseParameters implements Serializable {
 
-            private Format format;
-            private SourceConfig.InputSchema schema;
+            private HttpTransform.Format format;
+            private JsonElement schema;
             private List<Integer> acceptableStatusCodes;
 
-            public List<String> validate(String name) {
+            public List<String> validate() {
                 final List<String> errorMessages = new ArrayList<>();
                 if(this.format == null) {
-                    errorMessages.add("http transform module[" + name + "].format must not be null.");
+                    errorMessages.add("parameters.response.format must not be null.");
                 }
-                if(this.schema != null && (this.schema.getFields() == null || this.schema.getFields().isEmpty())) {
-                    errorMessages.add("http transform module[" + name + "].schema.fields must not be empty.");
+                if(this.schema == null || !this.schema.isJsonObject()) {
+                    errorMessages.add("parameters.response.schema must not be null.");
                 }
                 if(this.acceptableStatusCodes != null) {
                     for(final Integer acceptableStatusCode : acceptableStatusCodes) {
                         if(acceptableStatusCode == null) {
-                            errorMessages.add("http transform module[" + name + "].acceptableStatusCodes value must not be null.");
+                            errorMessages.add("parameters.response.acceptableStatusCodes must not be null.");
                         } else if(acceptableStatusCode >= 600 || acceptableStatusCode < 100) {
-                            errorMessages.add("http transform module[" + name + "].acceptableStatusCodes value[" + acceptableStatusCode + "] must be between 100 and 599");
+                            errorMessages.add("parameters.response.acceptableStatusCodes value[" + acceptableStatusCode + "] must be between 100 and 599");
                         }
                     }
                 }
@@ -186,11 +264,13 @@ public class HttpTransform implements TransformModule {
 
         }
 
+         */
+
         private static class RetryParameters implements Serializable {
 
             private BackoffParameters backoff;
 
-            public List<String> validate(String name) {
+            public List<String> validate() {
                 return new ArrayList<>();
             }
 
@@ -245,598 +325,389 @@ public class HttpTransform implements TransformModule {
     }
 
     @Override
-    public String getName() {
-        return "http";
-    }
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
-    @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, TransformConfig config) {
-        return transform(inputs, config);
-    }
+        final Parameters parameters = getParameters(Parameters.class);
+        parameters.validate();
+        parameters.setDefaults();
 
-    public static Map<String, FCollection<?>> transform(final List<FCollection<?>> inputs, final TransformConfig config) {
-        final List<TupleTag<?>> tags = new ArrayList<>();
-        final List<String> inputNames = new ArrayList<>();
-        final List<DataType> inputTypes = new ArrayList<>();
-        final List<Schema> inputSchemas = new ArrayList<>();
+        final Schema responseSchema = HttpUtil.createResponseSchema(parameters.response);
+        final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, responseSchema.getFields());
+        final Schema outputSchema = createOutputSchema(responseSchema, selectFunctions, parameters.flattenField);
 
-        PCollectionTuple tuple = PCollectionTuple.empty(inputs.get(0).getCollection().getPipeline());
-        for (final FCollection<?> input : inputs) {
-            final TupleTag tag = new TupleTag<>() {};
-            tags.add(tag);
-            inputNames.add(input.getName());
-            inputTypes.add(input.getDataType());
-            inputSchemas.add(input.getSchema());
-            tuple = tuple.and(tag, input.getCollection());
-        }
+        final PCollection<MElement> input = inputs
+                .apply("Union", Union.flatten()
+                        .withWaits(getWaits())
+                        .withStrategy(getStrategy()));
+        final Schema inputSchema = Union.createUnionSchema(inputs);
 
-        final HttpTransformParameters parameters = HttpTransformParameters.of(
-                config.getParameters(),
-                config.getName(),
-                inputs.get(0).getCollection());
+        final PCollection<KV<Map<String, Object>, MElement>> inputWithParams;
+        /*
+        if(parameters.auth != null || !getSideInputs().isEmpty()) {
 
-
-        final Schema responseSchema = createResponseSchema(parameters.response);
-        final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, responseSchema.getFields(), parameters.outputType);
-        final Schema outputSchema = createOutputSchema(responseSchema, selectFunctions);
-        final Schema failureSchema = createFailureSchema();
-
-        final Map<String, FCollection<?>> outputs = new HashMap<>();
-        switch (parameters.outputType) {
-            case ROW -> {
-                final TupleTag<Row> outputTag = new TupleTag<>() {};
-                final TupleTag<Row> failureTag = new TupleTag<>() {};
-                final Coder<Row> outputCoder = RowCoder.of(outputSchema);
-                final Transform<Schema, Row> transform = new Transform<>(
-                        config.getName(),
-                        parameters,
-                        selectFunctions,
-                        s -> s,
-                        JsonToRowConverter::convert,
-                        RowSchemaUtil::create,
-                        tags,
-                        inputNames,
-                        inputTypes,
-                        parameters.outputType,
-                        responseSchema,
-                        outputSchema,
-                        failureSchema,
-                        outputCoder,
-                        outputTag,
-                        failureTag);
-
-                final PCollectionTuple outputTuple = tuple.apply(config.getName(), transform);
-                final PCollection<Row> output = outputTuple.get(outputTag);
-                final PCollection<Row> failures = outputTuple.get(failureTag);
-                final FCollection<?> outputFCollection = FCollection.of(config.getName(), output, DataType.ROW, outputSchema);
-                final FCollection<?> failuresFCollection = FCollection.of(config.getName(), failures.setCoder(RowCoder.of(failureSchema)), DataType.ROW, failureSchema);
-                outputs.put(config.getName(), outputFCollection);
-                outputs.put(config.getName() + ".failures", failuresFCollection);
+            final Map<String, PCollectionView<?>> views = new HashMap<>();
+            for(final MCollection collection : getSideInputs()) {
+                final PCollectionView<Map<String,Object>> sideInputView = collection
+                        .apply("AsView" + collection.getName(), Views.singleton());
+                views.put(collection.getName(), sideInputView);
             }
-            case AVRO -> {
-                final TupleTag<GenericRecord> outputTag = new TupleTag<>() {};
-                final TupleTag<GenericRecord> failureTag = new TupleTag<>() {};
-                final org.apache.avro.Schema outputAvroSchema = RowToRecordConverter.convertSchema(outputSchema);
-                final org.apache.avro.Schema failureAvroSchema = RowToRecordConverter.convertSchema(failureSchema);
-                final Coder<GenericRecord> outputCoder = AvroGenericCoder.of(outputAvroSchema);
-                final Transform<org.apache.avro.Schema, GenericRecord> transform = new Transform<>(
-                        config.getName(),
-                        parameters,
-                        selectFunctions,
-                        RowToRecordConverter::convertSchema,
-                        JsonToRecordConverter::convert,
-                        AvroSchemaUtil::create,
-                        tags,
-                        inputNames,
-                        inputTypes,
-                        parameters.outputType,
-                        responseSchema,
-                        outputSchema,
-                        failureSchema,
-                        outputCoder,
-                        outputTag,
-                        failureTag);
 
-                final PCollectionTuple outputTuple = tuple.apply(config.getName(), transform);
-                final PCollection<GenericRecord> output = outputTuple.get(outputTag);
-                final PCollection<GenericRecord> failures = outputTuple.get(failureTag);
-                final FCollection<?> outputFCollection = FCollection.of(config.getName(), output, DataType.AVRO, outputAvroSchema);
-                final FCollection<?> failuresFCollection = FCollection.of(config.getName(), failures.setCoder(AvroGenericCoder.of(failureAvroSchema)), DataType.AVRO, failureAvroSchema);
-                outputs.put(config.getName(), outputFCollection);
-                outputs.put(config.getName() + ".failures", failuresFCollection);
+            if(parameters.auth != null) {
+                final Auth.Transform transform = Auth.of(
+                        getJobName(), getName(), parameters.auth, getFailFast(), getLoggings());
+                final PCollectionTuple auth = inputs.getPipeline().begin()
+                        .apply("Auth", transform);
+
+                final PCollection<Map<String, Object>> authOutput = auth
+                        .get(transform.outputTag)
+                        .apply("WithTrigger", Window
+                                .<Map<String, Object>>into(new GlobalWindows())
+                                .triggering(Repeatedly.forever(AfterProcessingTime.pastFirstElementInPane()))
+                                .discardingFiredPanes());
+                final PCollectionView<Map<String, Object>> params = authOutput.apply(View.asSingleton());
+                views.put("auth", params);
             }
-            default -> throw new IllegalArgumentException("Not supported outputType: " + parameters.outputType);
-        }
-
-        return outputs;
-    }
-
-    private static Schema createResponseSchema(final HttpTransformParameters.ResponseParameters response) {
-        final Schema.Field bodyField;
-        if(response.schema == null) {
-            bodyField = switch (response.format) {
-                case bytes -> Schema.Field.of("body", Schema.FieldType.BYTES.withNullable(true));
-                case text -> Schema.Field.of("body", Schema.FieldType.STRING.withNullable(true));
-                case json -> Schema.Field.of("body", Schema.FieldType.STRING.withNullable(true))
-                        .withOptions(Schema.Options.builder()
-                                .setOption("sqlType", Schema.FieldType.STRING, "json"));
-            };
+            inputWithParams = input
+                    .apply("LookupAuth", ParDo.of(new LookupDoFn(views)).withSideInputs(views));
         } else {
-            bodyField = Schema.Field
-                    .of("body", Schema.FieldType.row(SourceConfig.convertSchema(response.schema)));
+            inputWithParams = input
+                    .apply("EmptyAuth", WithKeys.of(new HashMap<>()));
         }
-        return Schema.builder()
-                .addField("statusCode", Schema.FieldType.INT32)
-                .addField(bodyField)
-                .addField("headers", Schema.FieldType.map(
-                        Schema.FieldType.STRING,
-                        Schema.FieldType.array(Schema.FieldType.STRING)).withNullable(true))
-                .build();
+
+         */
+
+        inputWithParams = input
+                .apply("EmptyAuth", WithKeys.of(new HashMap<>()));
+
+        final HttpCaller caller = new HttpCaller(
+                getName(), getParametersText(), inputSchema, selectFunctions, responseSchema, outputSchema, getLoggings());
+        final RequestResponseIO<KV<Map<String, Object>, MElement>, MElement> requestResponseIO = RequestResponseIO
+                .ofCallerAndSetupTeardown(caller, ElementCoder.of(outputSchema))
+                .withTimeout(Duration.standardSeconds(parameters.timeoutSecond));
+
+        final Result<MElement> httpResult = inputWithParams
+                .setCoder(KvCoder.of(UnionMapCoder.mapCoder(), ElementCoder.of(inputSchema)))
+                .apply("HttpCall", requestResponseIO);
+
+        PCollectionList<MElement> errorList = PCollectionList.empty(inputs.getPipeline());
+        final PCollection<MElement> errors = httpResult.getFailures()
+                .apply("Failures", ParDo.of(new FailureDoFn(getJobName(), getName(), getFailFast())));
+        errorList = errorList.and(errors);
+
+        final PCollection<MElement> output;
+        if(selectFunctions.isEmpty()) {
+            output = httpResult.getResponses();
+        } else {
+            final String filterString = Optional
+                    .ofNullable(parameters.filter)
+                    .map(JsonElement::toString)
+                    .orElse(null);
+            final Select.Transform selectTransform = Select.of(
+                    getJobName(), getName(), filterString, selectFunctions, parameters.flattenField, getLoggings(), getFailFast(), DataType.ELEMENT);
+            final PCollectionTuple tuple = httpResult.getResponses()
+                    .apply("Select", selectTransform);
+            output = tuple.get(selectTransform.outputTag);
+            if(getOutputFailure()) {
+                errorList = errorList.and(tuple.get(selectTransform.failuresTag));
+            }
+        }
+
+        return MCollectionTuple
+                .of(output, outputSchema);
     }
 
-    private static Schema createOutputSchema(final Schema responseSchema, final List<SelectFunction> selectFunctions) {
+    private static Schema createOutputSchema(
+            final Schema responseSchema,
+            final List<SelectFunction> selectFunctions,
+            final String flattenField) {
+
         if(selectFunctions.isEmpty()) {
             return responseSchema;
         } else {
-            return SelectFunction.createSchema(selectFunctions);
+            return SelectFunction.createSchema(selectFunctions, flattenField);
         }
     }
 
-    private static Schema createFailureSchema() {
-        return Schema.builder()
-                .addField("message", Schema.FieldType.STRING.withNullable(true))
-                .addField("request", Schema.FieldType.STRING.withNullable(true))
-                .addField("stackTrace", Schema.FieldType.STRING.withNullable(true))
-                .addField("timestamp", Schema.FieldType.DATETIME)
-                .build();
-    }
-
-    public static class Transform<RuntimeSchemaT, T> extends PTransform<PCollectionTuple, PCollectionTuple> {
+    private static class HttpCaller implements Caller<KV<Map<String, Object>, MElement>, MElement>, SetupTeardown {
 
         private final String name;
-        private final List<TupleTag<?>> inputTags;
-        private final List<String> inputNames;
-        private final List<DataType> inputTypes;
-        private final DataType outputType;
-        private final Coder<T> responseCoder;
-
-        private final HttpTransformParameters.RequestParameters request;
-        private final HttpTransformParameters.ResponseParameters response;
-        private final HttpTransformParameters.RetryParameters retry;
-        private final Integer timeoutSecond;
-        private final List<SelectFunction> selectFunctions;
-
-        private final SchemaUtil.SchemaConverter<Schema,RuntimeSchemaT> schemaConverter;
-        private final SchemaUtil.JsonConverter<RuntimeSchemaT,T> jsonConverter;
-        private final SchemaUtil.ValueCreator<RuntimeSchemaT,T> valueCreator;
+        private final String parametersText;
+        private final Schema inputSchema;
 
         private final Schema responseSchema;
         private final Schema outputSchema;
-        private final Schema failureSchema;
 
-        private final TupleTag<T> outputTag;
-        private final TupleTag<T> failureTag;
+        private final List<SelectFunction> selectFunctions;
+
+        private final Map<String, Logging> loggings;
+
+        private final Set<HttpCaller.TokenType> tokenTypes;
+
+        private transient HttpClient client;
+
+        private transient HttpUtil.Request request;
+        private transient HttpUtil.Response response;
+        private transient Parameters.RetryParameters retry;
+        private transient Integer timeoutSecond;
 
 
-        Transform(final String name,
-                  final HttpTransformParameters parameters,
-                  final List<SelectFunction> selectFunctions,
-                  final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter,
-                  final SchemaUtil.JsonConverter<RuntimeSchemaT, T> jsonConverter,
-                  final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator,
-                  final List<TupleTag<?>> inputTags,
-                  final List<String> inputNames,
-                  final List<DataType> inputTypes,
-                  final DataType outputType,
-                  final Schema responseSchema,
-                  final Schema outputSchema,
-                  final Schema failureSchema,
-                  final Coder<T> responseCoder,
-                  final TupleTag<T> outputTag,
-                  final TupleTag<T> faulureTag) {
+        public HttpCaller(
+                final String name,
+                final String parametersText,
+                final Schema inputSchema,
+                final List<SelectFunction> selectFunctions,
+                final Schema responseSchema,
+                final Schema outputSchema,
+                final List<Logging> loggings) {
 
             this.name = name;
+            this.parametersText = parametersText;
+            this.inputSchema = inputSchema;
+            this.selectFunctions = selectFunctions;
+
+            this.responseSchema = responseSchema;
+            this.outputSchema = outputSchema;
+
+            this.loggings = Logging.map(loggings);
+
+            this.tokenTypes = new HashSet<>();
+        }
+
+        @Override
+        public void setup() throws UserCodeExecutionException {
+
+            this.client = HttpClient.newBuilder().build();
+
+            final Parameters parameters = new Gson().fromJson(parametersText, Parameters.class);
+            parameters.setDefaults();
+
             this.request = parameters.request;
             this.response = parameters.response;
             this.retry = parameters.retry;
             this.timeoutSecond = parameters.timeoutSecond;
-            this.selectFunctions = selectFunctions;
 
-            this.inputTags = inputTags;
-            this.inputNames = inputNames;
-            this.inputTypes = inputTypes;
-            this.outputType = outputType;
-            this.responseCoder = responseCoder;
+            this.request.setup();
 
-            this.responseSchema = responseSchema;
-            this.outputSchema = outputSchema;
-            this.failureSchema = failureSchema;
-            this.schemaConverter = schemaConverter;
-            this.jsonConverter = jsonConverter;
-            this.valueCreator = valueCreator;
+            for(final SelectFunction selectFunction : selectFunctions) {
+                selectFunction.setup();
+            }
 
-            this.outputTag = outputTag;
-            this.failureTag = faulureTag;
+            this.outputSchema.setup();
+        }
+
+        @Override
+        public void teardown() {
 
         }
 
         @Override
-        public PCollectionTuple expand(PCollectionTuple inputs) {
+        public MElement call(KV<Map<String, Object>, MElement> kv) throws UserCodeExecutionException {
+            try {
+                final MElement element = kv.getValue();
+                Logging.log(LOG, loggings, "input", element);
 
-            final PCollection<UnionValue> unionValues = inputs
-                    .apply("Union", Union.flatten(inputTags, inputTypes, inputNames));
+                final Map<String, Object> params = element.asStandardMap(inputSchema, null);
+                final Map<String, Object> preparedParams = kv.getKey();
+                if(preparedParams != null) {
+                    params.putAll(preparedParams);
+                }
 
-            final HttpCaller<RuntimeSchemaT,T> caller = new HttpCaller<>(
-                    name, request, response, retry, timeoutSecond, selectFunctions,
-                    schemaConverter, jsonConverter, valueCreator, responseSchema, outputSchema, outputType);
-            RequestResponseIO<UnionValue, T> requestResponseIO = RequestResponseIO
-                    .ofCallerAndSetupTeardown(caller, responseCoder)
-                    .withTimeout(Duration.standardSeconds(timeoutSecond));
-
-            final Result<T> httpResult = unionValues.apply("HttpCall", requestResponseIO);
-            final PCollection<T> output = httpResult.getResponses();
-            final PCollection<T> errors = httpResult.getFailures()
-                    .apply("Failures", ParDo.of(new FailureDoFn<>(failureSchema, schemaConverter, valueCreator)));
-
-            return PCollectionTuple
-                    .of(outputTag, output)
-                    .and(failureTag, errors);
-        }
-
-        private static class HttpCaller<RuntimeSchemaT,T> implements Caller<UnionValue, T>, SetupTeardown {
-
-            private static final String METADATA_ENDPOINT = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/";
-
-            private final String name;
-            private final HttpTransformParameters.RequestParameters request;
-            private final HttpTransformParameters.ResponseParameters response;
-            private final HttpTransformParameters.RetryParameters retry;
-            private final Integer timeoutSecond;
-
-            private final SchemaUtil.SchemaConverter<Schema,RuntimeSchemaT> schemaConverter;
-            private final SchemaUtil.JsonConverter<RuntimeSchemaT,T> jsonConverter;
-            private final SchemaUtil.ValueCreator<RuntimeSchemaT,T> valueCreator;
-
-            private final Schema responseSchema;
-            private final Schema outputSchema;
-            private final DataType outputType;
-
-            private final List<SelectFunction> selectFunctions;
-
-            private final Set<TokenType> tokenTypes;
-
-            private transient RuntimeSchemaT runtimeOutputSchema;
-            private transient RuntimeSchemaT runtimeResponseSchema;
-
-            private transient HttpClient client;
-            private transient String idToken;
-            private transient String accessToken;
-
-            private transient Template templateEndpoint;
-            private transient Map<String,Template> templateParams;
-            private transient Map<String,Template> templateHeaders;
-            private transient Template templateBody;
-
-            public HttpCaller(
-                    final String name,
-                    final HttpTransformParameters.RequestParameters request,
-                    final HttpTransformParameters.ResponseParameters response,
-                    final HttpTransformParameters.RetryParameters retry,
-                    final Integer timeoutSecond,
-                    final List<SelectFunction> selectFunctions,
-                    final SchemaUtil.SchemaConverter<Schema,RuntimeSchemaT> schemaConverter,
-                    final SchemaUtil.JsonConverter<RuntimeSchemaT,T> jsonConverter,
-                    final SchemaUtil.ValueCreator<RuntimeSchemaT,T> valueCreator,
-                    final Schema responseSchema,
-                    final Schema outputSchema,
-                    final DataType outputType) {
-
-                this.name = name;
-                this.request = request;
-                this.response = response;
-                this.retry = retry;
-                this.timeoutSecond = timeoutSecond;
-                this.selectFunctions = selectFunctions;
-
-                this.schemaConverter = schemaConverter;
-                this.jsonConverter = jsonConverter;
-                this.valueCreator = valueCreator;
-
-                this.responseSchema = responseSchema;
-                this.outputSchema = outputSchema;
-                this.outputType = outputType;
-
-                this.tokenTypes = request.headers.entrySet().stream().map(
-                        s -> {
-                            if(!s.getKey().contains("Authorization")) {
-                                return TokenType.none;
-                            } else if(s.getValue().contains("_id_token")) {
-                                return TokenType.id;
-                            } else if(s.getValue().contains("_access_token")) {
-                                return TokenType.access;
-                            } else {
-                                return TokenType.none;
-                            }
-                        })
-                        .collect(Collectors.toSet());
-            }
-
-            @Override
-            public void setup() throws UserCodeExecutionException {
-
-                this.runtimeResponseSchema = schemaConverter.convert(responseSchema);
-                this.runtimeOutputSchema = schemaConverter.convert(outputSchema);
-
-                this.client = HttpClient.newBuilder().build();
-
-                this.templateEndpoint = TemplateUtil.createStrictTemplate(name + "TemplateEndpoint", request.endpoint);
-                this.templateParams = new HashMap<>();
-                if(!this.request.params.isEmpty()) {
-                    int count = 0;
-                    for(final Map.Entry<String, String> entry : request.params.entrySet()) {
-                        final Template template = TemplateUtil.createStrictTemplate("TemplateParams" + count, entry.getValue());
-                        this.templateParams.put(entry.getKey(), template);
-                        count++;
+                final HttpResponse<?> httpResponse = HttpUtil.sendRequest(client, request, params, HttpUtil.getBodyHandler(response.format));
+                final boolean acceptable = response.acceptableStatusCodes.contains(httpResponse.statusCode());
+                if(httpResponse.statusCode() >= 400 && httpResponse.statusCode() < 500) {
+                    if(!acceptable) {
+                        final String errorMessage = "Illegal response code: " + httpResponse.statusCode() + ", for endpoint: " + request.endpoint + ", response: " + httpResponse.body();
+                        LOG.error(errorMessage);
+                        throw new UserCodeExecutionException(errorMessage);
+                    } else {
+                        LOG.info("Acceptable code: {}", httpResponse.statusCode());
                     }
                 }
-                this.templateHeaders = new HashMap<>();
-                if(!this.request.headers.isEmpty()) {
-                    int count = 0;
-                    for(final Map.Entry<String, String> entry : request.headers.entrySet()) {
-                        final Template template = TemplateUtil.createStrictTemplate("TemplateHeaders" + count, entry.getValue());
-                        this.templateHeaders.put(entry.getKey(), template);
-                        count++;
+
+                final Map<String, Object> outputValues = switch (this.response.format) {
+                    case text -> {
+                        final String body = (String) httpResponse.body();
+                        final Map<String, Object> values = new HashMap<>();
+                        values.put("statusCode", httpResponse.statusCode());
+                        values.put("body", body);
+                        values.put("headers", httpResponse.headers().map());
+                        values.put("timestamp", DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()));
+                        yield values;
                     }
-                }
-                if(this.request.body != null) {
-                    this.templateBody = TemplateUtil.createStrictTemplate(name + "TemplateBody", request.body);
-                }
-
-                if(this.tokenTypes.contains(TokenType.id)) {
-                    this.idToken = getIdToken(request.endpoint);
-                }
-                if(this.tokenTypes.contains(TokenType.access)) {
-                    this.accessToken = getAccessToken();
-                }
-
-                for(final SelectFunction selectFunction : selectFunctions) {
-                    selectFunction.setup();
-                }
-            }
-
-            @Override
-            public void teardown() {
-
-            }
-
-            @Override
-            public T call(UnionValue unionValue) throws UserCodeExecutionException {
-                try {
-                    HttpResponse.BodyHandler<?> bodyHandler = switch (response.format) {
-                        case text, json -> HttpResponse.BodyHandlers.ofString();
-                        case bytes -> HttpResponse.BodyHandlers.ofByteArray();
-                    };
-
-                    HttpResponse<?> httpResponse = sendRequest(unionValue, bodyHandler);
-                    if(httpResponse.statusCode() == 401
-                            && (tokenTypes.contains(TokenType.id) || tokenTypes.contains(TokenType.access))) {
-
-                        if(tokenTypes.contains(TokenType.id)) {
-                            LOG.info("Try to reacquire id token");
-                            this.idToken = getIdToken(request.endpoint);
-                        }
-                        if(tokenTypes.contains(TokenType.access)) {
-                            LOG.info("Try to reacquire access token");
-                            this.accessToken = getAccessToken();
-                        }
-                        httpResponse = sendRequest(unionValue, bodyHandler);
+                    case bytes -> {
+                        final byte[] body = (byte[]) httpResponse.body();
+                        final Map<String, Object> values = new HashMap<>();
+                        values.put("statusCode", httpResponse.statusCode());
+                        values.put("body", ByteBuffer.wrap(body));
+                        values.put("headers", httpResponse.headers().map());
+                        values.put("timestamp", DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()));
+                        yield values;
                     }
-
-                    final boolean acceptable = response.acceptableStatusCodes.contains(httpResponse.statusCode());
-                    if(httpResponse.statusCode() >= 400 && httpResponse.statusCode() < 500) {
-                        if(!acceptable) {
-                            final String errorMessage = "Illegal response code: " + httpResponse.statusCode() + ", for endpoint: " + request.endpoint + ", response: " + httpResponse.body();
-                            LOG.error(errorMessage);
-                            throw new UserCodeExecutionException(errorMessage);
-                        } else {
-                            LOG.info("Acceptable code: {}", httpResponse.statusCode());
+                    case json -> {
+                        final String body = (String) httpResponse.body();
+                        JsonElement responseJson = new Gson().fromJson(body, JsonElement.class);
+                        if(!responseJson.isJsonObject()) {
+                            responseJson = new JsonObject();
                         }
-                    }
 
-                    final T output = switch (this.response.format) {
-                        case text -> {
-                            final String body = (String) httpResponse.body();
-                            final Map<String, Object> values = new HashMap<>();
-                            values.put("statusCode", httpResponse.statusCode());
-                            values.put("body", body);
-                            values.put("headers", httpResponse.headers().map());
-                            values.put("timestamp", DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()));
-                            yield valueCreator.create(runtimeResponseSchema, values);
+                        final JsonObject jsonObject = new JsonObject();
+                        jsonObject.addProperty("statusCode", httpResponse.statusCode());
+                        jsonObject.addProperty("timestamp", Instant.now().toString());
+                        final JsonObject headers = new JsonObject();
+                        for(final Map.Entry<String, List<String>> entry : httpResponse.headers().map().entrySet()) {
+                            final JsonArray headerValues = new JsonArray();
+                            entry.getValue().forEach(headerValues::add);
+                            headers.add(entry.getKey(), headerValues);
                         }
-                        case bytes -> {
-                            final byte[] body = (byte[]) httpResponse.body();
-                            final Map<String, Object> values = new HashMap<>();
-                            values.put("statusCode", httpResponse.statusCode());
-                            values.put("body", body);
-                            values.put("headers", httpResponse.headers().map());
-                            values.put("timestamp", DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()));
-                            yield valueCreator.create(runtimeResponseSchema, values);
+                        jsonObject.add("headers", headers);
+                        if(!responseSchema.hasField("body")) {
+                            throw new RuntimeException("Not found body");
                         }
-                        case json -> {
-                            final String body = (String) httpResponse.body();
-                            JsonElement responseJson = new Gson().fromJson(body, JsonElement.class);
-                            if(!responseJson.isJsonObject()) {
-                                responseJson = new JsonObject();
-                            }
-
-                            final JsonObject jsonObject = new JsonObject();
-                            jsonObject.addProperty("statusCode", httpResponse.statusCode());
-                            jsonObject.addProperty("timestamp", Instant.now().toString());
-                            final JsonObject headers = new JsonObject();
-                            for(final Map.Entry<String, List<String>> entry : httpResponse.headers().map().entrySet()) {
-                                final JsonArray headerValues = new JsonArray();
-                                entry.getValue().forEach(headerValues::add);
-                                headers.add(entry.getKey(), headerValues);
-                            }
-                            jsonObject.add("headers", headers);
-                            if(Schema.TypeName.ROW.equals(responseSchema.getField("body").getType().getTypeName())) {
+                        switch (responseSchema.getField("body").getFieldType().getType()) {
+                            case element, map, json -> {
                                 jsonObject.add("body", responseJson.getAsJsonObject());
-                            } else {
+                            }
+                            default -> {
                                 jsonObject.addProperty("body", responseJson.toString());
                             }
-                            yield jsonConverter.convert(runtimeResponseSchema, jsonObject);
                         }
-                    };
-                    if(selectFunctions.isEmpty()) {
-                        return output;
+                        yield JsonToElementConverter.convert(responseSchema.getFields(), jsonObject);
                     }
-                    final Map<String, Object> primitives = SelectFunction.apply(selectFunctions, output, outputType, outputType, Instant.now());
-                    return valueCreator.create(runtimeOutputSchema, primitives);
-                } catch (URISyntaxException e) {
-                    throw new UserCodeExecutionException(e);
-                } catch (IOException | InterruptedException e) {
-                    throw new RuntimeException(e);
-                } catch (Throwable e) {
-                    throw new RuntimeException("Failed to send request", e);
-                }
-            }
-
-            private <ResponseT> HttpResponse<ResponseT> sendRequest(
-                    final UnionValue unionValue,
-                    final HttpResponse.BodyHandler<ResponseT> bodyHandler) throws Throwable {
-
-                final Map<String, Object> values = unionValue.getMap();
-                TemplateUtil.setFunctions(values);
-                values.put("_id_token", idToken);
-                values.put("_access_token", accessToken);
-                final String url = createEndpoint(values);
-
-                final String bodyText;
-                if(this.request.body != null) {
-                    bodyText = TemplateUtil.executeStrictTemplate(templateBody, values);
-                } else {
-                    bodyText = "";
-                }
-                final HttpRequest.BodyPublisher bodyPublisher = HttpRequest.BodyPublishers.ofString(bodyText);
-
-                HttpRequest.Builder builder = HttpRequest.newBuilder()
-                        .uri(new URI(url))
-                        .timeout(java.time.Duration.ofSeconds(timeoutSecond))
-                        .method(this.request.method, bodyPublisher);
-
-                for(final Map.Entry<String, Template> entry : templateHeaders.entrySet()) {
-                    final String headerValue = TemplateUtil.executeStrictTemplate(entry.getValue(), values);
-                    builder = builder.header(entry.getKey(), headerValue);
-                }
-
-                return this.client.send(builder.build(), bodyHandler);
-            }
-
-            private String createEndpoint(final Map<String, Object> values) {
-                final String params = templateParams.entrySet()
-                        .stream()
-                        .map(e -> e.getKey() + "=" + URLEncoder
-                                .encode(TemplateUtil
-                                        .executeStrictTemplate(e.getValue(), values), StandardCharsets.UTF_8))
-                        .collect(Collectors.joining("&"));
-
-                return TemplateUtil.executeStrictTemplate(templateEndpoint, values) + (params.isEmpty() ? "" : ("?" + params));
-            }
-
-            private String getIdToken(final String endpoint) throws UserCodeExecutionException {
-                try {
-                    final HttpRequest httpRequest = HttpRequest.newBuilder()
-                            .uri(new URI(METADATA_ENDPOINT + "identity?audience=" + endpoint))
-                            .header("Metadata-Flavor", "Google")
-                            .GET()
-                            .build();
-                    final HttpResponse<String> httpResponse = this.client
-                            .send(httpRequest, HttpResponse.BodyHandlers.ofString());
-                    LOG.info("Succeed to get id token");
-                    return httpResponse.body();
-                } catch (URISyntaxException e) {
-                    throw new UserCodeExecutionException("Failed to get id token", e);
-                } catch (Throwable e) {
-                    LOG.error("Failed to get id token cause: {}", e.getMessage());
-                    throw new UserCodeRemoteSystemException("Failed to get id token", e);
-                }
-            }
-
-            private String getAccessToken() throws UserCodeExecutionException {
-                try {
-                    final HttpRequest httpRequest = HttpRequest.newBuilder()
-                            .uri(new URI(METADATA_ENDPOINT + "token"))
-                            .header("Metadata-Flavor", "Google")
-                            .GET()
-                            .build();
-                    final HttpResponse<String> httpResponse = this.client
-                            .send(httpRequest, HttpResponse.BodyHandlers.ofString());
-                    final JsonElement responseJson = new Gson().fromJson(httpResponse.body(), JsonElement.class);
-                    if(!responseJson.isJsonObject()) {
-                        throw new IllegalStateException("Illegal token response: " + responseJson);
-                    }
-                    final JsonObject jsonObject = responseJson.getAsJsonObject();
-                    if(!jsonObject.has("access_token")) {
-                        throw new IllegalStateException("Illegal token response: " + responseJson);
-                    }
-
-                    LOG.info("Succeed to get access token");
-                    return jsonObject.get("access_token").getAsString();
-                } catch (final URISyntaxException e) {
-                    throw new UserCodeExecutionException("Failed to get access token", e);
-                } catch (final Throwable e) {
-                    LOG.error("Failed to get access token cause: {}", e.getMessage());
-                    throw new UserCodeRemoteSystemException("Failed to get access token", e);
-                }
-            }
-
-            public enum TokenType {
-                id,
-                access,
-                none
+                };
+                final MElement output = MElement.of(outputValues, element.getEpochMillis());
+                Logging.log(LOG, loggings, "output", output);
+                return output;
+            } catch (URISyntaxException e) {
+                throw new UserCodeExecutionException("Illegal endpoint: " + request.endpoint, e);
+            } catch (IOException | InterruptedException e) {
+                throw new UserCodeRemoteSystemException("Remote error: ", e);
+            } catch (Throwable e) {
+                throw new UserCodeExecutionException("Failed to send http request.", e);
             }
         }
 
-        private static class FailureDoFn<RuntimeSchemaT,T> extends DoFn<ApiIOError, T> {
+        public enum TokenType {
+            id,
+            access,
+            none
+        }
+    }
 
-            private final Schema failureSchema;
-            private final SchemaUtil.SchemaConverter<Schema,RuntimeSchemaT> schemaConverter;
-            private final SchemaUtil.ValueCreator<RuntimeSchemaT,T> valueCreator;
+    private static class LookupDoFn extends DoFn<MElement, KV<Map<String, Object>, MElement>> {
 
-            private transient RuntimeSchemaT runtimeSchema;
+        private final Map<String, PCollectionView<?>> views;
 
-            FailureDoFn(
-                    final Schema failureSchema,
-                    final SchemaUtil.SchemaConverter<Schema,RuntimeSchemaT> schemaConverter,
-                    final SchemaUtil.ValueCreator<RuntimeSchemaT,T> valueCreator) {
+        LookupDoFn(final Map<String, PCollectionView<?>> views) {
+            this.views = views;
+        }
 
-                this.failureSchema = failureSchema;
-                this.schemaConverter = schemaConverter;
-                this.valueCreator = valueCreator;
-            }
+        @Setup
+        public void setup() {
 
-            @Setup
-            public void setup() {
-                this.runtimeSchema = schemaConverter.convert(failureSchema);
-            }
+        }
 
-            @ProcessElement
-            public void processElement(ProcessContext c) {
-                final ApiIOError error = c.element();
-                if(error == null) {
-                    return;
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final Map<String, Object> sideInputs = new HashMap<>();
+            for(final PCollectionView<?> view : views.values()) {
+                final Map<String, Object> sideInput = (Map<String, Object>) c.sideInput(view);
+                if(sideInput != null) {
+                    sideInputs.putAll(sideInput);
                 }
-                final Map<String, Object> values = new HashMap<>();
-                values.put("message", error.getMessage());
-                values.put("request", error.getRequestAsString());
-                values.put("stackTrace", error.getStackTrace());
-                values.put("timestamp", error.getObservedTimestamp().getMillis() * 1000L);
-                final T output = valueCreator.create(runtimeSchema, values);
-                LOG.error("failure: {}", output);
-                c.output(output);
             }
-
+            c.output(KV.of(sideInputs, c.element()));
         }
 
     }
+
+    private static class FailureDoFn extends DoFn<ApiIOError, MElement> {
+
+        private final String jobName;
+        private final String name;
+        private final boolean failFast;
+
+        FailureDoFn(final String jobName, final String name, final boolean failFast) {
+            this.jobName = jobName;
+            this.name = name;
+            this.failFast = failFast;
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final ApiIOError error = c.element();
+            if(error == null) {
+                return;
+            }
+
+            final JsonObject output = new JsonObject();
+            output.addProperty("message", error.getMessage());
+            output.addProperty("stackTrace", error.getStackTrace());
+            output.addProperty("observedTimestamp", error.getObservedTimestamp().toString());
+            final MFailure failure = MFailure.of(jobName, name, error.getRequestAsString(), output.toString(), c.timestamp());
+            LOG.error("failure: {}", output);
+            c.output(failure.toElement(c.timestamp()));
+
+            if(failFast) {
+                throw new IllegalArgumentException("Failed to http transform: " + output);
+            }
+        }
+
+    }
+
+
+    /*
+    private static String getIdToken(
+            final HttpClient client,
+            final String endpoint) throws UserCodeExecutionException {
+
+        try {
+            final HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(new URI(METADATA_ENDPOINT + "identity?audience=" + endpoint))
+                    .header("Metadata-Flavor", "Google")
+                    .GET()
+                    .build();
+            final HttpResponse<String> httpResponse = client
+                    .send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            LOG.info("Succeed to get id token");
+            return httpResponse.body();
+        } catch (URISyntaxException e) {
+            throw new UserCodeExecutionException("Failed to get id token", e);
+        } catch (Throwable e) {
+            LOG.error("Failed to get id token cause: {}", e.getMessage());
+            throw new UserCodeRemoteSystemException("Failed to get id token", e);
+        }
+    }
+
+    private static String getAccessToken(final HttpClient client) throws UserCodeExecutionException {
+        try {
+            final HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(new URI(METADATA_ENDPOINT + "token"))
+                    .header("Metadata-Flavor", "Google")
+                    .GET()
+                    .build();
+            final HttpResponse<String> httpResponse = client
+                    .send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            final JsonElement responseJson = new Gson().fromJson(httpResponse.body(), JsonElement.class);
+            if(!responseJson.isJsonObject()) {
+                throw new IllegalStateException("Illegal token response: " + responseJson);
+            }
+            final JsonObject jsonObject = responseJson.getAsJsonObject();
+            if(!jsonObject.has("access_token")) {
+                throw new IllegalStateException("Illegal token response: " + responseJson);
+            }
+
+            LOG.info("Succeed to get access token");
+            return jsonObject.get("access_token").getAsString();
+        } catch (final URISyntaxException e) {
+            throw new UserCodeExecutionException("Failed to get access token", e);
+        } catch (final Throwable e) {
+            LOG.error("Failed to get access token cause: {}", e.getMessage());
+            throw new UserCodeRemoteSystemException("Failed to get access token", e);
+        }
+    }
+
+     */
+
 }

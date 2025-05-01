@@ -2,15 +2,12 @@ package com.mercari.solution.module.sink;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.config.SinkConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
+import com.mercari.solution.module.*;
 import com.mercari.solution.module.sink.fileio.Neo4jSink;
+import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.domain.search.Neo4jUtil;
 import com.mercari.solution.util.domain.search.ZipFileUtil;
-import com.mercari.solution.util.pipeline.union.Union;
-import com.mercari.solution.util.pipeline.union.UnionValue;
+import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.schema.*;
 import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.io.WriteFilesResult;
@@ -21,9 +18,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.*;
-import java.util.stream.Collectors;
 
-public class LocalNeo4jSink implements SinkModule {
+public class LocalNeo4jSink {
 
     private static final Logger LOG = LoggerFactory.getLogger(LocalNeo4jSink.class);
 
@@ -43,59 +39,6 @@ public class LocalNeo4jSink implements SinkModule {
 
         private List<String> groupFields;
         private String tempDirectory;
-
-        public String getOutput() {
-            return output;
-        }
-
-        public String getInput() {
-            return input;
-        }
-
-        public String getDatabase() {
-            return database;
-        }
-
-        public String getConf() {
-            return conf;
-        }
-
-        public List<Neo4jUtil.NodeConfig> getNodes() {
-            return nodes;
-        }
-
-        public List<Neo4jUtil.RelationshipConfig> getRelationships() {
-            return relationships;
-        }
-
-        public List<String> getSetupCyphers() {
-            return setupCyphers;
-        }
-
-        public List<String> getTeardownCyphers() {
-            return teardownCyphers;
-        }
-
-        public Integer getBufferSize() {
-            return bufferSize;
-        }
-
-        public Neo4jUtil.Format getFormat() {
-            return format;
-        }
-
-        public Boolean getUseGDS() {
-            return useGDS;
-        }
-
-        public List<String> getGroupFields() {
-            return groupFields;
-        }
-
-        public String getTempDirectory() {
-            return tempDirectory;
-        }
-
 
         public static LocalNeo4jSinkParameters of(final JsonElement jsonElement) {
             final LocalNeo4jSinkParameters parameters = new Gson().fromJson(jsonElement, LocalNeo4jSinkParameters.class);
@@ -137,7 +80,7 @@ public class LocalNeo4jSink implements SinkModule {
                 }
             }
 
-            if(errorMessages.size() > 0) {
+            if(!errorMessages.isEmpty()) {
                 throw new IllegalArgumentException(String.join(", ", errorMessages));
             }
         }
@@ -184,97 +127,87 @@ public class LocalNeo4jSink implements SinkModule {
     }
 
 
-    public String getName() { return "localNeo4j"; }
-
-
+    /*
     @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
+    public MCollectionTuple expand(MCollectionTuple inputs) {
 
         if(inputs == null || inputs.size() == 0) {
             throw new IllegalArgumentException("localNeo4j sink module requires inputs");
         }
 
-        final LocalNeo4jSinkParameters parameters = LocalNeo4jSinkParameters.of(config.getParameters());
+        final LocalNeo4jSinkParameters parameters = getParameters(LocalNeo4jSinkParameters.class);
+        parameters.validate();
+        parameters.setDefaults();
 
-        final List<TupleTag<?>> tags = new ArrayList<>();
-        final List<String> inputNames = new ArrayList<>();
-        final List<DataType> inputTypes = new ArrayList<>();
-
-        PCollectionTuple tuple = PCollectionTuple.empty(inputs.get(0).getCollection().getPipeline());
-        for(final FCollection<?> input : inputs){
-            final TupleTag tag = new TupleTag<>(){};
-            tags.add(tag);
-            inputNames.add(input.getName());
-            inputTypes.add(input.getDataType());
-
-            tuple = tuple.and(tag, input.getCollection());
-        }
-
-        final PCollection output = tuple.apply(config.getName(), new Neo4jIndexWrite(config.getName(), parameters, tags, inputNames, inputTypes, waits));
-        final FCollection<?> fcollection = FCollection.of(config.getName(), output, DataType.AVRO, inputs.get(0).getAvroSchema());
-        return Collections.singletonMap(config.getName(), fcollection);
+        final PCollection<MElement> output = inputs
+                .apply("Union", Union.flatten()
+                        .withWaits(getWaits())
+                        .withStrategy(getStrategy()))
+                .apply("WriteNeo4j", new Neo4jIndexWrite(getName(), parameters, inputs.getAllInputs()));
+        return MCollectionTuple
+                .of(output, Neo4jIndexWrite.createOutputSchema());
     }
 
-    public static class Neo4jIndexWrite extends PTransform<PCollectionTuple, PCollection<KV>> {
+    public static class Neo4jIndexWrite extends PTransform<PCollection<MElement>, PCollection<MElement>> {
 
         private final String name;
         private final LocalNeo4jSinkParameters parameters;
 
-        private final List<TupleTag<?>> tags;
         private final List<String> inputNames;
-        private final List<DataType> inputTypes;
-
-        private final List<FCollection<?>> waits;
 
         private Neo4jIndexWrite(final String name,
                                 final LocalNeo4jSinkParameters parameters,
-                                final List<TupleTag<?>> tags,
-                                final List<String> inputNames,
-                                final List<DataType> inputTypes,
-                                final List<FCollection<?>> waits) {
+                                final List<String> inputNames) {
 
             this.name = name;
             this.parameters = parameters;
-            this.tags = tags;
             this.inputNames = inputNames;
-            this.inputTypes = inputTypes;
-            this.waits = waits;
         }
 
-        public PCollection<KV> expand(final PCollectionTuple inputs) {
+        public PCollection<MElement> expand(final PCollection<MElement> input) {
 
-            final PCollection<UnionValue> union = inputs
-                    .apply("Union", Union.flatten(tags, inputTypes, inputNames));
-
-            final PCollection<UnionValue> input;
-            if((waits == null || waits.size() == 0)) {
-                input = union;
-            } else {
-                final List<PCollection<?>> waitsList = waits.stream()
-                        .map(FCollection::getCollection)
-                        .collect(Collectors.toList());
-                input = union
-                        .apply("Wait", Wait.on(waitsList))
-                        .setCoder(union.getCoder());
-            }
-
-            final FileIO.Write<String, UnionValue> write = ZipFileUtil.createSingleFileWrite(
-                    parameters.getOutput(),
-                    parameters.getGroupFields(),
-                    parameters.getTempDirectory(),
-                    SchemaUtil.createGroupKeysFunction(UnionValue::getAsString, parameters.getGroupFields()));
-            final WriteFilesResult writeResult = input
+            final FileIO.Write<String, MElement> write = ZipFileUtil.createSingleFileWrite(
+                    parameters.output,
+                    parameters.groupFields,
+                    parameters.tempDirectory,
+                    SchemaUtil.createGroupKeysFunction(MElement::getAsString, parameters.groupFields));
+            final WriteFilesResult<String> writeResult = input
                             .apply("Write", write.via(Neo4jSink.of(
                                     name,
-                                    parameters.getInput(), parameters.getDatabase(), parameters.getConf(),
-                                    parameters.getNodes(), parameters.getRelationships(),
-                                    parameters.getSetupCyphers(), parameters.getTeardownCyphers(),
-                                    parameters.getBufferSize(), parameters.getFormat(), parameters.getUseGDS(),
+                                    parameters.input, parameters.database, parameters.conf,
+                                    parameters.nodes, parameters.relationships,
+                                    parameters.setupCyphers, parameters.teardownCyphers,
+                                    parameters.bufferSize, parameters.format, parameters.useGDS,
                                     inputNames)));
 
-            return writeResult.getPerDestinationOutputFilenames();
+            return writeResult
+                    .getPerDestinationOutputFilenames()
+                    .apply("Format", ParDo.of(new FormatDoFn()))
+                    .setCoder(ElementCoder.of(createOutputSchema()));
+        }
+
+        private static class FormatDoFn extends DoFn<KV<String,String>, MElement> {
+
+            @ProcessElement
+            public void processElement(ProcessContext c) {
+                final MElement element = MElement.builder()
+                        .withString("key", c.element().getKey())
+                        .withString("value", c.element().getValue())
+                        .build();
+                c.output(element);
+            }
+
+        }
+
+        public static Schema createOutputSchema() {
+            return Schema.builder()
+                    .withField("key", Schema.FieldType.STRING.withNullable(true))
+                    .withField("value", Schema.FieldType.STRING.withNullable(true))
+                    .build();
         }
 
     }
+
+     */
 
 }

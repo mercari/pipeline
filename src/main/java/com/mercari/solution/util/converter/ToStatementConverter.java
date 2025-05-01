@@ -5,7 +5,7 @@ import com.google.cloud.spanner.Type;
 import com.google.datastore.v1.Entity;
 import com.google.datastore.v1.Value;
 import com.google.firestore.v1.Document;
-import com.mercari.solution.util.pipeline.union.UnionValue;
+import com.mercari.solution.module.MElement;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.RowSchemaUtil;
 import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
@@ -410,12 +410,16 @@ public class ToStatementConverter {
         }
     }
 
-    public static void convertUnionValue(final UnionValue unionValue, final PreparedStatementTemplate.PlaceholderSetterProxy statement, final List<String> keyFields) throws SQLException {
-        switch (unionValue.getType()) {
-            case AVRO -> convertRecordWithKeys((GenericRecord) unionValue.getValue(), statement, keyFields);
-            case ROW -> convertRowWithKeys((Row) unionValue.getValue(), statement, keyFields);
-            case STRUCT -> convertStructWithKeys((Struct) unionValue.getValue(), statement, keyFields);
-            case ENTITY -> convertEntityWithKeys((Entity) unionValue.getValue(), statement, keyFields);
+    public static void convertElement(final MElement element, final PreparedStatementTemplate.PlaceholderSetterProxy statement) throws SQLException {
+        convertElement(element, statement, null);
+    }
+
+    public static void convertElement(final MElement element, final PreparedStatementTemplate.PlaceholderSetterProxy statement, final List<String> keyFields) throws SQLException {
+        switch (element.getType()) {
+            case AVRO -> convertRecordWithKeys((GenericRecord) element.getValue(), statement, keyFields);
+            case ROW -> convertRowWithKeys((Row) element.getValue(), statement, keyFields);
+            case STRUCT -> convertStructWithKeys((Struct) element.getValue(), statement, keyFields);
+            case ENTITY -> convertEntityWithKeys((Entity) element.getValue(), statement, keyFields);
             default -> throw new IllegalArgumentException();
         }
     }

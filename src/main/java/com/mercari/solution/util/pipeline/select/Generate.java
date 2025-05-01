@@ -1,13 +1,12 @@
 package com.mercari.solution.util.pipeline.select;
 
 import com.google.gson.JsonObject;
+import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
-import com.mercari.solution.util.schema.RowSchemaUtil;
+import com.mercari.solution.util.ExpressionUtil;
 import freemarker.template.Template;
 import net.objecthunter.exp4j.Expression;
-import org.apache.beam.sdk.schemas.Schema;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,24 +70,16 @@ public class Generate implements SelectFunction {
             throw new IllegalArgumentException("SelectField generate: " + name + " requires type parameter");
         }
         final String type = SelectFunction.getStringParameter(name, jsonObject, "type", "integer");
-        final Schema.FieldType outputFieldType = Types.createOutputFieldType(type);
+        final Schema.FieldType outputFieldType = Schema.FieldType.type(type);
 
         final DateTimeUtil.TimeUnit intervalUnit;
         if(jsonObject.has("intervalUnit")) {
             final String intervalTypeString = jsonObject.get("intervalUnit").getAsString();
             intervalUnit = DateTimeUtil.TimeUnit.valueOf(intervalTypeString);
         } else {
-            intervalUnit = switch (outputFieldType.getTypeName()) {
-                case DATETIME -> DateTimeUtil.TimeUnit.minute;
-                case LOGICAL_TYPE -> {
-                    if(RowSchemaUtil.isLogicalTypeDate(outputFieldType)) {
-                        yield DateTimeUtil.TimeUnit.day;
-                    } else if(RowSchemaUtil.isLogicalTypeTime(outputFieldType)) {
-                        yield DateTimeUtil.TimeUnit.minute;
-                    } else {
-                        yield DateTimeUtil.TimeUnit.minute;
-                    }
-                }
+            intervalUnit = switch (outputFieldType.getType()) {
+                case timestamp, time -> DateTimeUtil.TimeUnit.minute;
+                case date -> DateTimeUtil.TimeUnit.day;
                 default -> DateTimeUtil.TimeUnit.minute;
             };
         }
@@ -130,8 +121,8 @@ public class Generate implements SelectFunction {
 
     @Override
     public void setup() {
-        switch (outputFieldType.getTypeName()) {
-            case INT32, INT64, FLOAT, DOUBLE -> {
+        switch (outputFieldType.getType()) {
+            case int32, int64, float32, float64 -> {
                 final Set<String> fromExpressionVariables = ExpressionUtil.estimateVariables(this.from);
                 final Set<String> toExpressionVariables = ExpressionUtil.estimateVariables(this.to);
                 this.fromExpression = ExpressionUtil.createDefaultExpression(this.from, fromExpressionVariables);
@@ -139,17 +130,9 @@ public class Generate implements SelectFunction {
                 fromExpressionVariables.addAll(toExpressionVariables);
                 this.expressionVariables = fromExpressionVariables;
             }
-            case DATETIME -> {
+            case date, time, timestamp -> {
                 this.fromTemplate = TemplateUtil.createStrictTemplate(name, this.from);
                 this.toTemplate = TemplateUtil.createStrictTemplate(name, this.to);
-            }
-            case LOGICAL_TYPE -> {
-                if(RowSchemaUtil.isLogicalTypeDate(outputFieldType) || RowSchemaUtil.isLogicalTypeTime(outputFieldType)) {
-                    this.fromTemplate = TemplateUtil.createStrictTemplate(name, this.from);
-                    this.toTemplate = TemplateUtil.createStrictTemplate(name, this.to);
-                } else {
-                    throw new IllegalStateException("not supported logicalType: " + outputFieldType);
-                }
             }
         }
     }
@@ -160,8 +143,8 @@ public class Generate implements SelectFunction {
             return null;
         }
         final List<Object> outputs = new ArrayList<>();
-        switch (outputFieldType.getTypeName()) {
-            case INT32, INT64, FLOAT, DOUBLE -> {
+        switch (outputFieldType.getType()) {
+            case int32, int64, float32, float64 -> {
                 final Map<String, Double> values = new HashMap<>();
                 for(final String variable : expressionVariables) {
                     final Object object = input.get(variable);
@@ -172,18 +155,18 @@ public class Generate implements SelectFunction {
                 final long toN   = Double.valueOf(this.toExpression.setVariables(values).evaluate()).longValue();
                 long currentN = fromN;
                 while(currentN < toN) {
-                    final Object output = switch (outputFieldType.getTypeName()) {
-                        case INT64 -> currentN;
-                        case INT32 -> Long.valueOf(currentN).intValue();
-                        case FLOAT -> Long.valueOf(currentN).floatValue();
-                        case DOUBLE -> Long.valueOf(currentN).doubleValue();
+                    final Object output = switch (outputFieldType.getType()) {
+                        case int64 -> currentN;
+                        case int32 -> Long.valueOf(currentN).intValue();
+                        case float32 -> Long.valueOf(currentN).floatValue();
+                        case float64 -> Long.valueOf(currentN).doubleValue();
                         default -> throw new IllegalArgumentException();
                     };
                     outputs.add(output);
                     currentN += interval;
                 }
             }
-            case DATETIME -> {
+            case timestamp -> {
                 final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(intervalUnit);
                 final String fromString = TemplateUtil.executeStrictTemplate(this.fromTemplate, input);
                 final String toString   = TemplateUtil.executeStrictTemplate(this.toTemplate, input);
@@ -195,11 +178,11 @@ public class Generate implements SelectFunction {
                     currentInstant = currentInstant.plus(interval, chronoUnit);
                 }
             }
-            case LOGICAL_TYPE -> {
+            case date, time -> {
                 final ChronoUnit chronoUnit = DateTimeUtil.convertChronoUnit(intervalUnit);
                 final String fromString = TemplateUtil.executeStrictTemplate(this.fromTemplate, input);
                 final String toString   = TemplateUtil.executeStrictTemplate(this.toTemplate, input);
-                if(RowSchemaUtil.isLogicalTypeDate(outputFieldType)) {
+                if(Schema.Type.date.equals(outputFieldType.getType())) {
                     final LocalDate fromDate = DateTimeUtil.toLocalDate(fromString);
                     final LocalDate toDate = DateTimeUtil.toLocalDate(toString);
                     LocalDate currentDate = LocalDate.from(fromDate);
@@ -207,7 +190,7 @@ public class Generate implements SelectFunction {
                         outputs.add(Long.valueOf(currentDate.toEpochDay()).intValue());
                         currentDate = currentDate.plus(interval, chronoUnit);
                     }
-                } else if(RowSchemaUtil.isLogicalTypeTime(outputFieldType)) {
+                } else if(Schema.Type.time.equals(outputFieldType.getType())) {
                     final LocalTime fromTime = DateTimeUtil.toLocalTime(fromString);
                     final LocalTime toTime   = DateTimeUtil.toLocalTime(toString);
                     LocalTime currentTime = LocalTime.from(fromTime);
@@ -220,6 +203,7 @@ public class Generate implements SelectFunction {
                     }
                 }
             }
+            default -> throw new IllegalArgumentException();
         }
 
         return outputs;

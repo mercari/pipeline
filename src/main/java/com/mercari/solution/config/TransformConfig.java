@@ -1,42 +1,17 @@
 package com.mercari.solution.config;
 
 import com.google.gson.JsonObject;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.module.Strategy;
 
-import java.io.Serializable;
 import java.util.List;
-import java.util.Map;
 
-public class TransformConfig implements Serializable {
+public class TransformConfig extends ModuleConfig {
 
-    // transform module properties
-    private String name;
-    private String module;
     private List<String> inputs;
-    private JsonObject parameters;
-    private List<String> wait;
-    private Boolean skip;
-
-    private String description;
-
-    // template args
-    private Map<String, Object> args;
-
-    // getter, setter
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public String getModule() {
-        return module;
-    }
-
-    public void setModule(String module) {
-        this.module = module;
-    }
+    private JsonObject schema;
+    private Strategy strategy;
+    private List<String> sideInputs;
 
     public List<String> getInputs() {
         return inputs;
@@ -46,44 +21,16 @@ public class TransformConfig implements Serializable {
         this.inputs = inputs;
     }
 
-    public JsonObject getParameters() {
-        return parameters;
+    public Schema getSchema() {
+        return Schema.parse(schema);
     }
 
-    public void setParameters(JsonObject parameters) {
-        this.parameters = parameters;
+    public Strategy getStrategy() {
+        return strategy;
     }
 
-    public List<String> getWait() {
-        return wait;
-    }
-
-    public void setWait(List<String> wait) {
-        this.wait = wait;
-    }
-
-    public Boolean getSkip() {
-        return skip;
-    }
-
-    public void setSkip(Boolean skip) {
-        this.skip = skip;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public Map<String, Object> getArgs() {
-        return args;
-    }
-
-    public void setArgs(Map<String, Object> args) {
-        this.args = args;
+    public List<String> getSideInputs() {
+        return sideInputs;
     }
 
 }

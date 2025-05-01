@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.Filter;
+import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.processing.ProcessingBuffer;
 import com.mercari.solution.util.pipeline.processing.ProcessingState;
 import com.mercari.solution.util.pipeline.processing.processor.Processor;

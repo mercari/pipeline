@@ -1,15 +1,12 @@
 package com.mercari.solution.module.sink;
 
 import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
-import com.google.gson.Gson;
-import com.mercari.solution.config.SinkConfig;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SinkModule;
+import com.mercari.solution.module.*;
 import com.mercari.solution.util.converter.ToStatementConverter;
 import com.mercari.solution.util.gcp.JdbcUtil;
 import com.mercari.solution.util.gcp.SecretManagerUtil;
+import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
-import com.mercari.solution.util.sql.stmt.PreparedStatementSetter;
 import org.apache.beam.sdk.coders.ListCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.transforms.*;
@@ -24,11 +21,12 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.*;
 
-public class JdbcSink implements SinkModule {
+@Sink.Module(name="jdbc")
+public class JdbcSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcSink.class);
 
-    private static class JdbcSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String table;
         private String url;
@@ -41,50 +39,6 @@ public class JdbcSink implements SinkModule {
         private List<String> keyFields;
         private Integer batchSize;
         private String op;
-
-        public String getTable() {
-            return table;
-        }
-
-        public String getUrl() {
-            return url;
-        }
-
-        public String getDriver() {
-            return driver;
-        }
-
-        public String getUser() {
-            return user;
-        }
-
-        public String getPassword() {
-            return password;
-        }
-
-        public String getKmsKey() {
-            return kmsKey;
-        }
-
-        public Boolean getCreateTable() {
-            return createTable;
-        }
-
-        public Boolean getEmptyTable() {
-            return emptyTable;
-        }
-
-        public List<String> getKeyFields() {
-            return keyFields;
-        }
-
-        public Integer getBatchSize() {
-            return batchSize;
-        }
-
-        public String getOp() {
-            return op;
-        }
 
 
         private void validate() {
@@ -105,8 +59,8 @@ public class JdbcSink implements SinkModule {
                 errorMessages.add("Parameter must contain password");
             }
 
-            if(errorMessages.size() > 0) {
-                throw new IllegalArgumentException(String.join(", ", errorMessages));
+            if(!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
@@ -142,114 +96,74 @@ public class JdbcSink implements SinkModule {
         }
     }
 
-    public String getName() { return "jdbc"; }
-
     @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, SinkConfig config, List<FCollection<?>> waits) {
-        if(inputs == null || inputs.size() != 1) {
-            throw new IllegalArgumentException("jdbc sink module requires input parameter");
-        }
-        return Collections.singletonMap(config.getName(), JdbcSink.write(inputs.get(0), config, waits));
-    }
+    public MCollectionTuple expand(
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
-    public static FCollection<?> write(final FCollection<?> collection, final SinkConfig config) {
-        return write(collection, config, null);
-    }
-
-    public static FCollection<?> write(final FCollection<?> collection, final SinkConfig config, final List<FCollection<?>> waits) {
-        if(config.getParameters() == null) {
-            throw new IllegalArgumentException("jdbc sink module parameters must not be null");
-        }
-        final JdbcSinkParameters parameters = new Gson().fromJson(config.getParameters(), JdbcSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
         parameters.replaceParameters();
 
-        final JdbcWrite write = switch (collection.getDataType()) {
-            case AVRO -> new JdbcWrite<>(collection, parameters, ToStatementConverter::convertRecord);
-            case ROW -> new JdbcWrite<>(collection, parameters, ToStatementConverter::convertRow);
-            case STRUCT -> new JdbcWrite<>(collection, parameters, ToStatementConverter::convertStruct);
-            case DOCUMENT -> new JdbcWrite<>(collection, parameters, ToStatementConverter::convertDocument);
-            case ENTITY -> new JdbcWrite<>(collection, parameters, ToStatementConverter::convertEntity);
-            default -> throw new IllegalArgumentException("Not supported input type: " + collection.getDataType());
-        };
-        PCollection output = (PCollection) (collection.getCollection().apply(config.getName(), write));
-        try {
-            config.outputAvroSchema(collection.getAvroSchema());
-        } catch (Exception e) {
-            LOG.error("Failed to output avro schema for " + config.getName() + " to path: " + config.getOutputAvroSchema(), e);
+        final PCollection<MElement> input = inputs
+                .apply("Union", Union.flatten()
+                        .withWaits(getWaits())
+                        .withStrategy(getStrategy()));
+        final Schema inputSchema = Union.createUnionSchema(inputs);
+
+        final JdbcUtil.DB db = getDB(parameters.driver);
+        final List<List<String>> ddls;
+        if (parameters.createTable) {
+            ddls = new ArrayList<>();
+            final String ddl = JdbcUtil.buildCreateTableSQL(
+                    inputSchema.getAvroSchema(), parameters.table, db, parameters.keyFields);
+            ddls.add(Arrays.asList(ddl));
+        } else {
+            ddls = new ArrayList<>();
         }
-        return FCollection.update(collection, output);
+        if (parameters.emptyTable) {
+            ddls.add(Arrays.asList("DELETE FROM " + parameters.table));
+        }
+
+        final PCollection<MElement> tableReady;
+        if(ddls.isEmpty()) {
+            tableReady = input;
+        } else {
+            final PCollection<String> wait = input.getPipeline()
+                    .apply("SupplyDDL", Create.of(ddls).withCoder(ListCoder.of(StringUtf8Coder.of())))
+                    .apply("PrepareTable", ParDo.of(new TablePrepareDoFn(
+                            parameters.driver, parameters.url, parameters.user, parameters.password)));
+            tableReady = input
+                    .apply("WaitToTableCreation", Wait.on(wait))
+                    .setCoder(input.getCoder());
+        }
+
+        final PreparedStatementTemplate statementTemplate = JdbcUtil.createStatement(
+                parameters.table, inputSchema.getAvroSchema(),
+                JdbcUtil.OP.valueOf(parameters.op), db,
+                parameters.keyFields);
+
+        final PCollection<MElement> results = tableReady
+                .apply("WriteJdbc", ParDo.of(new WriteDoFn(
+                        parameters.driver, parameters.url, parameters.user, parameters.password,
+                        statementTemplate, parameters.batchSize)));
+
+        return MCollectionTuple
+                .of(results, Schema.builder().withField("dummy", Schema.FieldType.STRING).build());
     }
 
-    public static class JdbcWrite<InputT> extends PTransform<PCollection<InputT>, PCollection<Void>> {
-
-        private FCollection<?> inputCollection;
-        private final JdbcSinkParameters parameters;
-
-        private final PreparedStatementSetter<InputT> formatter;
-
-        private JdbcWrite(
-                final FCollection<?> inputCollection,
-                final JdbcSinkParameters parameters,
-                final PreparedStatementSetter<InputT> formatter) {
-
-            this.inputCollection = inputCollection;
-            this.parameters = parameters;
-            this.formatter = formatter;
+    private JdbcUtil.DB getDB(final String driver) {
+        if(driver.contains("mysql")) {
+            return JdbcUtil.DB.MYSQL;
+        } else if(driver.contains("postgresql")) {
+            return JdbcUtil.DB.POSTGRESQL;
+        } else {
+            throw new IllegalStateException("Not supported JDBC driver: " + driver);
         }
-
-        public PCollection<Void> expand(final PCollection<InputT> input) {
-            final JdbcUtil.DB db = getDB(parameters.getDriver());
-            final List<List<String>> ddls;
-            if (this.parameters.getCreateTable()) {
-                ddls = new ArrayList<>();
-                final String ddl = JdbcUtil.buildCreateTableSQL(
-                        inputCollection.getAvroSchema(), parameters.getTable(), db, parameters.getKeyFields());
-                ddls.add(Arrays.asList(ddl));
-            } else {
-                ddls = new ArrayList<>();
-            }
-            if (parameters.getEmptyTable()) {
-                ddls.add(Arrays.asList("DELETE FROM " + parameters.getTable()));
-            }
-
-            final PCollection<InputT> tableReady;
-            if(ddls.size() == 0) {
-                tableReady = input;
-            } else {
-                final PCollection<String> wait = input.getPipeline()
-                        .apply("SupplyDDL", Create.of(ddls).withCoder(ListCoder.of(StringUtf8Coder.of())))
-                        .apply("PrepareTable", ParDo.of(new TablePrepareDoFn(
-                                parameters.getDriver(), parameters.getUrl(), parameters.getUser(), parameters.getPassword())));
-                tableReady = input
-                        .apply("WaitToTableCreation", Wait.on(wait))
-                        .setCoder(input.getCoder());
-            }
-
-            final PreparedStatementTemplate statementTemplate = JdbcUtil.createStatement(
-                    parameters.getTable(), inputCollection.getAvroSchema(),
-                    JdbcUtil.OP.valueOf(parameters.getOp()), db,
-                    parameters.getKeyFields());
-
-            return tableReady.apply("WriteJdbc", ParDo.of(new WriteDoFn<>(
-                    parameters.getDriver(), parameters.getUrl(), parameters.getUser(), parameters.getPassword(),
-                    statementTemplate, parameters.getBatchSize(), formatter)));
-        }
-
-        private JdbcUtil.DB getDB(final String driver) {
-            if(driver.contains("mysql")) {
-                return JdbcUtil.DB.MYSQL;
-            } else if(driver.contains("postgresql")) {
-                return JdbcUtil.DB.POSTGRESQL;
-            } else {
-                throw new IllegalStateException("Not supported JDBC driver: " + driver);
-            }
-        }
-
     }
 
-    private static class WriteDoFn<T> extends DoFn<T, Void> {
+    private static class WriteDoFn extends DoFn<MElement, MElement> {
 
         private final String driver;
         private final String url;
@@ -257,7 +171,6 @@ public class JdbcSink implements SinkModule {
         private final String password;
         private final PreparedStatementTemplate statementTemplate;
         private final int batchSize;
-        private final PreparedStatementSetter<T> setter;
 
         private transient JdbcUtil.CloseableDataSource dataSource;
         private transient Connection connection = null;
@@ -265,15 +178,20 @@ public class JdbcSink implements SinkModule {
 
         private transient int bufferSize;
 
-        public WriteDoFn(final String driver, final String url, final String user, final String password,
-                         final PreparedStatementTemplate statementTemplate, final int batchSize, final PreparedStatementSetter<T> setter) {
+        public WriteDoFn(
+                final String driver,
+                final String url,
+                final String user,
+                final String password,
+                final PreparedStatementTemplate statementTemplate,
+                final int batchSize) {
+
             this.driver = driver;
             this.url = url;
             this.user = user;
             this.password = password;
             this.statementTemplate = statementTemplate;
             this.batchSize = batchSize;
-            this.setter = setter;
         }
 
 
@@ -301,7 +219,7 @@ public class JdbcSink implements SinkModule {
         public void processElement(ProcessContext c) throws Exception {
             try {
                 preparedStatement.clearParameters();
-                setter.setParameters(c.element(), this.statementTemplate.createPlaceholderSetterProxy(preparedStatement));
+                ToStatementConverter.convertElement(c.element(), this.statementTemplate.createPlaceholderSetterProxy(preparedStatement));
                 preparedStatement.addBatch();
                 bufferSize += 1;
 
@@ -384,7 +302,10 @@ public class JdbcSink implements SinkModule {
         @ProcessElement
         public void processElement(ProcessContext c) throws Exception {
             final List<String> ddl = c.element();
-            if(ddl.size() == 0) {
+            if(ddl == null) {
+                return;
+            }
+            if(ddl.isEmpty()) {
                 c.output("ok");
                 return;
             }

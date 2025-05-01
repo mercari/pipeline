@@ -3,10 +3,10 @@ package com.mercari.solution.util.pipeline.select;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.*;
-import org.apache.beam.sdk.schemas.Schema;
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.util.pipeline.select.navigation.NavigationFunction;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
 import org.joda.time.Instant;
 
 import java.io.Serializable;
@@ -18,53 +18,72 @@ import java.util.Map;
 public interface SelectFunction extends Serializable {
 
     String getName();
-    Object apply(Map<String, Object> input, Instant timestamp);
     void setup();
+    Object apply(Map<String, Object> input, Instant timestamp);
     List<Schema.Field> getInputFields();
     Schema.FieldType getOutputFieldType();
     boolean ignore();
 
     enum Func implements Serializable {
         pass,
-        constant,
-        rename,
         cast,
+        rename,
+        constant,
         expression,
         text,
         concat,
+        nullif,
         uuid,
         hash,
         event_timestamp,
         current_timestamp,
         struct,
-        json,
         map,
+        json,
+        jsonpath,
         http,
         scrape,
-        generate
+        generate,
+        base64_encode,
+        base64_decode,
+        panic;
+
+        public static Func is(String value) {
+            for(final Func func : values()) {
+                if(func.name().equals(value)) {
+                    return func;
+                }
+            }
+            return null;
+        }
     }
 
-
-    static List<SelectFunction> of(final JsonArray selects, final List<Schema.Field> inputFields, final DataType outputType) {
+    static List<SelectFunction> of(final JsonArray selects, final List<Schema.Field> inputFields) {
         final List<SelectFunction> selectFunctions = new ArrayList<>();
         if(selects == null || !selects.isJsonArray()) {
             return selectFunctions;
+        }
+
+        final List<Schema.Field> fields = new ArrayList<>();
+        for(final Schema.Field field : inputFields) {
+            fields.add(field.copy());
         }
 
         for(final JsonElement select : selects) {
             if(!select.isJsonObject()) {
                 continue;
             }
-            final SelectFunction selectFunction = SelectFunction.of(select.getAsJsonObject(), outputType, inputFields);
+            final SelectFunction selectFunction = SelectFunction.of(select.getAsJsonObject(), fields);
             if(selectFunction.ignore()) {
                 continue;
             }
             selectFunctions.add(selectFunction);
+            fields.add(Schema.Field.of(selectFunction.getName(), selectFunction.getOutputFieldType()));
         }
         return selectFunctions;
     }
 
-    static SelectFunction of(JsonObject jsonObject, DataType outputType, List<Schema.Field> inputFields) {
+    static SelectFunction of(JsonObject jsonObject, List<Schema.Field> inputFields) {
 
         if(!jsonObject.has("name")) {
             throw new IllegalArgumentException("selectField requires name parameter");
@@ -73,7 +92,9 @@ public interface SelectFunction extends Serializable {
 
         final Func func;
         if(jsonObject.has("func")) {
-            func = Func.valueOf(jsonObject.get("func").getAsString());
+            func = Func.is(jsonObject.get("func").getAsString());
+        } else if(jsonObject.has("op")) {
+            func = Func.is(jsonObject.get("op").getAsString());
         } else {
             if(jsonObject.size() == 1) {
                 func = Func.pass;
@@ -89,12 +110,16 @@ public interface SelectFunction extends Serializable {
                 } else  {
                     throw new IllegalArgumentException("selectField value requires type parameter");
                 }
+            } else if(jsonObject.has("type") && jsonObject.size() == 2) {
+                func = Func.cast;
             } else if(jsonObject.has("expression")) {
                 func = Func.expression;
             } else if(jsonObject.has("text")) {
                 func = Func.text;
+            } else if(jsonObject.has("fields")) {
+                func = Func.struct;
             } else {
-                throw new IllegalArgumentException("selectField requires func parameter");
+                throw new IllegalArgumentException("selectField requires func parameter: " + jsonObject);
             }
         }
 
@@ -106,32 +131,41 @@ public interface SelectFunction extends Serializable {
         }
 
         return switch (func) {
-            case pass -> Pass.of(name, outputType, inputFields, ignore);
-            case rename -> Rename.of(name, jsonObject, outputType, inputFields, ignore);
-            case cast -> Cast.of(name, jsonObject, outputType, inputFields, ignore);
+            case pass -> Pass.of(name, inputFields, ignore);
+            case rename -> Rename.of(name, jsonObject, inputFields, ignore);
+            case cast -> Cast.of(name, jsonObject, inputFields, ignore);
             case constant -> Constant.of(name, jsonObject, ignore);
             case expression -> Expression.of(name, jsonObject, ignore);
-            case text -> Text.of(name, jsonObject, ignore);
-            case concat -> Concat.of(name, inputFields, jsonObject, ignore);
+            case text -> Text.of(name, jsonObject, inputFields, ignore);
+            case concat -> Concat.of(name, jsonObject, inputFields, ignore);
+            case nullif -> Nullif.of(name, jsonObject, inputFields, ignore);
             case uuid -> Uuid.of(name, jsonObject, ignore);
             case hash -> Hash.of(name, jsonObject, inputFields, ignore);
-            case event_timestamp -> EventTimestamp.of(name, ignore);
+            case event_timestamp -> EventTimestamp.of(name, jsonObject, ignore);
             case current_timestamp -> CurrentTimestamp.of(name, ignore);
-            case struct -> Struct.of(name, jsonObject, outputType, inputFields, ignore);
-            case json -> Jsons.of(name, jsonObject, outputType, inputFields, ignore);
-            case map -> Maps.of(name, jsonObject, outputType, inputFields, ignore);
+            case struct -> Struct.of(name, jsonObject, inputFields, ignore);
+            case json -> Jsons.of(name, jsonObject, inputFields, ignore);
+            case jsonpath ->  JsonPath.of(name, jsonObject, inputFields, ignore);
             case http -> Http.of(name, jsonObject, inputFields, ignore);
             case scrape -> Scrape.of(name, jsonObject, inputFields, ignore);
             case generate -> Generate.of(name, jsonObject, inputFields, ignore);
+            case base64_encode -> Base64Coder.of(name, jsonObject, inputFields, true, ignore);
+            case base64_decode -> Base64Coder.of(name, jsonObject, inputFields, false, ignore);
+            case panic -> Panic.of(name, jsonObject, inputFields, ignore);
+            case null, default -> StatefulFunction.of(jsonObject, inputFields);
         };
     }
 
     static Schema createSchema(final JsonArray select, List<Schema.Field> outputFields) {
-        final List<SelectFunction> selectFunctions = SelectFunction.of(select, outputFields, null);
-        return SelectFunction.createSchema(selectFunctions);
+        final List<SelectFunction> selectFunctions = SelectFunction.of(select, outputFields);
+        return createSchema(selectFunctions, null);
     }
 
     static Schema createSchema(List<SelectFunction> selectFunctions) {
+        return createSchema(selectFunctions, null);
+    }
+
+    static Schema createSchema(List<SelectFunction> selectFunctions, String flattenField) {
         final List<Schema.Field> selectOutputFields = new ArrayList<>();
         for(final SelectFunction selectFunction : selectFunctions) {
             if(selectFunction.ignore()) {
@@ -139,94 +173,72 @@ public interface SelectFunction extends Serializable {
             }
             final Schema.FieldType selectOutputFieldType = selectFunction.getOutputFieldType();
             Schema.Field field = Schema.Field.of(selectFunction.getName(), selectOutputFieldType);
-            if(selectFunction instanceof Jsons) {
-                field = field.withOptions(Schema.Options.builder().setOption("sqlType", Schema.FieldType.STRING, "json").build());
-            }
             selectOutputFields.add(field);
         }
-        return Schema.builder().addFields(selectOutputFields).build();
+        final Schema schema = Schema.builder().withFields(selectOutputFields).build();
+        if(flattenField != null) {
+            if(!schema.hasField(flattenField)) {
+                throw new IllegalArgumentException("flatten field: " + flattenField + " not found in schema; " + schema);
+            }
+            return createFlattenSchema(schema, flattenField);
+        } else {
+            return schema;
+        }
     }
 
     static Map<String, Object> apply(
-            List<SelectFunction> selectFunctions,
-            UnionValue element,
-            DataType outputType,
-            Instant timestamp) {
-
-        return apply(selectFunctions, element.getValue(), element.getType(), outputType, timestamp);
-    }
-
-    static Map<String, Object> apply(
-            List<SelectFunction> selectFunctions,
-            Object element,
-            DataType inputType,
-            DataType outputType,
-            Instant timestamp) {
+            final List<SelectFunction> selectFunctions,
+            final MElement element,
+            final Instant timestamp) {
 
         final Map<String, Object> primitiveValues = new HashMap<>();
-        for(final SelectFunction selectFunction : selectFunctions) {
-            for(final Schema.Field inputField : selectFunction.getInputFields()) {
-                final Object primitiveValue = switch (inputType) {
-                    case ROW -> RowSchemaUtil.getAsPrimitive(element, inputField.getType(), inputField.getName());
-                    case AVRO -> AvroSchemaUtil.getAsPrimitive(element, inputField.getType(), inputField.getName());
-                    case STRUCT -> StructSchemaUtil.getAsPrimitive(element, inputField.getType(), inputField.getName());
-                    case DOCUMENT -> DocumentSchemaUtil.getAsPrimitive(element, inputField.getType(), inputField.getName());
-                    case ENTITY -> EntitySchemaUtil.getAsPrimitive(element, inputField.getType(), inputField.getName());
-                    default -> throw new IllegalArgumentException("SelectFunction not supported input data type: " + inputType);
-                };
-                primitiveValues.put(inputField.getName(), primitiveValue);
-            }
-        }
-        return apply(selectFunctions, primitiveValues, outputType, timestamp);
-    }
-
-    static Map<String, Object> apply(
-            List<SelectFunction> selectFunctions,
-            Map<String, Object> primitiveValues,
-            DataType outputType,
-            Instant timestamp) {
-
         for(final SelectFunction selectFunction : selectFunctions) {
             if(selectFunction.ignore()) {
                 continue;
             }
-            final Schema.FieldType fieldType = selectFunction.getOutputFieldType();
-            final Object primitiveValue = selectFunction.apply(primitiveValues, timestamp);
-            final Object value = switch (outputType) {
-                case ROW -> RowSchemaUtil.convertPrimitive(fieldType, primitiveValue);
-                case AVRO -> AvroSchemaUtil.convertPrimitive(fieldType, primitiveValue);
-                case STRUCT -> StructSchemaUtil.convertPrimitive(fieldType, primitiveValue);
-                case DOCUMENT -> DocumentSchemaUtil.convertPrimitive(fieldType, primitiveValue);
-                case ENTITY -> EntitySchemaUtil.convertPrimitive(fieldType, primitiveValue);
-                default -> throw new IllegalArgumentException("SelectFunction not supported input data type: " + outputType);
-            };
-            primitiveValues.put(selectFunction.getName(), value);
-        }
-        return primitiveValues;
-    }
-
-    static Schema.FieldType getInputFieldType(String field, List<Schema.Field> inputFields) {
-        for(final Schema.Field inputField : inputFields) {
-            if(field.equals(inputField.getName())) {
-                return inputField.getType();
-            } else if(field.contains(".")) {
-                final String[] fields = field.split("\\.", 2);
-                final Schema.FieldType parentFieldType = getInputFieldType(fields[0], inputFields);
-                switch (parentFieldType.getTypeName()) {
-                    case ROW -> {
-                        return getInputFieldType(fields[1], parentFieldType.getRowSchema().getFields());
-                    }
-                    case ARRAY, ITERABLE -> {
-                        if (!Schema.TypeName.ROW.equals(parentFieldType.getCollectionElementType().getTypeName())) {
-                            throw new IllegalArgumentException();
-                        }
-                        return getInputFieldType(fields[1], parentFieldType.getCollectionElementType().getRowSchema().getFields());
-                    }
-                    default -> throw new IllegalArgumentException();
-                }
+            for(final Schema.Field inputField : selectFunction.getInputFields()) {
+                final Object primitiveValue = element.getPrimitiveValue(inputField.getName());
+                primitiveValues.put(inputField.getName(), primitiveValue);
             }
         }
-        throw new IllegalArgumentException("Not found field: " + field + " in input fields: " + inputFields);
+        return apply(selectFunctions, primitiveValues, timestamp);
+    }
+
+    static Map<String, Object> apply(
+            final List<SelectFunction> selectFunctions,
+            final Map<String, Object> primitiveValues,
+            final Instant timestamp) {
+
+        final Map<String, Object> primitiveValues_;
+        if(primitiveValues == null || primitiveValues.isEmpty()){
+            primitiveValues_= new HashMap<>();
+        } else {
+            primitiveValues_= new HashMap<>(primitiveValues);
+        }
+        final Map<String, Object> output = new HashMap<>();
+        for(final SelectFunction selectFunction : selectFunctions) {
+            if(selectFunction.ignore()) {
+                continue;
+            }
+            final Object outputPrimitiveValue = selectFunction.apply(primitiveValues_, timestamp);
+            primitiveValues_.put(selectFunction.getName(), outputPrimitiveValue);
+            output.put(selectFunction.getName(), outputPrimitiveValue);
+        }
+        return output;
+    }
+
+    static boolean isGrouping(final List<SelectFunction> selectFunctions) {
+        if(selectFunctions == null || selectFunctions.isEmpty()) {
+            return false;
+        }
+        return selectFunctions.stream().anyMatch(func -> func instanceof StatefulFunction || func instanceof NavigationFunction);
+    }
+
+    static boolean isStateful(final List<SelectFunction> selectFunctions) {
+        if(selectFunctions == null || selectFunctions.isEmpty()) {
+            return false;
+        }
+        return selectFunctions.stream().anyMatch(func -> func instanceof StatefulFunction);
     }
 
     static String getStringParameter(final String name, final JsonObject jsonObject, final String field, final String defaultValue) {
@@ -246,12 +258,12 @@ public interface SelectFunction extends Serializable {
         final Schema.Builder builder = Schema.builder();
         for(final Schema.Field field : inputSchema.getFields()) {
             if(field.getName().equals(flattenField)) {
-                if(!Schema.TypeName.ARRAY.equals(field.getType().getTypeName())) {
-                    throw new IllegalArgumentException("flattenField: " + flattenField + " type: " + field.getType() + " is not array type");
+                if(!Schema.Type.array.equals(field.getFieldType().getType())) {
+                    throw new IllegalArgumentException("flattenField: " + flattenField + " type: " + field.getFieldType() + " is not array type");
                 }
-                builder.addField(field.getName(), field.getType().getCollectionElementType().withNullable(true));
+                builder.withField(field.getName(), field.getFieldType().getArrayValueType().withNullable(true));
             } else {
-                builder.addField(field);
+                builder.withField(field);
             }
         }
         return builder.build();

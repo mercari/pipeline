@@ -6,7 +6,6 @@ import com.google.gson.Gson;
 import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
 import com.mercari.solution.util.schema.RowSchemaUtil;
 import com.mercari.solution.util.schema.StructSchemaUtil;
 import org.apache.beam.sdk.coders.RowCoder;
@@ -24,7 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class UnnestTransform implements TransformModule {
+public class UnnestTransform {
 
     private static final Logger LOG = LoggerFactory.getLogger(UnnestTransform.class);
 

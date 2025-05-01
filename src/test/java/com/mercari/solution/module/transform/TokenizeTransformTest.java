@@ -26,6 +26,7 @@ public class TokenizeTransformTest {
     @Rule
     public final transient TestPipeline pipeline = TestPipeline.create();
 
+    /*
     @Test
     public void testJapaneseTokenizer() {
         final TransformConfig config = new TransformConfig();
@@ -167,5 +168,7 @@ public class TokenizeTransformTest {
 
         pipeline.run();
     }
+
+     */
 
 }

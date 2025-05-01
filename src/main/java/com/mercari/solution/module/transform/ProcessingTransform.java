@@ -7,14 +7,13 @@ import com.google.gson.JsonElement;
 import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.OptionUtil;
-import com.mercari.solution.util.converter.RowToRecordConverter;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.pipeline.processing.ProcessingBuffer;
 import com.mercari.solution.util.pipeline.processing.ProcessingState;
 import com.mercari.solution.util.pipeline.processing.processor.Processor;
 import com.mercari.solution.util.schema.*;
+import com.mercari.solution.util.schema.converter.RowToRecordConverter;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
@@ -37,7 +36,7 @@ import java.io.Serializable;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class ProcessingTransform implements TransformModule {
+public class ProcessingTransform {
 
     private static final Logger LOG = LoggerFactory.getLogger(ProcessingTransform.class);
 
@@ -289,12 +288,10 @@ public class ProcessingTransform implements TransformModule {
 
     }
 
-    @Override
     public String getName() {
         return "processing";
     }
 
-    @Override
     public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, TransformConfig config) {
         return transform(inputs, config);
     }

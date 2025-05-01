@@ -1,15 +1,15 @@
 package com.mercari.solution.module.sink.fileio;
 
+import com.mercari.solution.module.MElement;
 import com.mercari.solution.util.domain.search.Neo4jUtil;
 import com.mercari.solution.util.domain.search.ZipFileUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
 import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
-import org.neo4j.dbms.api.DatabaseManagementService;
-import org.neo4j.dbms.api.DatabaseManagementServiceBuilder;
-import org.neo4j.graphdb.*;
+//import org.neo4j.dbms.api.DatabaseManagementService;
+//import org.neo4j.dbms.api.DatabaseManagementServiceBuilder;
+//import org.neo4j.graphdb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,7 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 
-public class Neo4jSink implements FileIO.Sink<UnionValue> {
+public class Neo4jSink implements FileIO.Sink<MElement> {
 
     private static final String NEO4J_HOME = "/neo4j/";
     private static final Logger LOG = LoggerFactory.getLogger(Neo4jSink.class);
@@ -42,8 +42,8 @@ public class Neo4jSink implements FileIO.Sink<UnionValue> {
 
     private final Counter counter;
 
-    private transient GraphDatabaseService graphDB;
-    private transient List<UnionValue> buffer;
+    //private transient GraphDatabaseService graphDB;
+    private transient List<MElement> buffer;
     private transient OutputStream outputStream;
 
     private Neo4jSink(final String name,
@@ -101,17 +101,17 @@ public class Neo4jSink implements FileIO.Sink<UnionValue> {
         if(input != null) {
             if(StorageUtil.exists(input)) {
                 ZipFileUtil.downloadZipFiles(input, NEO4J_HOME);
-                LOG.warn("Downloaded Neo4j initial database file from: " + input);
+                LOG.warn("Downloaded Neo4j initial database file from: {}", input);
             } else {
-                LOG.warn("Not found Neo4j initial database file: " + input);
+                LOG.warn("Not found Neo4j initial database file: {}", input);
             }
         }
 
         if(conf != null) {
             if(StorageUtil.exists(conf)) {
                 final String confText = StorageUtil.readString(this.conf);
-                LOG.info("Downloaded neo4j.conf from: " + conf);
-                LOG.info("Content neo4j.conf: " + confText);
+                LOG.info("Downloaded neo4j.conf from: {}", conf);
+                LOG.info("Content neo4j.conf: {}", confText);
                 final Path confPath = Paths.get(NEO4J_HOME + "conf");
                 confPath.toFile().mkdir();
                 try (final FileWriter filewriter = new FileWriter(NEO4J_HOME + "conf/neo4j.conf")) {
@@ -122,6 +122,7 @@ public class Neo4jSink implements FileIO.Sink<UnionValue> {
             }
         }
 
+        /*
         if(graphDB == null) {
             final DatabaseManagementService service = new DatabaseManagementServiceBuilder(neo4jPath).build();
             this.graphDB = service.database(database);
@@ -130,6 +131,7 @@ public class Neo4jSink implements FileIO.Sink<UnionValue> {
             }
             Neo4jUtil.registerShutdownHook(service);
         }
+         */
 
         setup();
 
@@ -138,7 +140,7 @@ public class Neo4jSink implements FileIO.Sink<UnionValue> {
     }
 
     @Override
-    public void write(UnionValue unionValue) throws IOException {
+    public void write(MElement unionValue) throws IOException {
         buffer.add(unionValue);
         if(buffer.size() >= bufferSize) {
             flushBuffer();
@@ -149,42 +151,49 @@ public class Neo4jSink implements FileIO.Sink<UnionValue> {
     public void flush() throws IOException {
         flushBuffer();
         teardown();
+        /*
         switch (format) {
             case dump -> Neo4jUtil.dump(NEO4J_HOME, database, outputStream);
             case zip -> ZipFileUtil.writeZipFile(outputStream, NEO4J_HOME);
             default -> throw new IllegalArgumentException("Not supported neo4j format: " + format);
         }
+
+         */
         LOG.info("Finished to upload documents!");
     }
 
     private void setup() {
-        if(setupCyphers == null || setupCyphers.size() == 0) {
+        if(setupCyphers == null || setupCyphers.isEmpty()) {
             return;
         }
+        /*
         try(final Transaction tx = graphDB.beginTx()) {
             for(final String setupCypher : setupCyphers) {
                 final Result result = tx.execute(setupCypher);
-                LOG.info("setup cypher query: " + setupCypher + ". result: " + result.resultAsString());
+                LOG.info("setup cypher query: {}. result: {}", setupCypher, result.resultAsString());
             }
             tx.commit();
         }
+         */
     }
 
     private void teardown() {
         if(teardownCyphers == null || teardownCyphers.size() == 0) {
             return;
         }
+        /*
         try(final Transaction tx = graphDB.beginTx()) {
             for(final String teardownCypher : teardownCyphers) {
                 final Result result = tx.execute(teardownCypher);
-                LOG.info("teardown cypher query: " + teardownCypher + ". result: " + result.resultAsString());
+                LOG.info("teardown cypher query: {}. result: {}", teardownCypher, result.resultAsString());
             }
             tx.commit();
         }
+         */
     }
 
     private void flushBuffer() {
-        Neo4jUtil.index(graphDB, buffer, nodes, relationships, inputNames);
+        //Neo4jUtil.index(graphDB, buffer, nodes, relationships, inputNames);
         counter.inc(buffer.size());
         buffer.clear();
     }

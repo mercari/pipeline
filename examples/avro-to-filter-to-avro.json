@@ -15,8 +15,7 @@
       "module": "filter",
       "inputs": ["avroInput"],
       "parameters": {
-        "fields": ["fieldStr", "fieldNum", "fieldTimestamp", "nestedField.fieldA", "nestedArrayField.fieldB"],
-        "filters": {
+        "filter": {
           "or": [
             { "key": "fieldStr", "op": "=", "value": "B" },
             { "key": "fieldNum", "op": ">", "value": 100 },
@@ -28,11 +27,13 @@
             ]}
           ]
         },
-        "renameFields": {
-          "fieldStr": "type",
-          "fieldNum": "number",
-          "fieldTimestamp": "createdAt"
-        }
+        "select": [
+          { "name": "type", "field": "fieldStr" },
+          { "name": "number", "field": "fieldNum" },
+          { "name": "createdAt", "field": "fieldTimestamp" },
+          { "name": "fieldA", "field": "nestedField.fieldA" },
+          { "name": "fieldB", "field": "nestedField.fieldB" }
+        ]
       }
     }
   ],
@@ -40,7 +41,9 @@
     {
       "name": "avroOutput",
       "module": "storage",
-      "input": "filteredRecord",
+      "inputs": [
+        "filteredRecord"
+      ],
       "parameters": {
         "format": "avro",
         "output": "gs://example-bucket/output/avro"

@@ -1,14 +1,13 @@
 package com.mercari.solution.module.sink.fileio;
 
+import com.mercari.solution.module.MElement;
+import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.converter.ToStatementConverter;
 import com.mercari.solution.util.domain.search.H2Util;
 import com.mercari.solution.util.domain.search.ZipFileUtil;
 import com.mercari.solution.util.gcp.JdbcUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
-import org.apache.avro.Schema;
 import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
@@ -25,7 +24,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class H2Sink implements FileIO.Sink<UnionValue> {
+public class H2Sink implements FileIO.Sink<MElement> {
 
     private static final String H2_HOME = "/h2/";
     private static final Logger LOG = LoggerFactory.getLogger(H2Sink.class);
@@ -36,13 +35,13 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
     private final List<H2Util.Config> configs;
     private final Integer batchSize;
     private final List<String> inputNames;
-    private final Map<String, String> inputSchemas;
+    private final Map<String, Schema> inputSchemas;
     private final Map<String, H2Util.Config> configMap;
     private final String databasePath;
 
     private final Counter counter;
 
-    private transient List<UnionValue> buffer;
+    private transient List<MElement> buffer;
     private transient Connection connection;
     private transient Map<String, PreparedStatementWithTemplate> preparedStatements;
     private transient OutputStream outputStream;
@@ -68,7 +67,7 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
             final List<H2Util.Config> configs,
             final Integer batchSize,
             final List<String> inputNames,
-            final List<String> inputSchemas) {
+            final List<Schema> inputSchemas) {
 
         this.name = name;
         this.database = database;
@@ -93,7 +92,7 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
             final List<H2Util.Config> configs,
             final Integer bufferSize,
             final List<String> inputNames,
-            final List<String> inputSchemas) {
+            final List<Schema> inputSchemas) {
 
         return new H2Sink(name, database, input, configs, bufferSize, inputNames, inputSchemas);
     }
@@ -142,7 +141,7 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
                     }
 
                     //final Schema tableSchema = JdbcUtil.createAvroSchemaFromTable(connection, config.getTable());
-                    final Schema inputSchema = AvroSchemaUtil.convertSchema(inputSchemas.get(config.getInput()));
+                    final org.apache.avro.Schema inputSchema = inputSchemas.get(config.getInput()).getAvroSchema();
 
                     final PreparedStatementTemplate statementTemplate = JdbcUtil.createStatement(config.getTable(), inputSchema, config.getOp(), JdbcUtil.DB.H2, config.getKeyFields());
                     LOG.info("setup preparedStatement: " + statementTemplate);
@@ -159,8 +158,8 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
     }
 
     @Override
-    public void write(UnionValue unionValue) throws IOException {
-        buffer.add(unionValue);
+    public void write(MElement element) throws IOException {
+        buffer.add(element);
         if(buffer.size() >= batchSize) {
             flushBuffer();
             buffer.clear();
@@ -192,7 +191,7 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
                 //ps.preparedStatement.clearParameters();
             }
 
-            for(final UnionValue unionValue : buffer) {
+            for(final MElement unionValue : buffer) {
                 final String inputName = inputNames.get(unionValue.getIndex());
                 final PreparedStatementWithTemplate ps = preparedStatements.get(inputName);
                 final H2Util.Config config = configMap.get(inputName);
@@ -200,7 +199,7 @@ public class H2Sink implements FileIO.Sink<UnionValue> {
                     LOG.warn("Skip statement");
                     continue;
                 }
-                ToStatementConverter.convertUnionValue(unionValue, ps.createSetterProxy(), config.getKeyFields());
+                ToStatementConverter.convertElement(unionValue, ps.createSetterProxy(), config.getKeyFields());
                 ps.preparedStatement.addBatch();
             }
 

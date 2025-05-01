@@ -9,8 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.InvocationTargetException;
 import java.nio.*;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -18,77 +17,166 @@ public class ONNXRuntimeUtil {
 
     private static final Logger LOG = LoggerFactory.getLogger(ONNXRuntimeUtil.class);
 
+    public static long[] convertShape(
+            final ValueInfo valueInfo,
+            final List<Object> values) {
+
+        return switch (valueInfo) {
+            case TensorInfo tensorInfo -> {
+                final long[] shape = new long[tensorInfo.getShape().length];
+                for(int idx = 0; idx < shape.length; idx++) {
+                    if(tensorInfo.getShape()[idx] < 0) {
+                        if(idx == 0) {
+                            shape[idx] = values.size();
+                        } else {
+                            if(values.isEmpty()) {
+                                throw new IllegalArgumentException();
+                            }
+                            shape[idx] = switch (values.getFirst()) {
+                                case Object[] o -> o.length;
+                                case Collection<?> c -> c.size();
+                                default -> throw new RuntimeException();
+                            };
+                        }
+                    } else {
+                        shape[idx] = tensorInfo.getShape()[idx];
+                    }
+                }
+                yield shape;
+            }
+            case MapInfo mapInfo -> {
+                throw new IllegalArgumentException("not supported mapInfo: " + mapInfo);
+            }
+            case SequenceInfo sequenceInfo -> {
+                throw new IllegalArgumentException("not supported sequenceInfo: " + sequenceInfo);
+            }
+            default -> {
+                throw new IllegalArgumentException("not supported valueInfo: " + valueInfo);
+            }
+        };
+
+    }
+
     public static OnnxTensor convertTensor(
             final OrtEnvironment environment, final TensorInfo tensorInfo, final List<Object> values)
             throws OrtException {
 
-        final long[] shape = new long[tensorInfo.getShape().length];
-        for(int idx = 0; idx < shape.length; idx++) {
-            shape[idx] = tensorInfo.getShape()[idx] >= 0 ? tensorInfo.getShape()[idx] : values.size();
-        }
+        final long[] shape = convertShape(tensorInfo, values);
+
         final List<Object> flattenValues = flatten(values, shape.length);
-        switch (tensorInfo.type) {
-            case STRING: {
+        return switch (tensorInfo.type) {
+            case STRING -> {
                 final String[] stringValues = new String[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     stringValues[i] = (String) flattenValues.get(i);
                 }
-                return OnnxTensor.createTensor(environment, stringValues, shape);
+                yield OnnxTensor.createTensor(environment, stringValues, shape);
             }
-            case BOOL: {
+            case BOOL -> {
                 final int[] intValues = new int[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     intValues[i] = (Boolean) flattenValues.get(i) ? 1 : 0;
                 }
-                return OnnxTensor.createTensor(environment, IntBuffer.wrap(intValues), shape);
+                yield OnnxTensor.createTensor(environment, IntBuffer.wrap(intValues), shape);
             }
-            case INT8: {
+            case INT8 -> {
                 final byte[] byteValues = new byte[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     byteValues[i] = (Byte) flattenValues.get(i);
                 }
-                return OnnxTensor.createTensor(environment, ByteBuffer.wrap(byteValues), shape);
+                yield OnnxTensor.createTensor(environment, ByteBuffer.wrap(byteValues), shape);
             }
-            case INT16: {
+            case INT16 -> {
                 final short[] shortValues = new short[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     shortValues[i] = (Short) flattenValues.get(i);
                 }
-                return OnnxTensor.createTensor(environment, ShortBuffer.wrap(shortValues), shape);
+                yield OnnxTensor.createTensor(environment, ShortBuffer.wrap(shortValues), shape);
             }
-            case INT32: {
+            case INT32 -> {
                 final int[] intValues = new int[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     intValues[i] = (Integer) flattenValues.get(i);
                 }
-                return OnnxTensor.createTensor(environment, IntBuffer.wrap(intValues), shape);
+                yield OnnxTensor.createTensor(environment, IntBuffer.wrap(intValues), shape);
             }
-            case INT64: {
+            case INT64 -> {
                 final long[] longValues = new long[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     longValues[i] = (Long) flattenValues.get(i);
                 }
-                return OnnxTensor.createTensor(environment, LongBuffer.wrap(longValues), shape);
+                yield OnnxTensor.createTensor(environment, LongBuffer.wrap(longValues), shape);
             }
-            case FLOAT: {
+            case FLOAT16, FLOAT -> {
                 final float[] floatValues = new float[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     floatValues[i] = (Float) flattenValues.get(i);
                 }
-                return OnnxTensor.createTensor(environment, FloatBuffer.wrap(floatValues), shape);
+                yield OnnxTensor.createTensor(environment, FloatBuffer.wrap(floatValues), shape);
             }
-            case DOUBLE: {
+            case DOUBLE -> {
                 final double[] doubleValues = new double[flattenValues.size()];
                 for (int i = 0; i < flattenValues.size(); i++) {
                     doubleValues[i] = (Double) flattenValues.get(i);
                 }
-                return OnnxTensor.createTensor(environment, DoubleBuffer.wrap(doubleValues), shape);
+                yield OnnxTensor.createTensor(environment, DoubleBuffer.wrap(doubleValues), shape);
             }
-            case UNKNOWN:
-            default:
-                throw new IllegalArgumentException();
-        }
+            case UNKNOWN -> throw new IllegalArgumentException("");
+            default -> throw new IllegalArgumentException();
+        };
+    }
 
+    public static List<?> convertMatrix(final OnnxValue onnxValue) throws OrtException {
+        switch (onnxValue.getType()) {
+            case ONNX_TYPE_TENSOR -> {
+                return switch (onnxValue.getValue()) {
+                    case Float f -> List.of(f);
+                    case float[] f -> {
+                        final List<Float> list = new ArrayList<>();
+                        for(var v : f) { list.add(v); }
+                        yield list;
+                    }
+                    case float[][] f -> {
+                        final List<Float> list = new ArrayList<>();
+                        for(var v : f) { for(var vv : v) { list.add(vv); }}
+                        yield list;
+                    }
+                    case float[][][] f -> {
+                        final List<Float> list = new ArrayList<>();
+                        for(var v : f) { for(var vv : v) { for(var vvv : vv) {list.add(vvv); }}}
+                        yield list;
+                    }
+                    case float[][][][] f -> {
+                        final List<Float> list = new ArrayList<>();
+                        for(var v : f) { for(var vv : v) { for(var vvv : vv) { for(var vvvv : vvv) {list.add(vvvv); }}}}
+                        yield list;
+                    }
+                    case Double f -> List.of(f);
+                    case double[] f -> {
+                        final List<Double> list = new ArrayList<>();
+                        for(var v : f) { list.add(v); }
+                        yield list;
+                    }
+                    case double[][] f -> {
+                        final List<Double> list = new ArrayList<>();
+                        for(var v : f) { for(var vv : v) { list.add(vv); }}
+                        yield list;
+                    }
+                    case double[][][] f -> {
+                        final List<Double> list = new ArrayList<>();
+                        for(var v : f) { for(var vv : v) { for(var vvv : vv) {list.add(vvv); }}}
+                        yield list;
+                    }
+                    case double[][][][] f -> {
+                        final List<Double> list = new ArrayList<>();
+                        for(var v : f) { for(var vv : v) { for(var vvv : vv) { for(var vvvv : vvv) {list.add(vvvv); }}}}
+                        yield list;
+                    }
+                    default -> new ArrayList<>();
+                };
+            }
+            default -> throw new RuntimeException();
+        }
     }
 
     public static List<Object> flatten(final List<Object> list, final int rank) {

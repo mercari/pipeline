@@ -3,8 +3,8 @@ package com.mercari.solution.util.pipeline.processing.processor.window;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.Filter;
-import com.mercari.solution.util.domain.math.ExpressionUtil;
+import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.ExpressionUtil;
 import com.mercari.solution.util.pipeline.processing.processor.Processor;
 import net.objecthunter.exp4j.Expression;
 import org.apache.beam.sdk.values.KV;
@@ -141,7 +141,7 @@ public abstract class WindowProcessor implements Processor {
 
     public void setup() {
         this.expressionList = new ArrayList<>();
-        if(this.expressions.size() > 0) {
+        if(!this.expressions.isEmpty()) {
             for(int i=0; i<this.expressions.size(); i++) {
                 this.expressionList.add(ExpressionUtil.createDefaultExpression(this.expressions.get(i), this.variablesList.get(i)));
             }

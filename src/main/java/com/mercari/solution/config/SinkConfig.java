@@ -1,73 +1,32 @@
 package com.mercari.solution.config;
 
 import com.google.gson.JsonObject;
-import com.mercari.solution.util.gcp.StorageUtil;
-import org.apache.avro.Schema;
+import com.mercari.solution.module.Schema;
+import com.mercari.solution.module.Strategy;
+import com.mercari.solution.util.pipeline.Union;
 
-import java.io.IOException;
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
-public class SinkConfig implements Serializable {
+public class SinkConfig extends ModuleConfig {
 
-    private String name;
-    private String module;
     private String input;
     private List<String> inputs;
-    private List<String> wait;
-    private String outputAvroSchema;
-    private JsonObject parameters;
-    private Boolean skip;
-
-    private String description;
-
-    // template args
-    private Map<String, Object> args;
-
-
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public String getModule() {
-        return module;
-    }
-
-    public void setModule(String module) {
-        this.module = module;
-    }
-
-    public String getInput() {
-        return input;
-    }
-
-    public void setInput(String input) {
-        this.input = input;
-    }
-
-    public List<String> getWait() {
-        return wait;
-    }
-
-    public void setWait(List<String> wait) {
-        this.wait = wait;
-    }
+    private JsonObject schema;
+    private Strategy strategy;
+    private Union.Parameters union;
 
     public List<String> getInputs() {
-        if(inputs != null && inputs.size() > 0) {
+        if(inputs != null && !inputs.isEmpty()) {
             return inputs;
         } else if(input != null) {
             final List<String> list = new ArrayList<>();
             list.add(input);
             return list;
+        } else if("action".equalsIgnoreCase(getModule())) {
+            return new ArrayList<>();
         } else {
-            throw new IllegalArgumentException("Sink module: " + name + " has not input");
+            throw new IllegalArgumentException("Sink module: " + getName() + " has not input");
         }
     }
 
@@ -75,61 +34,16 @@ public class SinkConfig implements Serializable {
         this.inputs = inputs;
     }
 
-    public String getOutputAvroSchema() {
-        return outputAvroSchema;
+    public Schema getSchema() {
+        return Schema.parse(schema);
     }
 
-    public void setOutputAvroSchema(String outputAvroSchema) {
-        this.outputAvroSchema = outputAvroSchema;
+    public Strategy getStrategy() {
+        return strategy;
     }
 
-    public JsonObject getParameters() {
-        return parameters;
-    }
-
-    public void setParameters(JsonObject parameters) {
-        this.parameters = parameters;
-    }
-
-    public Boolean getSkip() {
-        return skip;
-    }
-
-    public void setSkip(Boolean skip) {
-        this.skip = skip;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public Map<String, Object> getArgs() {
-        return args;
-    }
-
-    public void setArgs(Map<String, Object> args) {
-        this.args = args;
-    }
-
-    public void outputAvroSchema(final Schema schema) {
-        if(outputAvroSchema == null) {
-            return;
-        }
-        if(!outputAvroSchema.startsWith("gs://")) {
-            throw new IllegalArgumentException("Parameter outputAvroSchema is illegal: " + outputAvroSchema);
-        }
-        if(schema == null) {
-            throw new IllegalArgumentException("Required schema when outputAvroSchema specified: " + outputAvroSchema);
-        }
-        try {
-            StorageUtil.writeString(outputAvroSchema, schema.toString(true));
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+    public Union.Parameters getUnion() {
+        return union;
     }
 
 }

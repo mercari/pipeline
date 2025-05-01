@@ -37,11 +37,11 @@ One onnx model can be defined in one onnx transform module.
 A single onnx module can define inferences for multiple inputs. In addition, multiple inferences can be defined for a single input.
 Define input-output mapping and post-processing for each input step.
 
-| parameter | optional | type                             | description                                                                                                            |
-|-----------|----------|----------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| input     | required | String                           | Input step name to which you want to apply inference with the specified model                                          |
-| mappings  | required | Array<Mapping\>                  | Specify the mapping between the input/output of the specified model and the field names of the module's input/output.  |
-| select    | optional | Array<[SelectField](select.md)\> | Specify the field definitions if you want to refine, rename, or apply some processing to the fields inference results. |
+| parameter | optional | type                                       | description                                                                                                            |
+|-----------|----------|--------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| input     | required | String                                     | Input step name to which you want to apply inference with the specified model                                          |
+| mappings  | required | Array<Mapping\>                            | Specify the mapping between the input/output of the specified model and the field names of the module's input/output.  |
+| select    | optional | Array<[SelectField](../common/select.md)\> | Specify the field definitions if you want to refine, rename, or apply some processing to the fields inference results. |
 
 ## Mapping parameters
 

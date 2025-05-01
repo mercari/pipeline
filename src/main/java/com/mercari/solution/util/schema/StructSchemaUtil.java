@@ -10,13 +10,13 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.util.Timestamps;
+import com.mercari.solution.module.MElement;
 import com.mercari.solution.util.DateTimeUtil;
-import com.mercari.solution.util.converter.RecordToMutationConverter;
-import com.mercari.solution.util.converter.StructToJsonConverter;
-import com.mercari.solution.util.converter.StructToTableRowConverter;
+import com.mercari.solution.util.schema.converter.AvroToMutationConverter;
+import com.mercari.solution.util.schema.converter.StructToJsonConverter;
+import com.mercari.solution.util.schema.converter.StructToTableRowConverter;
 import com.mercari.solution.util.pipeline.mutation.MutationOp;
 import com.mercari.solution.util.pipeline.mutation.UnifiedMutation;
-import com.mercari.solution.util.pipeline.union.UnionValue;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.generic.GenericRecordBuilder;
@@ -30,7 +30,6 @@ import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.Row;
-import org.apache.hadoop.hbase.util.Bytes;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.joda.time.Instant;
@@ -357,27 +356,20 @@ public class StructSchemaUtil {
         }
         final Type.StructField field = struct.getType().getStructFields().stream().filter(f -> f.getName().equals(fieldName)).findAny().get();
 
-        final byte[] bytes = switch (field.getType().getCode()) {
-            case BOOL -> Bytes.toBytes(struct.getBoolean(fieldName));
-            case STRING -> Bytes.toBytes(struct.getString(fieldName));
-            case JSON -> Bytes.toBytes(struct.getJson(fieldName));
-            case BYTES -> struct.getBytes(fieldName).toByteArray();
-            case INT64 -> Bytes.toBytes(struct.getLong(fieldName));
-            case FLOAT32 -> Bytes.toBytes(struct.getFloat(fieldName));
-            case FLOAT64 -> Bytes.toBytes(struct.getDouble(fieldName));
-            case NUMERIC -> Bytes.toBytes(struct.getBigDecimal(fieldName));
-            case PG_NUMERIC -> Bytes.toBytes(struct.getString(fieldName));
-            case DATE -> {
-                final Date date = struct.getDate(fieldName);
-                yield Bytes.toBytes(DateTimeUtil.toEpochDay(date));
-            }
-            case TIMESTAMP -> {
-                final Timestamp timestamp = struct.getTimestamp(fieldName);
-                yield Bytes.toBytes(Timestamps.toMicros(timestamp.toProto()));
-            }
+        return switch (field.getType().getCode()) {
+            case BOOL -> BigtableSchemaUtil.toByteString(struct.getBoolean(fieldName));
+            case STRING -> BigtableSchemaUtil.toByteString(struct.getString(fieldName));
+            case JSON -> BigtableSchemaUtil.toByteString(struct.getJson(fieldName));
+            case BYTES -> BigtableSchemaUtil.toByteString(struct.getBytes(fieldName).toByteArray());
+            case INT64 -> BigtableSchemaUtil.toByteString(struct.getLong(fieldName));
+            case FLOAT32 -> BigtableSchemaUtil.toByteString(struct.getFloat(fieldName));
+            case FLOAT64 -> BigtableSchemaUtil.toByteString(struct.getDouble(fieldName));
+            case NUMERIC -> BigtableSchemaUtil.toByteString(struct.getBigDecimal(fieldName));
+            case PG_NUMERIC -> BigtableSchemaUtil.toByteString(struct.getString(fieldName));
+            case DATE -> BigtableSchemaUtil.toByteString(DateTimeUtil.toEpochDay(struct.getDate(fieldName)));
+            case TIMESTAMP -> BigtableSchemaUtil.toByteString(Timestamps.toMicros(struct.getTimestamp(fieldName).toProto()));
             default -> null;
         };
-        return ByteString.copyFrom(bytes);
     }
 
     public static byte[] getBytes(final Struct struct, final String fieldName) {
@@ -393,6 +385,25 @@ public class StructSchemaUtil {
             case JSON -> Base64.getDecoder().decode(struct.getJson(fieldName));
             default -> null;
         };
+    }
+
+    public static ByteBuffer getAsBytes(final Struct struct, final String fieldName) {
+        final Type.StructField field = struct.getType().getStructFields().stream()
+                .filter(f -> f.getName().equals(fieldName))
+                .findAny().orElse(null);
+        if(field == null) {
+            return null;
+        }
+        final byte[] bytes = switch (field.getType().getCode()) {
+            case BYTES -> struct.getBytes(field.getName()).toByteArray();
+            case STRING -> Base64.getDecoder().decode(struct.getString(fieldName));
+            case JSON -> Base64.getDecoder().decode(struct.getJson(fieldName));
+            default -> null;
+        };
+        return Optional
+                .ofNullable(bytes)
+                .map(ByteBuffer::wrap)
+                .orElse(null);
     }
 
     public static List<Float> getAsFloatList(final Struct struct, final String fieldName) {
@@ -700,6 +711,43 @@ public class StructSchemaUtil {
         };
     }
 
+    public static Object getAsStandard(final Value value) {
+        if(value == null || value.isNull()) {
+            return null;
+        }
+        return switch (value.getType().getCode()) {
+            case STRING -> value.getAsString();
+            case BOOL -> value.getBool();
+            case JSON -> value.getJson();
+            case INT64 -> value.getInt64();
+            case FLOAT32 -> value.getFloat32();
+            case FLOAT64 -> value.getFloat64();
+            case DATE -> DateTimeUtil.toLocalDate(value.getDate());
+            case TIMESTAMP -> DateTimeUtil.toInstant(value.getTimestamp());
+            case BYTES -> ByteBuffer.wrap(value.getBytes().toByteArray());
+            case NUMERIC, PG_NUMERIC -> value.getNumeric();
+            case PG_JSONB -> value.getPgJsonb();
+            case STRUCT -> asStandardMap(value.getStruct(), null);
+            case ARRAY ->
+                    switch (value.getType().getArrayElementType().getCode()) {
+                        case STRING -> value.getAsStringList();
+                        case BOOL -> value.getBoolArray();
+                        case JSON -> value.getJsonArray();
+                        case INT64 -> value.getInt64Array();
+                        case FLOAT32 -> value.getFloat32Array();
+                        case FLOAT64 -> value.getFloat64Array();
+                        case DATE -> value.getDateArray().stream().map(DateTimeUtil::toLocalDate).collect(Collectors.toList());
+                        case TIMESTAMP -> value.getTimestampArray().stream().map(DateTimeUtil::toInstant).collect(Collectors.toList());
+                        case BYTES -> value.getBytesArray().stream().map(ByteArray::toByteArray).map(ByteBuffer::wrap).collect(Collectors.toList());
+                        case NUMERIC, PG_NUMERIC -> value.getNumericArray();
+                        case PG_JSONB -> value.getPgJsonbArray();
+                        case STRUCT -> value.getStructArray().stream().map(s -> StructSchemaUtil.asStandardMap(s, null)).collect(Collectors.toList());
+                        default -> throw new IllegalArgumentException();
+                    };
+            default -> throw new IllegalArgumentException();
+        };
+    }
+
     public static Object convertPrimitive(Schema.FieldType fieldType, Object primitiveValue) {
         if (primitiveValue == null) {
             return null;
@@ -764,15 +812,35 @@ public class StructSchemaUtil {
     }
 
     public static Map<String, Object> asPrimitiveMap(final Struct struct) {
+        return asPrimitiveMap(struct, null);
+    }
+
+    public static Map<String, Object> asPrimitiveMap(final Struct struct, final List<String> columns) {
         final Map<String, Object> primitiveMap = new HashMap<>();
         if(struct == null) {
             return primitiveMap;
         }
         for(final Type.StructField field : struct.getType().getStructFields()) {
-            final Object value = getAsPrimitive(struct.getValue(field.getName()));
-            primitiveMap.put(field.getName(), value);
+            if(columns == null || columns.isEmpty() || columns.contains(field.getName())) {
+                final Object value = getAsPrimitive(struct.getValue(field.getName()));
+                primitiveMap.put(field.getName(), value);
+            }
         }
         return primitiveMap;
+    }
+
+    public static Map<String, Object> asStandardMap(final Struct struct, final Collection<String> columns) {
+        final Map<String, Object> standartMap = new HashMap<>();
+        if(struct == null) {
+            return standartMap;
+        }
+        for(final Type.StructField field : struct.getType().getStructFields()) {
+            if(columns == null || columns.isEmpty() || (columns.contains(field.getName()) && !struct.isNull(field.getName()))) {
+                final Object value = getAsStandard(struct.getValue(field.getName()));
+                standartMap.put(field.getName(), value);
+            }
+        }
+        return standartMap;
     }
 
     public static Type addStructField(final Type type, final List<Type.StructField> fields) {
@@ -1539,7 +1607,7 @@ public class StructSchemaUtil {
         return value.toString();
     }
 
-    public static List<KV<KV<String, String>, UnifiedMutation>> convertChangeRecordToMutations(final UnionValue unionValue) {
+    public static List<KV<KV<String, String>, UnifiedMutation>> convertChangeRecordToMutations(final MElement unionValue) {
         return switch (unionValue.getType()) {
             case AVRO -> convertChangeRecordToMutations((GenericRecord) unionValue.getValue());
             case ROW -> throw new IllegalArgumentException("Not supported input type: " + unionValue.getType());
@@ -1547,7 +1615,7 @@ public class StructSchemaUtil {
         };
     }
 
-    public static List<KV<KV<String, String>, RowMutation>> convertChangeRecordToRowMutations(final UnionValue unionValue) {
+    public static List<KV<KV<String, String>, RowMutation>> convertChangeRecordToRowMutations(final MElement unionValue) {
         return switch (unionValue.getType()) {
             case AVRO -> convertChangeRecordToRowMutations((GenericRecord) unionValue.getValue());
             case ROW -> throw new IllegalArgumentException("Not supported input type: " + unionValue.getType());
@@ -1891,7 +1959,7 @@ public class StructSchemaUtil {
 
 
      */
-    public static Long getChangeDataCommitTimestampMicros(final UnionValue unionValue) {
+    public static Long getChangeDataCommitTimestampMicros(final MElement unionValue) {
         return switch (unionValue.getType()) {
             case AVRO -> (Long)((GenericRecord) unionValue.getValue()).get("commitTimestamp");
             case ROW -> DateTimeUtil.toEpochMicroSecond(((Row) unionValue.getValue()).getDateTime("commitTimestamp"));
@@ -2386,7 +2454,7 @@ public class StructSchemaUtil {
             if(snapshot == null) {
                 throw new IllegalStateException("The size of changeRecords and snapshots are both zero.");
             }
-            final Map<String, Value> values = RecordToMutationConverter.convertValues(tableSchema, snapshot);
+            final Map<String, Value> values = AvroToMutationConverter.convertValues(tableSchema, snapshot);
             for(final Map.Entry<String, Value> entry : values.entrySet()) {
                 builder.set(entry.getKey()).to(entry.getValue());
             }
@@ -2400,7 +2468,7 @@ public class StructSchemaUtil {
                 }
                 return Mutation.delete(table, keyAndRecords.get(0).getKey());
             } else {
-                final Map<String, Value> values = RecordToMutationConverter.convertValues(tableSchema, snapshot);
+                final Map<String, Value> values = AvroToMutationConverter.convertValues(tableSchema, snapshot);
                 for(final GenericRecord changeRecord : changeRecords) {
                     final Map<String, String> rowTypes = ((List<GenericRecord>) (changeRecord.get("rowType")))
                             .stream()

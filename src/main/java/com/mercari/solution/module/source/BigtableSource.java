@@ -1,237 +1,444 @@
 package com.mercari.solution.module.source;
 
-import com.google.bigtable.v2.RowFilter;
-import com.google.gson.Gson;
+import com.google.bigtable.v2.*;
+import com.google.bigtable.v2.Row;
+import com.google.cloud.bigtable.data.v2.models.*;
 import com.google.gson.JsonElement;
-import com.mercari.solution.config.SourceConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.SourceModule;
-import com.mercari.solution.util.OptionUtil;
-import com.mercari.solution.util.converter.BigtableRowToRecordConverter;
+import com.google.protobuf.ByteString;
+import com.mercari.solution.module.*;
+import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.gcp.BigtableUtil;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.schema.SchemaUtil;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
+import com.mercari.solution.util.schema.BigtableSchemaUtil;
 import org.apache.beam.sdk.io.gcp.bigtable.BigtableIO;
 import org.apache.beam.sdk.io.range.ByteKeyRange;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.values.PBegin;
-import org.apache.beam.sdk.values.PCollection;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
+import org.apache.beam.sdk.values.*;
+import org.joda.time.Instant;
 
 import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
-public class BigtableSource implements SourceModule {
 
-    private static final Logger LOG = LoggerFactory.getLogger(BigtableSource.class);
+@Source.Module(name="bigtable")
+public class BigtableSource extends Source {
 
-    private static class BigtableSourceParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String instanceId;
         private String tableId;
 
         // for batch
-        private JsonElement rowFilter;
-        private JsonElement keyRanges;
+        private JsonElement filter;
+        private JsonElement keyRange;
+        private List<BigtableSchemaUtil.ColumnFamilyProperties> columns;
+        private BigtableSchemaUtil.Format format;
+        private BigtableSchemaUtil.CellType cellType;
 
+        // additional fields
+        private Boolean withRowKey;
+        private Boolean withFirstTimestamp;
+        private Boolean withLastTimestamp;
+        private String rowKeyField;
+        private String firstTimestampField;
+        private String lastTimestampField;
 
         private OutputType outputType;
 
-        public String getProjectId() {
-            return projectId;
-        }
+        // for changeStream
+        private ChangeStreamParameter changeStream;
 
-        public String getInstanceId() {
-            return instanceId;
-        }
+        // performance tuning
+        private String appProfileId;
+        private Integer maxBufferElementCount;
 
-        public String getTableId() {
-            return tableId;
-        }
 
-        public JsonElement getRowFilter() {
-            return rowFilter;
-        }
-
-        public JsonElement getKeyRanges() {
-            return keyRanges;
-        }
-
-        public OutputType getOutputType() {
-            return outputType;
-        }
-
-        private void validate(final PBegin begin) {
+        private void validate(final Mode mode) {
 
             // check required parameters filled
             final List<String> errorMessages = new ArrayList<>();
 
             if(this.projectId == null) {
-                errorMessages.add("bigtable source module parameter projectId must not be null");
+                errorMessages.add("parameters.projectId must not be null");
             }
             if(this.instanceId == null) {
-                errorMessages.add("bigtable source module parameter instanceId must not be null");
+                errorMessages.add("parameters.instanceId must not be null");
             }
             if(this.tableId == null) {
-                errorMessages.add("bigtable source module parameter tableId must not be null");
+                errorMessages.add("parameters.tableId must not be null");
             }
 
-            if (errorMessages.size() > 0) {
-                throw new IllegalArgumentException(errorMessages.stream().collect(Collectors.joining(", ")));
+            if(Mode.changeDataCapture.equals(mode)) {
+                if(changeStream == null) {
+                    errorMessages.add("parameters.changeStream must not be null if mode is changeStream");
+                } else {
+                    errorMessages.addAll(changeStream.validate(this));
+                }
+            }
+
+            if (!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
             }
         }
 
         private void setDefaults() {
-            if(this.outputType == null) {
-                this.outputType = OutputType.avro;
+            if(format == null) {
+                format = BigtableSchemaUtil.Format.bytes;
             }
+            if(cellType == null) {
+                cellType = BigtableSchemaUtil.CellType.last;
+            }
+            if(columns == null) {
+                columns = new ArrayList<>();
+            }
+            for(var column : columns) {
+                column.setDefaults(format, cellType);
+            }
+            if(withRowKey == null) {
+                withRowKey = false;
+            }
+            if(withFirstTimestamp == null) {
+                withFirstTimestamp = false;
+            }
+            if(withLastTimestamp == null) {
+                withLastTimestamp = false;
+            }
+            if(rowKeyField == null) {
+                rowKeyField = "row_key";
+            }
+            if(firstTimestampField == null) {
+                firstTimestampField = "__firstTimestamp";
+            }
+            if(lastTimestampField == null) {
+                lastTimestampField = "__lastTimestamp";
+            }
+            if(outputType == null) {
+                outputType = OutputType.row;
+            }
+        }
+
+        private void setup() {
+            if(columns != null) {
+                for(var column : columns) {
+                    column.setupSource();
+                }
+            }
+        }
+
+        private static class ChangeStreamParameter implements Serializable {
+
+            private String changeStreamName;
+            private String metadataProjectId;
+            private String metadataInstanceId;
+            private String metadataTableId;
+            private String startTime;
+
+            public List<String> validate(Parameters parentParameters) {
+                final List<String> errorMessages = new ArrayList<>();
+                if(this.changeStreamName == null) {
+                    errorMessages.add("parameters.changeStream.changeStreamName must not be null");
+                }
+                return errorMessages;
+            }
+
+            public void setDefaults(Parameters parentParameters) {
+                if(this.metadataProjectId == null) {
+                    this.metadataProjectId = parentParameters.projectId;
+                }
+                if(this.metadataInstanceId == null) {
+                    this.metadataInstanceId = parentParameters.instanceId;
+                }
+                if(this.metadataTableId == null) {
+                    this.metadataTableId = parentParameters.tableId;
+                }
+            }
+
         }
 
     }
 
     private enum OutputType {
-        avro,
         row,
-        mutation,
-        cells
+        cell
     }
 
-    public String getName() { return "bigtable"; }
+    @Override
+    public MCollectionTuple expand(
+            final PBegin begin,
+            final MErrorHandler errorHandler) {
 
-    public Map<String, FCollection<?>> expand(PBegin begin, SourceConfig config, PCollection<Long> beats, List<FCollection<?>> waits) {
-        if(OptionUtil.isStreaming(begin.getPipeline().getOptions())) {
-            // TODO
-            return Collections.emptyMap();
-        } else {
-            return Collections.singletonMap(config.getName(), batch(begin, config));
-        }
-    }
-
-    public static FCollection<?> batch(PBegin begin, SourceConfig config) {
-        final BigtableSourceParameters parameters = new Gson().fromJson(config.getParameters(), BigtableSourceParameters.class);
-        if(parameters == null) {
-            throw new IllegalArgumentException("bigtable source module parameters must not be empty!");
-        }
-        parameters.validate(begin);
+        final Parameters parameters = getParameters(Parameters.class);
+        parameters.validate(getMode());
         parameters.setDefaults();
+        parameters.setup();
 
-        switch (parameters.getOutputType()) {
-            case avro: {
-                final org.apache.avro.Schema outputAvroSchema = SourceConfig.convertAvroSchema(config.getSchema());
-                final BatchSource<String, org.apache.avro.Schema, GenericRecord> source = new BatchSource<>(
-                        parameters,
-                        outputAvroSchema.toString(),
-                        AvroSchemaUtil::convertSchema,
-                        BigtableRowToRecordConverter::convert);
-                final PCollection<GenericRecord> records = begin
-                        .apply(config.getName(), source)
-                        .setCoder(AvroCoder.of(outputAvroSchema));
-                return FCollection.of(config.getName(), records, DataType.AVRO, outputAvroSchema);
+        return switch (getMode()) {
+            case batch -> expandBatch(begin, parameters, errorHandler);
+            case changeDataCapture -> expandChangeStream(begin, parameters);
+            default -> throw new IllegalModuleException("bigtable source does not support mode: " + getMode());
+        };
+    }
+
+    private MCollectionTuple expandBatch(
+            final PBegin begin,
+            final Parameters parameters,
+            final MErrorHandler errorHandler) {
+
+        final BigtableIO.Read read = createRead(parameters);
+        final PCollection<com.google.bigtable.v2.Row> rows = begin
+                .apply("Read", read);
+
+        final TupleTag<MElement> outputTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
+
+        final Schema outputSchema;
+        final PCollectionTuple outputs;
+        switch (parameters.outputType) {
+            case row -> {
+                final Schema.Builder builder;
+                if(parameters.columns.isEmpty()) {
+                    builder = Schema.builder();
+                } else {
+                    builder = Schema.builder(BigtableSchemaUtil.createSchema(parameters.columns));
+                }
+                if(parameters.withRowKey) {
+                    builder.withField(parameters.rowKeyField, Schema.FieldType.STRING);
+                }
+                if(parameters.withFirstTimestamp) {
+                    builder.withField(parameters.firstTimestampField, Schema.FieldType.TIMESTAMP);
+                }
+                if(parameters.withLastTimestamp) {
+                    builder.withField(parameters.lastTimestampField, Schema.FieldType.TIMESTAMP);
+                }
+                outputSchema = builder.build();
+                outputs = rows
+                        .apply("ConvertToRow", ParDo
+                                .of(new RowToRowElementDoFn(
+                                        parameters, getTimestampAttribute(), getFailFast(), failuresTag))
+                                .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
             }
-            default:
-                throw new IllegalArgumentException("bigtable source module not support format: " + parameters.getOutputType());
+            case cell -> {
+                outputSchema = BigtableSchemaUtil.createCellSchema();
+                outputs = rows
+                        .apply("ConvertToCells", ParDo
+                                .of(new RowToCellElementDoFn(getFailFast(), failuresTag))
+                        .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+            }
+            default -> throw new IllegalModuleException("Not supported bigtable source output type: " + parameters.outputType);
+        }
+
+        errorHandler.addError(outputs.get(failuresTag));
+
+        return MCollectionTuple
+                .of(outputs.get(outputTag), outputSchema);
+    }
+
+    private MCollectionTuple expandChangeStream(
+            final PBegin begin,
+            final Parameters parameters) {
+
+        final BigtableIO.ReadChangeStream read = createReadChangeStreams(parameters);
+        final PCollection<MElement> output = begin
+                .apply("ReadChangeStream", read)
+                .apply("Convert", ParDo
+                        .of(new ChangeStreamToElementDoFn()));
+
+        return MCollectionTuple.of(output, getSchema());
+    }
+
+    private static BigtableIO.Read createRead(final Parameters parameters) {
+
+        BigtableIO.Read read = BigtableIO.read()
+                .withProjectId(parameters.projectId)
+                .withInstanceId(parameters.instanceId)
+                .withTableId(parameters.tableId);
+
+        if(parameters.appProfileId != null) {
+            read = read.withAppProfileId(parameters.appProfileId);
+        }
+        if(parameters.maxBufferElementCount != null) {
+            read = read.withMaxBufferElementCount(parameters.maxBufferElementCount);
+        }
+
+        if(parameters.keyRange != null && !parameters.keyRange.isJsonNull()) {
+            final List<ByteKeyRange> keyRanges = BigtableUtil.createKeyRanges(parameters.keyRange);
+            read = read.withKeyRanges(keyRanges);
+        }
+        if(parameters.filter != null && !parameters.filter.isJsonNull()) {
+            final RowFilter rowFilter = BigtableUtil.createRowFilter(parameters.filter);
+            read = read.withRowFilter(rowFilter);
+        }
+
+        return read;
+    }
+
+    private static BigtableIO.ReadChangeStream createReadChangeStreams(
+            final Parameters parameters) {
+
+        BigtableIO.ReadChangeStream readChangeStream = BigtableIO.readChangeStream()
+                .withProjectId(parameters.projectId)
+                .withInstanceId(parameters.instanceId)
+                .withTableId(parameters.tableId)
+                .withChangeStreamName(parameters.changeStream.changeStreamName)
+                .withMetadataTableProjectId(parameters.changeStream.metadataProjectId)
+                .withMetadataTableInstanceId(parameters.changeStream.metadataInstanceId)
+                .withMetadataTableTableId(parameters.changeStream.metadataTableId);
+
+        if(parameters.changeStream.startTime != null) {
+            readChangeStream = readChangeStream.withStartTime(DateTimeUtil.toJodaInstant(parameters.changeStream.startTime));
+        }
+
+        if(parameters.appProfileId != null) {
+            readChangeStream = readChangeStream.withAppProfileId(parameters.appProfileId);
+        }
+
+        return readChangeStream;
+    }
+
+    private static class RowToRowElementDoFn extends DoFn<Row, MElement> {
+
+        private final Map<String, BigtableSchemaUtil.ColumnFamilyProperties> columns;
+        private final String timestampAttribute;
+
+        private final Boolean withFirstTimestamp;
+        private final Boolean withLastTimestamp;
+        private final String rowKeyField;
+        private final String firstTimestampField;
+        private final String lastTimestampField;
+
+        private final Boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
+
+        RowToRowElementDoFn(
+                final Parameters parameters,
+                final String timestampAttribute,
+                final Boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
+
+            this.columns = BigtableSchemaUtil.toMap(parameters.columns);
+            this.timestampAttribute = timestampAttribute;
+
+            this.withFirstTimestamp = parameters.withFirstTimestamp;
+            this.withLastTimestamp = parameters.withLastTimestamp;
+            this.rowKeyField = parameters.rowKeyField;
+            this.firstTimestampField = parameters.firstTimestampField;
+            this.lastTimestampField = parameters.lastTimestampField;
+
+            this.failFast = failFast;
+            this.failureTag = failureTag;
+        }
+
+        @Setup
+        public void setup() {
+            for(var kv : columns.entrySet()) {
+                kv.getValue().setupSource();
+            }
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final Row input = c.element();
+            if(input == null) {
+                return;
+            }
+
+            try {
+                final Map<String, Object> primitiveValues = BigtableSchemaUtil.toPrimitiveValues(input, columns);
+                primitiveValues.put(rowKeyField, input.getKey().toStringUtf8());
+                if (withFirstTimestamp || withLastTimestamp) {
+                    final KV<Long, Long> timestamps = BigtableSchemaUtil.getRowMinMaxTimestamps(input);
+                    primitiveValues.put(firstTimestampField, timestamps.getKey());
+                    primitiveValues.put(lastTimestampField, timestamps.getValue());
+                }
+
+                if (timestampAttribute != null) {
+                    if (!primitiveValues.containsKey(timestampAttribute)) {
+                        throw new RuntimeException("timestampAttribute does not exists in values: " + primitiveValues);
+                    }
+                    final Instant timestamp = Instant.ofEpochMilli((Long) primitiveValues.get(timestampAttribute) / 1000L);
+                    final MElement output = MElement.of(primitiveValues, timestamp);
+                    c.outputWithTimestamp(output, timestamp);
+                } else {
+                    final MElement output = MElement.of(primitiveValues, c.timestamp());
+                    c.output(output);
+                }
+            } catch (final Throwable e) {
+                final Map<String, Object> values = new HashMap<>();
+                values.put("row", input.toString());
+                final BadRecord badRecord = processError("Failed to convert from bigtable row to element", values, e, failFast);
+                c.output(failureTag, badRecord);
+            }
         }
     }
 
-    private static class BatchSource<InputSchemaT,RuntimeSchemaT,T> extends PTransform<PBegin, PCollection<T>> {
+    private static class RowToCellElementDoFn extends DoFn<Row, MElement> {
 
-        private final String projectId;
-        private final String instanceId;
-        private final String tableId;
+        private final Boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
 
-        private final List<ByteKeyRange> keyRanges;
-        private final RowFilter rowFilter;
+        RowToCellElementDoFn(
+                final Boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
 
-        private final InputSchemaT inputSchema;
-        private final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter;
-        private final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter;
-
-        BatchSource(final BigtableSourceParameters parameters,
-                    final InputSchemaT inputSchema,
-                    final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter,
-                    final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter) {
-
-            this.projectId = parameters.getProjectId();
-            this.instanceId = parameters.getInstanceId();
-            this.tableId = parameters.getTableId();
-
-            if(parameters.getKeyRanges() == null || parameters.getKeyRanges().isJsonNull()) {
-                keyRanges = null;
-            } else {
-                keyRanges = BigtableUtil.createKeyRanges(parameters.getKeyRanges());
-            }
-
-            if(parameters.getRowFilter() == null || parameters.getRowFilter().isJsonNull()) {
-                rowFilter = null;
-            } else {
-                rowFilter = BigtableUtil.createRowFilter(parameters.getRowFilter());
-            }
-
-            this.inputSchema = inputSchema;
-            this.schemaConverter = schemaConverter;
-            this.converter = converter;
+            this.failFast = failFast;
+            this.failureTag = failureTag;
         }
 
-        @Override
-        public PCollection<T> expand(PBegin begin) {
-            BigtableIO.Read read = BigtableIO.read()
-                    .withProjectId(projectId)
-                    .withInstanceId(instanceId)
-                    .withTableId(tableId);
-
-            if(keyRanges != null && keyRanges.size() > 0) {
-                read = read.withKeyRanges(keyRanges);
-            } else if(rowFilter != null) {
-                read = read.withRowFilter(rowFilter);
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final Row input = c.element();
+            if(input == null) {
+                return;
             }
 
-            final PCollection<com.google.bigtable.v2.Row> rows = begin
-                    .apply("ReadBigtable", read);
-
-            return rows.apply("Convert", ParDo.of(new ConvertDoFn(inputSchema, schemaConverter, converter)));
+            try {
+                final ByteString rowKey = input.getKey();
+                for (final Family family : input.getFamiliesList()) {
+                    final String familyName = family.getName();
+                    for (final Column column : family.getColumnsList()) {
+                        final ByteString qualifier = column.getQualifier();
+                        for (final Cell cell : column.getCellsList()) {
+                            final Map<String, Object> primitives = new HashMap<>();
+                            primitives.put("rowKey", rowKey.toStringUtf8());
+                            primitives.put("family", familyName);
+                            primitives.put("qualifier", qualifier.toStringUtf8());
+                            primitives.put("timestamp", cell.getTimestampMicros());
+                            final Instant timestamp = Instant.ofEpochMilli(cell.getTimestampMicros() / 1000L);
+                            final MElement element = MElement.of(primitives, timestamp);
+                            c.outputWithTimestamp(element, timestamp);
+                        }
+                    }
+                }
+            } catch (final Throwable e) {
+                final Map<String, Object> values = new HashMap<>();
+                values.put("row", input.toString());
+                final BadRecord badRecord = processError("Failed to convert from bigtable cells to element", values, e, failFast);
+                c.output(failureTag, badRecord);
+            }
         }
+    }
 
-        private class ConvertDoFn extends DoFn<com.google.bigtable.v2.Row, T> {
+    private static class ChangeStreamToElementDoFn extends DoFn<KV<ByteString, ChangeStreamMutation>, MElement> {
 
-            private final InputSchemaT inputSchema;
-            private final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter;
-            private final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter;
-
-
-            private transient RuntimeSchemaT runtimeSchema;
-
-            ConvertDoFn(final InputSchemaT inputSchema,
-                                     final SchemaUtil.SchemaConverter<InputSchemaT,RuntimeSchemaT> schemaConverter,
-                                     final SchemaUtil.DataConverter<RuntimeSchemaT, com.google.bigtable.v2.Row, T> converter) {
-
-                this.inputSchema = inputSchema;
-                this.schemaConverter = schemaConverter;
-                this.converter = converter;
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final KV<ByteString, ChangeStreamMutation> kv = c.element();
+            if(kv == null) {
+                return;
+            }
+            final ByteString rowKey = kv.getKey();
+            final ChangeStreamMutation mutation = kv.getValue();
+            if(rowKey == null || mutation == null) {
+                return;
             }
 
-            @Setup
-            public void setup() {
-                this.runtimeSchema = schemaConverter.convert(inputSchema);
-            }
-
-            @ProcessElement
-            public void processElement(ProcessContext c) {
-                final com.google.bigtable.v2.Row row = c.element();
-                final T output = converter.convert(runtimeSchema, row);
-                c.output(output);
-            }
-
+            final MElement output = MElement.of(mutation, c.timestamp());
+            c.output(output);
         }
     }
 

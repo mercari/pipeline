@@ -4,6 +4,7 @@ import com.google.bigtable.v2.ColumnRange;
 import com.google.bigtable.v2.RowFilter;
 import com.google.bigtable.v2.TimestampRange;
 import com.google.bigtable.v2.ValueRange;
+import com.google.cloud.bigtable.data.v2.models.Filters;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -49,11 +50,19 @@ public class BigtableUtil {
 
     public static List<ByteKeyRange> createKeyRanges(final JsonElement jsonElement) {
         if(jsonElement == null || jsonElement.isJsonNull() || jsonElement.isJsonPrimitive()) {
-            return Arrays.asList(ByteKeyRange.ALL_KEYS);
+            return List.of(ByteKeyRange.ALL_KEYS);
         }
 
         if(jsonElement.isJsonObject()) {
             final JsonObject jsonObject = jsonElement.getAsJsonObject();
+            if(jsonObject.has("prefix")) {
+                final String startKey = jsonObject.get("prefix").getAsString();
+                final ByteString endKey = ByteString.copyFromUtf8(startKey).concat(ByteString.copyFromUtf8("\uffff"));
+                final ByteKey start = ByteKey.copyFrom(startKey.getBytes(StandardCharsets.UTF_8));
+                final ByteKey end = ByteKey.copyFrom(endKey.toByteArray());
+                return List.of(ByteKeyRange.of(start, end));
+            }
+
             final ByteKey start;
             if(jsonObject.has("start")) {
                 final String startKey = jsonObject.get("start").getAsString();
@@ -89,7 +98,7 @@ public class BigtableUtil {
         if(jsonElement == null || jsonElement.isJsonNull()) {
             return RowFilter.newBuilder().setPassAllFilter(true).build();
         } else if(jsonElement.isJsonPrimitive()) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Illegal rowFilter: " + jsonElement);
         }
 
         if(jsonElement.isJsonArray()) {
@@ -106,60 +115,47 @@ public class BigtableUtil {
                 throw new IllegalArgumentException("rowFilter requires type parameter");
             }
             final FilterType filterType = FilterType.valueOf(jsonObject.get("type").getAsString());
-            switch (filterType) {
-                case sample: {
+            return switch (filterType) {
+                case sample -> {
                     if(!jsonObject.has("rate")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires rate parameter");
                     }
                     final double sample = jsonObject.get("sample").getAsDouble();
-                    return RowFilter.newBuilder().setRowSampleFilter(sample).build();
+                    yield RowFilter.newBuilder().setRowSampleFilter(sample).build();
                 }
-                case row_key_regex:
-                case family_name_regex:
-                case column_qualifier_regex:
-                case value_regex: {
+                case row_key_regex, family_name_regex, column_qualifier_regex, value_regex -> {
                     if(!jsonObject.has("regex")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires regex parameter");
                     }
                     final String regex = jsonObject.get("regex").getAsString();
                     final ByteString byteString = ByteString.copyFromUtf8(regex);
-                    switch (filterType) {
-                        case row_key_regex:
-                            return RowFilter.newBuilder().setRowKeyRegexFilter(byteString).build();
-                        case family_name_regex:
-                            return RowFilter.newBuilder().setFamilyNameRegexFilter(regex).build();
-                        case column_qualifier_regex:
-                            return RowFilter.newBuilder().setColumnQualifierRegexFilter(byteString).build();
-                        case value_regex:
-                            return RowFilter.newBuilder().setValueRegexFilter(byteString).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case row_key_regex -> RowFilter.newBuilder().setRowKeyRegexFilter(byteString).build();
+                        case family_name_regex -> RowFilter.newBuilder().setFamilyNameRegexFilter(regex).build();
+                        case column_qualifier_regex -> RowFilter.newBuilder().setColumnQualifierRegexFilter(byteString).build();
+                        case value_regex -> RowFilter.newBuilder().setValueRegexFilter(byteString).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case limit_cells_per_row:
-                case limit_cells_per_column: {
+                case limit_cells_per_row, limit_cells_per_column -> {
                     if(!jsonObject.has("limit")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires limit parameter");
                     }
                     final int limit = jsonObject.get("limit").getAsInt();
-                    switch (filterType) {
-                        case limit_cells_per_row:
-                            return RowFilter.newBuilder().setCellsPerRowLimitFilter(limit).build();
-                        case limit_cells_per_column:
-                            return RowFilter.newBuilder().setCellsPerColumnLimitFilter(limit).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case limit_cells_per_row -> RowFilter.newBuilder().setCellsPerRowLimitFilter(limit).build();
+                        case limit_cells_per_column -> RowFilter.newBuilder().setCellsPerColumnLimitFilter(limit).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case offset_cells_per_row: {
+                case offset_cells_per_row -> {
                     if(!jsonObject.has("offset")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires offset parameter");
                     }
                     final int offset = jsonObject.get("offset").getAsInt();
-                    return RowFilter.newBuilder().setCellsPerRowOffsetFilter(offset).build();
+                    yield RowFilter.newBuilder().setCellsPerRowOffsetFilter(offset).build();
                 }
-                case column_range:
-                case value_range: {
+                case column_range, value_range -> {
                     final boolean startIsOpen;
                     final boolean endIsOpen;
                     final JsonElement start;
@@ -188,8 +184,8 @@ public class BigtableUtil {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires startOpen or endOpen");
                     }
 
-                    switch (filterType) {
-                        case column_range: {
+                    yield switch (filterType) {
+                        case column_range -> {
                             ColumnRange.Builder builder = ColumnRange.newBuilder();
                             if(jsonObject.has("family")) {
                                 final String familyName = jsonObject.get("family").getAsString();
@@ -211,9 +207,9 @@ public class BigtableUtil {
                                     builder = builder.setEndQualifierClosed(endByteString);
                                 }
                             }
-                            return RowFilter.newBuilder().setColumnRangeFilter(builder.build()).build();
+                            yield RowFilter.newBuilder().setColumnRangeFilter(builder.build()).build();
                         }
-                        case value_range: {
+                        case value_range -> {
                             ValueRange.Builder builder = ValueRange.newBuilder();
                             if(start != null) {
                                 final ByteString startByteString = ByteString.copyFrom(start.getAsString(), StandardCharsets.UTF_8);
@@ -231,14 +227,13 @@ public class BigtableUtil {
                                     builder = builder.setEndValueClosed(endByteString);
                                 }
                             }
-                            return RowFilter.newBuilder().setValueRangeFilter(builder.build()).build();
+                            yield RowFilter.newBuilder().setValueRangeFilter(builder.build()).build();
                         }
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
 
-                case timestamp_range: {
+                case timestamp_range -> {
                     final String startTimestamp;
                     final String endTimestamp;
                     if(jsonObject.has("start")) {
@@ -261,40 +256,31 @@ public class BigtableUtil {
                         final long endMicros = DateTimeUtil.toEpochMicroSecond(endTimestamp);
                         builder = builder.setEndTimestampMicros(endMicros);
                     }
-                    return RowFilter.newBuilder().setTimestampRangeFilter(builder.build()).build();
+                    yield RowFilter.newBuilder().setTimestampRangeFilter(builder.build()).build();
                 }
-                case block:
-                case pass:
-                case sink:
-                case strip: {
+                case block, pass, sink, strip -> {
                     final boolean flag;
                     if(jsonObject.has("flag")) {
                         flag = jsonObject.get("flag").getAsBoolean();
                     } else {
                         flag = true;
                     }
-                    switch (filterType) {
-                        case block:
-                            return RowFilter.newBuilder().setBlockAllFilter(flag).build();
-                        case pass:
-                            return RowFilter.newBuilder().setPassAllFilter(flag).build();
-                        case sink:
-                            return RowFilter.newBuilder().setSink(flag).build();
-                        case strip:
-                            return RowFilter.newBuilder().setStripValueTransformer(flag).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case block -> RowFilter.newBuilder().setBlockAllFilter(flag).build();
+                        case pass -> RowFilter.newBuilder().setPassAllFilter(flag).build();
+                        case sink -> RowFilter.newBuilder().setSink(flag).build();
+                        case strip -> RowFilter.newBuilder().setStripValueTransformer(flag).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case label: {
+                case label -> {
                     if(!jsonObject.has("label")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires label parameter");
                     }
                     final String label = jsonObject.get("label").getAsString();
-                    return RowFilter.newBuilder().setApplyLabelTransformer(label).build();
+                    yield RowFilter.newBuilder().setApplyLabelTransformer(label).build();
                 }
-                case chain:
-                case interleave: {
+                case chain, interleave -> {
                     if(jsonObject.has("children")) {
                         throw new IllegalArgumentException("filterType: " + filterType + " requires children parameter");
                     }
@@ -307,21 +293,218 @@ public class BigtableUtil {
                     for(JsonElement child : children) {
                         filters.add(createRowFilter(child));
                     }
-                    switch (filterType) {
-                        case chain:
-                            return RowFilter.newBuilder().setChain(RowFilter.Chain.newBuilder().addAllFilters(filters).build()).build();
-                        case interleave:
-                            return RowFilter.newBuilder().setInterleave(RowFilter.Interleave.newBuilder().addAllFilters(filters).build()).build();
-                        default:
-                            throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
-                    }
+                    yield switch (filterType) {
+                        case chain -> RowFilter.newBuilder().setChain(RowFilter.Chain.newBuilder().addAllFilters(filters).build()).build();
+                        case interleave -> RowFilter.newBuilder().setInterleave(RowFilter.Interleave.newBuilder().addAllFilters(filters).build()).build();
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
                 }
-                case condition: {
-                    throw new IllegalArgumentException("Not supported condition");
-                }
-                default:
-                    throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                case condition -> throw new IllegalArgumentException("Not supported condition");
+                default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+            };
+        } else {
+            throw new IllegalArgumentException();
+        }
+    }
+
+    public static Filters.Filter createFilter(final JsonElement jsonElement) {
+        if(jsonElement == null || jsonElement.isJsonNull()) {
+            return Filters.FILTERS.pass();
+        } else if(jsonElement.isJsonPrimitive()) {
+            throw new IllegalArgumentException("Illegal filter: " + jsonElement);
+        }
+
+        if(jsonElement.isJsonArray()) {
+            Filters.ChainFilter chainFilter = Filters.FILTERS.chain();
+            for(JsonElement child : jsonElement.getAsJsonArray()) {
+                chainFilter = Filters.FILTERS.chain().filter(createFilter(child));
             }
+            return chainFilter;
+        } else if(jsonElement.isJsonObject()) {
+            final JsonObject jsonObject = jsonElement.getAsJsonObject();
+            if(!jsonObject.has("type")) {
+                throw new IllegalArgumentException("filter requires type parameter");
+            }
+            final FilterType filterType = FilterType.valueOf(jsonObject.get("type").getAsString());
+            return switch (filterType) {
+                case sample -> {
+                    if(!jsonObject.has("rate")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires rate parameter");
+                    }
+                    final double sample = jsonObject.get("sample").getAsDouble();
+                    yield Filters.FILTERS.key().sample(sample);
+                }
+                case row_key_regex, family_name_regex, column_qualifier_regex, value_regex -> {
+                    if(!jsonObject.has("exact") && !jsonObject.has("regex")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires regex or exact parameter");
+                    }
+                    final String exact = jsonObject.has("exact") ? jsonObject.get("exact").getAsString() : null;
+                    final String regex = jsonObject.has("regex") ? jsonObject.get("regex").getAsString() : null;
+                    yield switch (filterType) {
+                        case row_key_regex -> exact != null ? Filters.FILTERS.key().exactMatch(exact) : Filters.FILTERS.key().regex(regex);
+                        case family_name_regex -> exact != null ? Filters.FILTERS.family().exactMatch(exact) : Filters.FILTERS.family().regex(regex);
+                        case column_qualifier_regex -> exact != null ? Filters.FILTERS.qualifier().exactMatch(exact) : Filters.FILTERS.qualifier().regex(regex);
+                        case value_regex -> exact != null ? Filters.FILTERS.value().exactMatch(exact) : Filters.FILTERS.value().regex(regex);
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
+                }
+                case limit_cells_per_row, limit_cells_per_column -> {
+                    if(!jsonObject.has("limit")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires limit parameter");
+                    }
+                    final int limit = jsonObject.get("limit").getAsInt();
+                    yield switch (filterType) {
+                        case limit_cells_per_row -> Filters.FILTERS.limit().cellsPerRow(limit);
+                        case limit_cells_per_column -> Filters.FILTERS.limit().cellsPerColumn(limit);
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
+                }
+                case offset_cells_per_row -> {
+                    if(!jsonObject.has("offset")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires offset parameter");
+                    }
+                    final int offset = jsonObject.get("offset").getAsInt();
+                    yield Filters.FILTERS.offset().cellsPerRow(offset);
+                }
+                case column_range, value_range, timestamp_range -> {
+                    final boolean startIsOpen;
+                    final boolean endIsOpen;
+                    final String start;
+                    final String end;
+                    if(jsonObject.has("startOpen")) {
+                        start = jsonObject.get("startOpen").getAsString();
+                        startIsOpen = true;
+                    } else if(jsonObject.has("startClosed")) {
+                        start = jsonObject.get("startClosed").getAsString();
+                        startIsOpen = false;
+                    } else {
+                        start = null;
+                        startIsOpen = false;
+                    }
+                    if(jsonObject.has("endOpen")) {
+                        end = jsonObject.get("endOpen").getAsString();
+                        endIsOpen = true;
+                    } else if(jsonObject.has("endClosed")) {
+                        end = jsonObject.get("endOpen").getAsString();
+                        endIsOpen = false;
+                    } else {
+                        end = null;
+                        endIsOpen = false;
+                    }
+                    if(start == null && end == null) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires startOpen or endOpen");
+                    }
+
+                    yield switch (filterType) {
+                        case column_range -> {
+                            final String familyName = jsonObject.get("family").getAsString();
+                            Filters.QualifierRangeFilter filter = Filters.FILTERS.qualifier().rangeWithinFamily(familyName);
+                            if(start != null) {
+                                final ByteString startByteString = ByteString.copyFrom(start, StandardCharsets.UTF_8);
+                                if(startIsOpen) {
+                                    filter = filter.startOpen(startByteString);
+                                } else {
+                                    filter = filter.startClosed(startByteString);
+                                }
+                            }
+                            if(end != null) {
+                                final ByteString endByteString = ByteString.copyFrom(end, StandardCharsets.UTF_8);
+                                if(endIsOpen) {
+                                    filter = filter.endOpen(endByteString);
+                                } else {
+                                    filter = filter.endClosed(endByteString);
+                                }
+                            }
+                            yield filter;
+                        }
+                        case value_range -> {
+                            Filters.ValueRangeFilter filter = Filters.FILTERS.value().range();
+                            if(start != null) {
+                                final ByteString startByteString = ByteString.copyFrom(start, StandardCharsets.UTF_8);
+                                if(startIsOpen) {
+                                    filter = filter.startOpen(startByteString);
+                                } else {
+                                    filter = filter.startClosed(startByteString);
+                                }
+                            }
+                            if(end != null) {
+                                final ByteString endByteString = ByteString.copyFrom(end, StandardCharsets.UTF_8);
+                                if(endIsOpen) {
+                                    filter = filter.endOpen(endByteString);
+                                } else {
+                                    filter = filter.endClosed(endByteString);
+                                }
+                            }
+                            yield filter;
+                        }
+                        case timestamp_range -> {
+                            Filters.TimestampRangeFilter filter = Filters.FILTERS.timestamp().range();
+                            if(start != null) {
+                                final long startMicros = DateTimeUtil.toEpochMicroSecond(start);
+                                if(startIsOpen) {
+                                    filter = filter.startOpen(startMicros);
+                                } else {
+                                    filter = filter.startClosed(startMicros);
+                                }
+                            }
+                            if(end != null) {
+                                final long endMicros = DateTimeUtil.toEpochMicroSecond(end);
+                                if(endIsOpen) {
+                                    filter = filter.endOpen(endMicros);
+                                } else {
+                                    filter = filter.endClosed(endMicros);
+                                }
+                            }
+                            yield filter;
+                        }
+                        default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                    };
+                }
+                case block, pass, sink, strip -> switch (filterType) {
+                    case block -> Filters.FILTERS.block();
+                    case pass -> Filters.FILTERS.pass();
+                    case sink -> Filters.FILTERS.sink();
+                    case strip -> Filters.FILTERS.value().strip();
+                    default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+                };
+                case label -> {
+                    if(!jsonObject.has("label")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires label parameter");
+                    }
+                    final String label = jsonObject.get("label").getAsString();
+                    yield Filters.FILTERS.label(label);
+                }
+                case chain, interleave -> {
+                    if(jsonObject.has("children")) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " requires children parameter");
+                    }
+                    final JsonElement childrenElement = jsonObject.get("children");
+                    if(!childrenElement.isJsonArray()) {
+                        throw new IllegalArgumentException("filterType: " + filterType + " children parameter must be array of rowFilter");
+                    }
+                    final JsonArray children = childrenElement.getAsJsonArray();
+
+                    yield switch (filterType) {
+                        case chain -> {
+                            Filters.ChainFilter filter = Filters.FILTERS.chain();
+                            for(JsonElement child : children) {
+                                filter = filter.filter(createFilter(child));
+                            }
+                            yield filter;
+                        }
+                        case interleave -> {
+                            Filters.InterleaveFilter filter = Filters.FILTERS.interleave();
+                            for(JsonElement child : children) {
+                                filter = filter.filter(createFilter(child));
+                            }
+                            yield filter;
+                        }
+                        default -> throw new IllegalArgumentException();
+                    };
+                }
+                case condition -> throw new IllegalArgumentException("Not supported condition");
+                default -> throw new IllegalArgumentException("filterType: " + filterType + " is not supported");
+            };
         } else {
             throw new IllegalArgumentException();
         }
@@ -373,10 +556,10 @@ public class BigtableUtil {
             filters.add(RowFilter.newBuilder().setRowKeyRegexFilter(ByteString.copyFromUtf8(strValue)).build());
         }
 
-        if(filters.size() == 0) {
+        if(filters.isEmpty()) {
             return RowFilter.newBuilder().setPassAllFilter(true).build();
         } else if(filters.size() == 1) {
-            return filters.get(0);
+            return filters.getFirst();
         } else {
             return RowFilter.newBuilder().setChain(RowFilter.Chain.newBuilder().addAllFilters(filters).build()).build();
         }

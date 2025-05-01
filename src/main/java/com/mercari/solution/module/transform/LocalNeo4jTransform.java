@@ -1,37 +1,22 @@
 package com.mercari.solution.module.transform;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonElement;
-import com.mercari.solution.config.SourceConfig;
-import com.mercari.solution.config.TransformConfig;
-import com.mercari.solution.module.DataType;
-import com.mercari.solution.module.FCollection;
-import com.mercari.solution.module.TransformModule;
-import com.mercari.solution.util.OptionUtil;
+import com.mercari.solution.module.*;
+import com.mercari.solution.util.pipeline.OptionUtil;
 import com.mercari.solution.util.TemplateUtil;
-import com.mercari.solution.util.converter.RowToRecordConverter;
+import com.mercari.solution.util.coder.ElementCoder;
 import com.mercari.solution.util.domain.search.Neo4jUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
-import com.mercari.solution.util.pipeline.union.Union;
-import com.mercari.solution.util.pipeline.union.UnionValue;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
-import com.mercari.solution.util.schema.Neo4jSchemaUtil;
-import com.mercari.solution.util.schema.RowSchemaUtil;
-import com.mercari.solution.util.schema.SchemaUtil;
+import com.mercari.solution.util.pipeline.Union;
 import freemarker.template.Template;
-import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.*;
-import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
-import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.state.*;
 import org.apache.beam.sdk.transforms.*;
-import org.apache.beam.sdk.transforms.windowing.*;
 import org.apache.beam.sdk.values.*;
-import org.joda.time.Duration;
 import org.joda.time.Instant;
-import org.neo4j.dbms.api.DatabaseManagementService;
-import org.neo4j.dbms.api.DatabaseManagementServiceBuilder;
-import org.neo4j.graphdb.*;
+//import org.neo4j.dbms.api.DatabaseManagementService;
+//import org.neo4j.dbms.api.DatabaseManagementServiceBuilder;
+//import org.neo4j.graphdb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +30,8 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 
-public class LocalNeo4jTransform implements TransformModule {
+//@Transform.Module(name="localNeo4j")
+public class LocalNeo4jTransform {
 
     private static final Logger LOG = LoggerFactory.getLogger(LocalNeo4jTransform.class);
 
@@ -68,38 +54,24 @@ public class LocalNeo4jTransform implements TransformModule {
         }
 
 
-        public static LocalNeo4jTransformParameters of(
-                final JsonElement jsonElement,
-                final String name,
-                final List<String> inputNames,
-                final List<Schema> inputSchemas) {
-
-            final LocalNeo4jTransformParameters parameters = new Gson().fromJson(jsonElement, LocalNeo4jTransformParameters.class);
-            if (parameters == null) {
-                throw new IllegalArgumentException("LocalNeo4jTransform config parameters must not be empty!");
-            }
-
-            parameters.validate(name, inputNames);
-            parameters.setDefaults(inputNames, inputSchemas);
-
-            return parameters;
-        }
-
-        public List<String> validate(final String name, final List<String> inputNames) {
+        public void validate(final List<String> inputNames) {
             final List<String> errorMessages = new ArrayList<>();
             if(this.index == null) {
-                errorMessages.add("localNeo4j[" + name + "].index must not be null.");
+                errorMessages.add("parameters.index must not be null.");
             } else {
-                errorMessages.addAll(this.index.validate(name, inputNames));
+                errorMessages.addAll(this.index.validate(inputNames));
             }
-            if(this.queries == null || this.queries.size() == 0) {
-                errorMessages.add("localNeo4j.queries must not be null or size zero.");
+            if(this.queries == null || this.queries.isEmpty()) {
+                errorMessages.add("parameters.queries must not be empty");
             } else {
                 for(int i=0; i<queries.size(); i++) {
-                    errorMessages.addAll(queries.get(i).validate(name, i, inputNames));
+                    errorMessages.addAll(queries.get(i).validate(i, inputNames));
                 }
             }
-            return errorMessages;
+
+            if(!errorMessages.isEmpty()) {
+                throw new IllegalModuleException(errorMessages);
+            }
         }
 
         public void setDefaults(final List<String> inputNames, final List<Schema> inputSchemas) {
@@ -168,19 +140,19 @@ public class LocalNeo4jTransform implements TransformModule {
             return bufferSize;
         }
 
-        public List<String> validate(final String name, final List<String> inputNames) {
+        public List<String> validate(final List<String> inputNames) {
             final List<String> errorMessages = new ArrayList<>();
             if(this.path == null) {
-                errorMessages.add("localNeo4j[" + name + "].index.path must not be null.");
+                errorMessages.add("parameters.index.path must not be null");
             }
             if((nodes == null || nodes.isEmpty()) && (relationships == null || relationships.isEmpty())) {
-                errorMessages.add("localNeo4j[" + name + "] transform module requires `nodes` or `relationships` parameter.");
+                errorMessages.add("parameters.nodes or relationships must not be null");
             } else {
                 if(nodes != null) {
                     for(int i=0; i<nodes.size(); i++) {
                         errorMessages.addAll(nodes.get(i).validate(i));
                         if(!inputNames.contains(nodes.get(i).getInput())) {
-                            errorMessages.add("localNeo4j[" + name + "].nodes[" + i + "].input does not exist in module inputs: " + inputNames);
+                            errorMessages.add("parameters.nodes[" + i + "].input does not exist in module inputs: " + inputNames);
                         }
                     }
                 }
@@ -188,7 +160,7 @@ public class LocalNeo4jTransform implements TransformModule {
                     for(int i=0; i<relationships.size(); i++) {
                         errorMessages.addAll(relationships.get(i).validate(i));
                         if(!inputNames.contains(relationships.get(i).getInput())) {
-                            errorMessages.add("localNeo4j[" + name + "].relationships[" + i + "].input does not exist in module inputs: " + inputNames);
+                            errorMessages.add("parameters.relationships[" + i + "].input does not exist in module inputs: " + inputNames);
                         }
                     }
                 }
@@ -235,7 +207,7 @@ public class LocalNeo4jTransform implements TransformModule {
         private String input;
         private List<String> fields;
         private String cypher;
-        private SourceConfig.InputSchema schema;
+        private JsonElement schema;
         private List<String> requiredFields;
         private transient Template cypherTemplate;
 
@@ -255,7 +227,7 @@ public class LocalNeo4jTransform implements TransformModule {
             return cypher;
         }
 
-        public SourceConfig.InputSchema getSchema() {
+        public JsonElement getSchema() {
             return schema;
         }
 
@@ -267,21 +239,21 @@ public class LocalNeo4jTransform implements TransformModule {
             return cypherTemplate;
         }
 
-        public List<String> validate(String name, int i, final List<String> inputNames) {
+        public List<String> validate(int i, final List<String> inputNames) {
             final List<String> errorMessages = new ArrayList<>();
             if(this.name == null) {
-                errorMessages.add("localNeo4j[" + name + "].queries[" + i + "].name must not be null.");
+                errorMessages.add("parameters.queries[" + i + "].name must not be null.");
             }
             if(this.input == null) {
-                errorMessages.add("localNeo4j[" + name + "].queries[" + i + "].input must not be null.");
+                errorMessages.add("parameters.queries[" + i + "].input must not be null.");
             } else if(!inputNames.contains(this.input)) {
-                errorMessages.add("localNeo4j[" + name + "].queries[" + i + "].input does not exists in module inputs: " + inputNames);
+                errorMessages.add("parameters.queries[" + i + "].input does not exists in module inputs: " + inputNames);
             }
             if(this.cypher == null) {
-                errorMessages.add("localNeo4j[" + name + "].queries[" + i + "].cypher must not be null.");
+                errorMessages.add("parameters.queries[" + i + "].cypher must not be null.");
             }
             if(this.schema == null) {
-                errorMessages.add("localNeo4j[" + name + "].queries[" + i + "].schema must not be null.");
+                errorMessages.add("parameters.queries[" + i + "].schema must not be null.");
             }
             return errorMessages;
         }
@@ -305,677 +277,493 @@ public class LocalNeo4jTransform implements TransformModule {
 
     }
 
+            /*
     @Override
-    public String getName() {
-        return "localNeo4j";
-    }
+    public MCollectionTuple expand(MCollectionTuple inputs) {
+        final LocalNeo4jTransformParameters parameters = getParameters(LocalNeo4jTransformParameters.class);
+        parameters.validate(inputs.getAllInputs());
+        parameters.setDefaults(inputs.getAllInputs(), inputs.getAllSchema());
 
-    @Override
-    public Map<String, FCollection<?>> expand(List<FCollection<?>> inputs, TransformConfig config) {
-        return transform(inputs, config);
-    }
+        final Map<String, Schema> inputSchemas = inputs.getAllSchemaAsMap();
 
-    public static Map<String, FCollection<?>> transform(final List<FCollection<?>> inputs, final TransformConfig config) {
-        final List<TupleTag<?>> tags = new ArrayList<>();
-        final List<String> inputNames = new ArrayList<>();
-        final List<DataType> inputTypes = new ArrayList<>();
-        final List<Schema> inputSchemas = new ArrayList<>();
+        final List<KV<TupleTag<MElement>, KV<String, Schema>>> outputNameAndTagsAndSchemas = createOutputTagsAndSchemas(
+                parameters.getQueries(), inputSchemas);
+        final Map<TupleTag<MElement>, String> outputNames = outputNameAndTagsAndSchemas.stream()
+                .collect(Collectors.toMap(KV::getKey, kv -> kv.getValue().getKey()));
+        final Map<TupleTag<MElement>, Schema> outputSchemas = outputNameAndTagsAndSchemas.stream()
+                .collect(Collectors.toMap(KV::getKey, kv -> kv.getValue().getValue()));
 
-        final DataType outputType = OptionUtil.isStreaming(inputs.get(0).getCollection()) ? DataType.ROW : DataType.AVRO;
+        final TupleTag<MElement> outputFailureTag = new TupleTag<>() {};
 
-        PCollectionTuple tuple = PCollectionTuple.empty(inputs.get(0).getCollection().getPipeline());
-        for (final FCollection<?> input : inputs) {
-            final TupleTag tag = new TupleTag<>() {};
-            tags.add(tag);
-            inputNames.add(input.getName());
-            inputTypes.add(input.getDataType());
-            inputSchemas.add(input.getSchema());
-            tuple = tuple.and(tag, input.getCollection());
+        final Map<String, TupleTag<MElement>> outputTags = outputNames.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getValue, Map.Entry::getKey));
+
+        final Map<String, Schema> outputInputSchemas = new HashMap<>();
+        for(final Map.Entry<TupleTag<MElement>, String> entry : outputNames.entrySet()) {
+            outputInputSchemas.put(entry.getValue(), outputSchemas.get(entry.getKey()));
         }
 
-        final LocalNeo4jTransformParameters parameters = LocalNeo4jTransformParameters.of(
-                config.getParameters(),
-                config.getName(),
-                inputNames,
-                inputSchemas);
-
-        final Map<String, FCollection<?>> outputs = new HashMap<>();
-        switch (outputType) {
-            case ROW -> {
-                final Transform<Schema, Row> transform = new Transform<>(
-                        config.getName(),
-                        parameters,
-                        s -> s,
-                        RowSchemaUtil::create,
-                        Neo4jSchemaUtil::convert,
-                        Instant::ofEpochMilli,
-                        tags,
-                        inputNames,
-                        inputTypes,
-                        inputSchemas);
-
-                final PCollectionTuple output = tuple.apply(config.getName(), transform);
-                final Map<TupleTag<Row>, Schema> outputSchemas = transform.getOutputSchemas();
-                for (final Map.Entry<TupleTag<Row>, String> entry : transform.getOutputNames().entrySet()) {
-                    final String outputName = config.getName() + "." + entry.getValue();
-                    final Schema outputSchema = outputSchemas.get(entry.getKey());
-                    final PCollection<Row> pCollection = output.get(entry.getKey());
-                    final FCollection<?> fCollection = FCollection.of(outputName, pCollection.setCoder(RowCoder.of(outputSchema)), DataType.ROW, outputSchema);
-                    outputs.put(outputName, fCollection);
-                    if(transform.getOutputNames().size() == 1) {
-                        outputs.put(config.getName(), fCollection);
-                    }
-                }
+        final String processName;
+        final DoFn<KV<String, MElement>, MElement> dofn;
+        if(parameters.index.getMutable()) {
+            processName = "Query";
+            dofn = new Neo4jQueryDoFn(getName(),
+                    inputs.getAllInputs(), outputInputSchemas, parameters.index, parameters.queries,
+                    outputTags, outputFailureTag);
+        } else {
+            processName = "IndexAndQuery";
+            final Coder<MElement> unionCoder = ElementCoder.of(inputs.getAllSchema());
+            if(OptionUtil.isStreaming(inputs)) {
+                dofn = new Neo4jQueryAndIndexStreamingDoFn(getName(),
+                        inputs.getAllInputs(), outputInputSchemas, parameters.index, parameters.queries,
+                        outputTags, outputFailureTag,
+                        unionCoder);
+            } else {
+                dofn = new Neo4jQueryAndIndexBatchDoFn(getName(),
+                        inputs.getAllInputs(), outputInputSchemas, parameters.index, parameters.queries,
+                        outputTags, outputFailureTag,
+                        unionCoder);
             }
-            case AVRO -> {
-                final Transform<org.apache.avro.Schema, GenericRecord> transform = new Transform<>(
-                        config.getName(),
-                        parameters,
-                        RowToRecordConverter::convertSchema,
-                        AvroSchemaUtil::create,
-                        Neo4jSchemaUtil::convert,
-                        (long millis) -> millis * 1000L,
-                        tags,
-                        inputNames,
-                        inputTypes,
-                        inputSchemas);
-
-                final PCollectionTuple output = tuple.apply(config.getName(), transform);
-                final Map<TupleTag<GenericRecord>, Schema> outputSchemas = transform.getOutputSchemas();
-                for (final Map.Entry<TupleTag<GenericRecord>, String> entry : transform.getOutputNames().entrySet()) {
-                    final String outputName = config.getName() + "." + entry.getValue();
-                    final org.apache.avro.Schema outputSchema = RowToRecordConverter.convertSchema(outputSchemas.get(entry.getKey()));
-                    final PCollection<GenericRecord> pCollection = output.get(entry.getKey());
-                    final FCollection<GenericRecord> fCollection = FCollection.of(outputName, pCollection.setCoder(AvroCoder.of(outputSchema)), DataType.AVRO, outputSchema);
-                    outputs.put(outputName, fCollection);
-                    if(transform.getOutputNames().size() == 1) {
-                        outputs.put(config.getName(), fCollection);
-                    }
-                }
-            }
-            default -> throw new IllegalArgumentException("Not supported outputType: " + outputType);
         }
 
+        final TupleTagList tupleTagList = TupleTagList.of(outputTags.values().stream()
+                .filter(t -> !t.getId().equals(outputFailureTag.getId()))
+                .collect(Collectors.toList()));
+
+        final PCollectionTuple outputs = inputs
+                .apply("Union", Union
+                        .withKeys(parameters.groupFields)
+                        .withWaits(getWaits())
+                        .withStrategy(getStrategy()))
+                .apply(processName, ParDo.of(dofn)
+                        .withOutputTags(outputFailureTag, tupleTagList));
+
+        MCollectionTuple outputTuple = MCollectionTuple.empty(inputs.getPipeline());
+        for(final Map.Entry<TupleTag<?>, PCollection<?>> entry : outputs.getAll().entrySet()) {
+            final String outputName = outputNames.get(entry.getKey());
+            final Schema outputSchema = outputSchemas.get(entry.getKey());
+            outputTuple = outputTuple.and(outputName, (PCollection<MElement>) entry.getValue(), outputSchema);
+        }
+        return outputTuple;
+        return null;
+    }
+         */
+
+    private Schema createOutputSchema(final QueryDefinition query, final Schema inputSchema, final Schema resultSchema) {
+        Schema.Builder builder = Schema.builder();
+        for(final String field : query.getFields()) {
+            builder = builder.withField(field, inputSchema.getField(field).getFieldType().withNullable(true));
+        }
+        return builder
+                .withField("cypher", Schema.FieldType.STRING.withNullable(true))
+                .withField("results", Schema.FieldType.array(Schema.FieldType.element(resultSchema)).withNullable(true))
+                .withField("timestamp", Schema.FieldType.TIMESTAMP)
+                .build();
+    }
+
+    private List<KV<TupleTag<MElement>, KV<String, Schema>>> createOutputTagsAndSchemas(
+            final List<QueryDefinition> queries,
+            final Map<String, Schema> inputSchemas) {
+
+        final List<KV<TupleTag<MElement>, KV<String,Schema>>> outputs = new ArrayList<>();
+        for(final QueryDefinition query : queries) {
+            final TupleTag<MElement> tag = new TupleTag<>(){};
+            final Schema resultSchema = Schema.parse(query.getSchema());
+            final Schema outputSchema = createOutputSchema(query, inputSchemas.get(query.getInput()), resultSchema);
+            outputs.add(KV.of(tag, KV.of(query.getName(), outputSchema)));
+        }
         return outputs;
     }
 
-    public static class Transform<RuntimeSchemaT, T> extends PTransform<PCollectionTuple, PCollectionTuple> {
+    /*
+    private static class Neo4jDoFn extends DoFn<KV<String, MElement>, MElement> {
+
+        private static final String NEO4J_HOME = "/neo4j/";
 
         private final String name;
-        private final List<String> groupFields;
-        private final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter;
-        private final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator;
-        private final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator;
-        private final TimestampConverter timestampConverter;
-
+        private final String indexPath;
+        protected final List<String> inputNames;
+        private final Map<String, Schema> outputSchemas;
+        private final Map<String, Schema> outputResultSchemas;
         private final IndexDefinition index;
         private final List<QueryDefinition> queries;
-        private final List<TupleTag<?>> inputTags;
-        private final List<String> inputNames;
-        private final List<DataType> inputTypes;
+        private final Map<String, TupleTag<MElement>> outputTags;
+        private final TupleTag<MElement> failureTag;
 
-        //
-        private final Map<TupleTag<T>, String> outputNames;
-        private final Map<TupleTag<T>, Schema> outputSchemas;
-        private final TupleTag<T> outputFailureTag;
-        private final Schema outputFailureSchema;
+        //private static GraphDatabaseService graphDB;
 
-        public Map<TupleTag<T>, String> getOutputNames() {
-            return outputNames;
-        }
-
-        public Map<TupleTag<T>, Schema> getOutputSchemas() {
-            return outputSchemas;
-        }
-
-        Transform(final String name,
-                  final LocalNeo4jTransformParameters parameters,
-                  final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter,
-                  final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator,
-                  final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator,
-                  final TimestampConverter timestampConverter,
-                  final List<TupleTag<?>> inputTags,
+        Neo4jDoFn(final String name,
                   final List<String> inputNames,
-                  final List<DataType> inputTypes,
-                  final List<Schema> inputSchemas) {
+                  final Map<String, Schema> outputSchemas,
+                  final IndexDefinition index,
+                  final List<QueryDefinition> queries,
+                  final Map<String, TupleTag<MElement>> outputTags,
+                  final TupleTag<MElement> failureTag) {
 
             this.name = name;
-            this.groupFields = parameters.getGroupFields();
-            this.schemaConverter = schemaConverter;
-            this.valueCreator = valueCreator;
-            this.neo4jValueCreator = neo4jValueCreator;
-            this.timestampConverter = timestampConverter;
-
-            this.index = parameters.getIndex();
-            this.queries = parameters.getQueries();
-
-            this.inputTags = inputTags;
+            this.indexPath = NEO4J_HOME + name + "/";
             this.inputNames = inputNames;
-            this.inputTypes = inputTypes;
+            this.outputSchemas = outputSchemas;
+            this.outputResultSchemas = this.outputSchemas.entrySet().stream()
+                    .filter(e -> e.getValue().hasField("results"))
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey,
+                            e -> e.getValue().getField("results").getFieldType().getArrayValueType().getElementSchema()));
+            this.index = index;
+            this.queries = queries;
 
-            final Map<String, Schema> inputSchemasMap = new HashMap<>();
-            for(int i=0; i<Math.min(inputNames.size(), inputSchemas.size()); i++) {
-                inputSchemasMap.put(inputNames.get(i), inputSchemas.get(i));
-            }
-            final List<KV<TupleTag<T>, KV<String, Schema>>> outputNameAndTagsAndSchemas = createOutputTagsAndSchemas(
-                    parameters.getQueries(), inputSchemasMap);
-            this.outputNames = outputNameAndTagsAndSchemas.stream()
-                    .collect(Collectors.toMap(KV::getKey, kv -> kv.getValue().getKey()));
-            this.outputSchemas = outputNameAndTagsAndSchemas.stream()
-                    .collect(Collectors.toMap(KV::getKey, kv -> kv.getValue().getValue()));
-
-            this.outputFailureTag = new TupleTag<>() {};
-            this.outputFailureSchema = createFailureSchema();
-            this.outputNames.put(this.outputFailureTag, "failures");
-            this.outputSchemas.put(this.outputFailureTag, this.outputFailureSchema);
+            this.outputTags = outputTags;
+            this.failureTag = failureTag;
         }
 
-        @Override
-        public PCollectionTuple expand(PCollectionTuple inputs) {
+        synchronized protected void setupIndex() throws IOException {
+            setupIndex(this.indexPath, this.index);
+        }
 
-            final Map<String, TupleTag<T>> outputTags = outputNames.entrySet().stream()
-                    .collect(Collectors.toMap(Map.Entry::getValue, Map.Entry::getKey));
-            final Map<String, Schema> outputInputSchemas = new HashMap<>();
-            for(final Map.Entry<TupleTag<T>, String> entry : outputNames.entrySet()) {
-                outputInputSchemas.put(entry.getValue(), outputSchemas.get(entry.getKey()));
+        protected void setupQuery() {
+            for(final QueryDefinition queryDefinition : queries) {
+                queryDefinition.setup();
             }
+        }
 
-            final String processName;
-            final DoFn<KV<String, UnionValue>, T> dofn;
-            if(index.getMutable()) {
-                processName = "Query";
-                dofn = new Neo4jQueryDoFn(name,
-                        inputNames, outputInputSchemas, index, queries,
-                        schemaConverter, valueCreator, neo4jValueCreator, timestampConverter);
-            } else {
-                processName = "IndexAndQuery";
-                final Coder<UnionValue> unionCoder = Union.createUnionCoder(inputs, inputTags);
-                if(OptionUtil.isStreaming(inputs)) {
-                    dofn = new Neo4jQueryAndIndexStreamingDoFn(name,
-                            inputNames, outputInputSchemas, index, queries,
-                            schemaConverter, valueCreator, neo4jValueCreator, timestampConverter,
-                            unionCoder);
-                } else {
-                    dofn = new Neo4jQueryAndIndexBatchDoFn(name,
-                            inputNames, outputInputSchemas, index, queries,
-                            schemaConverter, valueCreator, neo4jValueCreator, timestampConverter,
-                            unionCoder);
+        synchronized protected void teardownIndex() throws IOException {
+            if(!index.getTeardownCyphers().isEmpty()) {
+                try(final Transaction tx = graphDB.beginTx()) {
+                    for(final String teardownCypher : index.getTeardownCyphers()) {
+                        final Result result = tx.execute(teardownCypher);
+                        LOG.info("teardown cypher query: " + teardownCypher + ". result: " + result.resultAsString());
+                    }
+                    tx.commit();
                 }
             }
 
-            final TupleTagList tupleTagList = TupleTagList.of(outputTags.values().stream()
-                    .filter(t -> !t.getId().equals(outputFailureTag.getId()))
-                    .collect(Collectors.toList()));
-
-            return inputs
-                    .apply("Union", Union.withKey(inputTags, inputTypes, groupFields, inputNames))
-                    .apply("WithWindow", Window
-                            .<KV<String, UnionValue>>into(new GlobalWindows())
-                            .triggering(Repeatedly
-                                    .forever(AfterPane.elementCountAtLeast(1)))
-                            .withTimestampCombiner(TimestampCombiner.LATEST)
-                            .discardingFiredPanes()
-                            .withAllowedLateness(Duration.ZERO))
-                    .apply(processName, ParDo.of(dofn)
-                            .withOutputTags(outputFailureTag, tupleTagList));
+            //ZipFileUtil.uploadZipFile(this.indexPath, index.path);
+            final ByteArrayOutputStream os = new ByteArrayOutputStream();
+            Neo4jUtil.dump(this.indexPath, index.getDatabase(), os);
+            os.flush();
+            os.close();
+            StorageUtil.writeBytes(this.index.getPath(), os.toByteArray(), "application/zstd", new HashMap<>(), new HashMap<>());
         }
 
-        private List<KV<TupleTag<T>, KV<String, Schema>>> createOutputTagsAndSchemas(
-                final List<QueryDefinition> queries,
-                final Map<String, Schema> inputSchemas) {
+        protected void query(final ProcessContext c) {
+            final MElement element = c.element().getValue();
+            final Instant timestamp = c.timestamp();
+            final String inputName = inputNames.get(element.getIndex());
+            try(final Transaction tx = graphDB.beginTx()){
+                for(final QueryDefinition query : queries) {
+                    if(!inputName.equals(query.getInput())) {
+                        continue;
+                    }
 
-            final List<KV<TupleTag<T>, KV<String,Schema>>> outputs = new ArrayList<>();
+                    final Map<String, Object> input = element.asPrimitiveMap(query.getRequiredFields());
+                    final String cypher = TemplateUtil.executeStrictTemplate(query.getCypherTemplate(), input);
+
+                    try(final Result result = tx.execute(cypher)) {
+                        final TupleTag<MElement> outputTag = outputTags.get(query.name);
+                        final MElement output = createOutput(query, input, cypher, result, timestamp.getMillis());
+                        c.output(outputTag, output);
+                    } catch (final Throwable e) {
+                        final String message = "Failed to execute cypher: " + cypher + ". cause: " + e.getMessage();
+                        LOG.error(message);
+                        final MElement outputFailure = createFailure(inputName, "query", cypher, timestamp.getMillis(), e);
+                        c.output(outputFailure);
+                    }
+                }
+            } catch (final Throwable e) {
+                LOG.error("Failed to begin transaction cause: " + e.getMessage());
+                final MElement outputFailure  = createFailure(inputName, "query", null, timestamp.getMillis(), e);
+                c.output(outputFailure);
+            }
+        }
+
+        protected void index(final List<MElement> buffer) {
+            Neo4jUtil.index(graphDB, buffer, index.getNodes(), index.getRelationships(), inputNames);
+            buffer.clear();
+        }
+
+        protected boolean isQueryInput(MElement input) {
             for(final QueryDefinition query : queries) {
-                final TupleTag<T> tag = new TupleTag<>(){};
-                final Schema resultSchema = SourceConfig.convertSchema(query.getSchema());
-                final Schema outputSchema = createOutputSchema(query, inputSchemas.get(query.getInput()), resultSchema);
-                outputs.add(KV.of(tag, KV.of(query.getName(), outputSchema)));
+                if(inputNames.get(input.getIndex()).equals(query.getInput())) {
+                    return true;
+                }
             }
-            return outputs;
+            return false;
         }
 
-        private Schema createOutputSchema(final QueryDefinition query, final Schema inputSchema, final Schema resultSchema) {
-            Schema.Builder builder = Schema.builder();
+        private MElement createOutput(QueryDefinition query, Map<String, Object> input, String cypher, Result result, long epochMillis) {
+            // create results
+            final List<MElement> outputResults = new ArrayList<>();
+            while(result.hasNext()) {
+                final Map<String, Object> resultValues = result.next();
+                final MElement outputResult = MElement.builder().withPrimitiveValues(resultValues).build();
+                outputResults.add(outputResult);
+            }
+
+            // create output
+            final Map<String, Object> outputValues = new HashMap<>();
             for(final String field : query.getFields()) {
-                builder = builder.addField(field, inputSchema.getField(field).getType().withNullable(true));
+                outputValues.put(field, input.get(field));
             }
-            return builder
-                    .addField("cypher", Schema.FieldType.STRING.withNullable(true))
-                    .addField("results", Schema.FieldType.array(Schema.FieldType.row(resultSchema)).withNullable(true))
-                    .addField("timestamp", Schema.FieldType.DATETIME)
-                    .build();
+            outputValues.put("cypher", cypher);
+            outputValues.put("results", outputResults);
+            outputValues.put("timestamp", epochMillis * 1000L);
+            return MElement.of(outputValues, epochMillis);
         }
 
-        private Schema createFailureSchema() {
-            return Schema.builder()
-                    .addField("input", Schema.FieldType.STRING.withNullable(true))
-                    .addField("type", Schema.FieldType.STRING.withNullable(true))
-                    .addField("cypher", Schema.FieldType.STRING.withNullable(true))
-                    .addField("message", Schema.FieldType.STRING.withNullable(true))
-                    .addField("timestamp", Schema.FieldType.DATETIME)
-                    .build();
+        private MElement createFailure(final String input, final String type, final String cypher, final long epochMillis, final Throwable e) {
+            final Map<String, Object> values = new HashMap<>();
+            values.put("input", input);
+            values.put("type", type);
+            values.put("cypher", cypher);
+            values.put("message", e.getMessage());
+            values.put("timestamp", epochMillis * 1000L);
+
+            final Instant instant = Instant.ofEpochMilli(epochMillis);
+            return MFailure.of("", "", input, e, instant).toElement(instant);
         }
 
+        static synchronized protected void setupIndex(String indexPath, IndexDefinition index) throws IOException {
 
-        private class Neo4jDoFn extends DoFn<KV<String,UnionValue>, T> {
+            LOG.info("Start setup database PID: " + ProcessHandle.current().pid() + ", ThreadID:" + Thread.currentThread().getId());
 
-            private static final String NEO4J_HOME = "/neo4j/";
-
-            private final String name;
-            private final String indexPath;
-            private final List<String> inputNames;
-            private final Map<String, Schema> outputSchemas;
-            private final IndexDefinition index;
-            private final List<QueryDefinition> queries;
-            private final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter;
-            private final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator;
-            private final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator;
-            private final TimestampConverter timestampConverter;
-
-            private static GraphDatabaseService graphDB;
-            private transient Map<String, RuntimeSchemaT> outputRuntimeSchemas;
-            private transient Map<String, RuntimeSchemaT> outputResultRuntimeSchemas;
-            private transient RuntimeSchemaT outputFailureRuntimeSchema;
-
-            Neo4jDoFn(final String name,
-                      final List<String> inputNames,
-                      final Map<String, Schema> outputSchemas,
-                      final IndexDefinition index,
-                      final List<QueryDefinition> queries,
-                      final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter,
-                      final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator,
-                      final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator,
-                      final TimestampConverter timestampConverter) {
-
-                this.name = name;
-                this.indexPath = NEO4J_HOME + name + "/";
-                this.inputNames = inputNames;
-                this.outputSchemas = outputSchemas;
-                this.index = index;
-                this.queries = queries;
-                this.schemaConverter = schemaConverter;
-                this.valueCreator = valueCreator;
-                this.neo4jValueCreator = neo4jValueCreator;
-                this.timestampConverter = timestampConverter;
-            }
-
-            synchronized protected void setupIndex() throws IOException {
-                setupIndex(this.indexPath, this.index);
-            }
-
-            protected void setupQuery() {
-                this.outputRuntimeSchemas = this.outputSchemas.entrySet().stream()
-                        .collect(Collectors.toMap(Map.Entry::getKey, e -> schemaConverter.convert(e.getValue())));
-                this.outputResultRuntimeSchemas = this.outputSchemas.entrySet().stream()
-                        .filter(e -> e.getValue().hasField("results"))
-                        .collect(Collectors.toMap(Map.Entry::getKey, e -> schemaConverter.convert(e.getValue().getField("results").getType().getCollectionElementType().getRowSchema())));
-                this.outputFailureRuntimeSchema = schemaConverter.convert(this.outputSchemas.get("failures"));
-                for(final QueryDefinition queryDefinition : queries) {
-                    queryDefinition.setup();
+            final Path indexDirPath = Paths.get(indexPath);
+            final File indexDir = indexDirPath.toFile();
+            if(!indexDir.exists()) {
+                indexDir.mkdir();
+                if(StorageUtil.exists(index.getPath())) {
+                    Neo4jUtil.load(indexPath, index.getDatabase(), index.getPath());
+                    //ZipFileUtil.downloadZipFiles(index.getPath(), indexPath);
+                    LOG.info("Load Neo4j initial database file from: " + index.getPath() + " to " + indexPath);
+                } else if(index.getPath() != null) {
+                    LOG.warn("Not found Neo4j initial database file: " + index.getPath());
                 }
             }
 
-            synchronized protected void teardownIndex() throws IOException {
-                if(!index.getTeardownCyphers().isEmpty()) {
+            if(graphDB == null) {
+                LOG.info("Start neo4j database");
+                final DatabaseManagementService service = new DatabaseManagementServiceBuilder(indexDirPath).build();
+                graphDB = service.database(index.getDatabase());
+                if(index.getUseGDS()) {
+                    Neo4jUtil.setupGds(graphDB);
+                }
+                if(!index.getSetupCyphers().isEmpty()) {
                     try(final Transaction tx = graphDB.beginTx()) {
-                        for(final String teardownCypher : index.getTeardownCyphers()) {
-                            final Result result = tx.execute(teardownCypher);
-                            LOG.info("teardown cypher query: " + teardownCypher + ". result: " + result.resultAsString());
+                        for(final String setupCypher : index.getSetupCyphers()) {
+                            final Result result = tx.execute(setupCypher);
+                            LOG.info("setup cypher query: " + setupCypher + ". result: " + result.resultAsString());
                         }
                         tx.commit();
                     }
                 }
-
-                //ZipFileUtil.uploadZipFile(this.indexPath, index.path);
-                final ByteArrayOutputStream os = new ByteArrayOutputStream();
-                Neo4jUtil.dump(this.indexPath, index.getDatabase(), os);
-                os.flush();
-                os.close();
-                StorageUtil.writeBytes(this.index.getPath(), os.toByteArray(), "application/zstd", new HashMap<>(), new HashMap<>());
+                Neo4jUtil.registerShutdownHook(service);
             }
 
-            protected void query(final ProcessContext c) {
-                final UnionValue unionValue = c.element().getValue();
-                final Instant timestamp = c.timestamp();
-                final String inputName = inputNames.get(unionValue.getIndex());
-                try(final Transaction tx = graphDB.beginTx()){
-                    for(final QueryDefinition query : queries) {
-                        if(!inputName.equals(query.getInput())) {
-                            continue;
-                        }
+            LOG.info("Finish setup database");
+        }
 
-                        final Map<String, Object> input = unionValue.getMap(query.getRequiredFields());
-                        final String cypher = TemplateUtil.executeStrictTemplate(query.getCypherTemplate(), input);
-
-                        try(final Result result = tx.execute(cypher)) {
-                            final TupleTag<T> outputTag = outputNames.entrySet().stream().filter(e -> e.getValue().equals(query.getName())).map(e -> e.getKey()).findAny().get();
-                            final T output = createOutput(query, input, cypher, result, timestamp.getMillis());
-                            c.output(outputTag, output);
-                        } catch (final Throwable e) {
-                            final String message = "Failed to execute cypher: " + cypher + ". cause: " + e.getMessage();
-                            LOG.error(message);
-                            final T outputFailure = createFailure(inputName, "query", cypher, timestamp.getMillis(), e);
-                            c.output(outputFailure);
-                        }
-                    }
-                } catch (final Throwable e) {
-                    LOG.error("Failed to begin transaction cause: " + e.getMessage());
-                    final T outputFailure  = createFailure(inputName, "query", null, timestamp.getMillis(), e);
-                    c.output(outputFailure);
-                }
+        static synchronized protected void teardownIndex(String indexPath, IndexDefinition index) {
+            if(graphDB != null) {
+                graphDB = null;
             }
+        }
 
-            protected void index(final List<UnionValue> buffer) {
-                Neo4jUtil.index(graphDB, buffer, index.getNodes(), index.getRelationships(), inputNames);
-                buffer.clear();
-            }
+    }
 
-            protected boolean isQueryInput(UnionValue input) {
-                for(final QueryDefinition query : queries) {
-                    if(inputNames.get(input.getIndex()).equals(query.getInput())) {
-                        return true;
-                    }
-                }
-                return false;
-            }
+    private static class Neo4jQueryDoFn extends Neo4jDoFn {
 
-            private T createOutput(QueryDefinition query, Map<String, Object> input, String cypher, Result result, long epochMillis) {
-                // create results
-                final RuntimeSchemaT outputResultSchema = outputResultRuntimeSchemas.get(query.getName());
-                final List<T> outputResults = new ArrayList<>();
-                while(result.hasNext()) {
-                    final Map<String, Object> resultValues = result.next();
-                    final T outputResult = neo4jValueCreator.create(outputResultSchema, resultValues);
-                    outputResults.add(outputResult);
-                }
+        Neo4jQueryDoFn(final String name,
+                       final List<String> inputNames,
+                       final Map<String, Schema> outputSchemas,
+                       final IndexDefinition index,
+                       final List<QueryDefinition> queries,
+                       final Map<String, TupleTag<MElement>> outputTags,
+                       final TupleTag<MElement> failureTag) {
 
-                // create output
-                final Map<String, Object> outputValues = new HashMap<>();
-                for(final String field : query.getFields()) {
-                    outputValues.put(field, input.get(field));
-                }
-                outputValues.put("cypher", cypher);
-                outputValues.put("results", outputResults);
-                outputValues.put("timestamp", timestampConverter.toTimestampValue(epochMillis));
-                final RuntimeSchemaT outputSchema = outputRuntimeSchemas.get(query.getName());
-                return valueCreator.create(outputSchema, outputValues);
-            }
+            super(name, inputNames, outputSchemas, index, queries, outputTags, failureTag);
+        }
 
-            private T createFailure(final String input, final String type, final String cypher, final long epochMillis, final Throwable e) {
-                final Map<String, Object> values = new HashMap<>();
-                values.put("input", input);
-                values.put("type", type);
-                values.put("cypher", cypher);
-                values.put("message", e.getMessage());
-                for(final StackTraceElement stackTraceElement : e.getStackTrace()) {
+        @Setup
+        synchronized public void setup() throws IOException {
+            super.setupIndex();
+            super.setupQuery();
+        }
 
-                }
-                values.put("timestamp", timestampConverter.toTimestampValue(epochMillis));
-                return this.valueCreator.create(outputFailureRuntimeSchema, values);
-            }
-
-            static synchronized protected void setupIndex(String indexPath, IndexDefinition index) throws IOException {
-
-                LOG.info("Start setup database PID: " + ProcessHandle.current().pid() + ", ThreadID:" + Thread.currentThread().getId());
-
-                final Path indexDirPath = Paths.get(indexPath);
-                final File indexDir = indexDirPath.toFile();
-                if(!indexDir.exists()) {
-                    indexDir.mkdir();
-                    if(StorageUtil.exists(index.getPath())) {
-                        Neo4jUtil.load(indexPath, index.getDatabase(), index.getPath());
-                        //ZipFileUtil.downloadZipFiles(index.getPath(), indexPath);
-                        LOG.info("Load Neo4j initial database file from: " + index.getPath() + " to " + indexPath);
-                    } else if(index.getPath() != null) {
-                        LOG.warn("Not found Neo4j initial database file: " + index.getPath());
-                    }
-                }
-
-                if(graphDB == null) {
-                    LOG.info("Start neo4j database");
-                    final DatabaseManagementService service = new DatabaseManagementServiceBuilder(indexDirPath).build();
-                    graphDB = service.database(index.getDatabase());
-                    if(index.getUseGDS()) {
-                        Neo4jUtil.setupGds(graphDB);
-                    }
-                    if(!index.getSetupCyphers().isEmpty()) {
-                        try(final Transaction tx = graphDB.beginTx()) {
-                            for(final String setupCypher : index.getSetupCyphers()) {
-                                final Result result = tx.execute(setupCypher);
-                                LOG.info("setup cypher query: " + setupCypher + ". result: " + result.resultAsString());
-                            }
-                            tx.commit();
-                        }
-                    }
-                    Neo4jUtil.registerShutdownHook(service);
-                }
-
-                LOG.info("Finish setup database");
-            }
-
-            static synchronized protected void teardownIndex(String indexPath, IndexDefinition index) {
-                if(graphDB != null) {
-                    graphDB = null;
-                }
-            }
+        @Teardown
+        public void teardown() {
 
         }
 
-        private class Neo4jQueryDoFn extends Neo4jDoFn {
+        @ProcessElement
+        public void processElement(final ProcessContext c) {
 
-            Neo4jQueryDoFn(final String name,
-                           final List<String> inputNames,
-                           final Map<String, Schema> outputSchemas,
-                           final IndexDefinition index,
-                           final List<QueryDefinition> queries,
-                           final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter,
-                           final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator,
-                           final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator,
-                           final TimestampConverter timestampConverter) {
-
-                super(name, inputNames, outputSchemas,
-                        index, queries,
-                        schemaConverter, valueCreator, neo4jValueCreator, timestampConverter);
+            final MElement input = c.element().getValue();
+            if(isQueryInput(input)) {
+                query(c);
+            } else {
+                LOG.info("not query input: " + input + " for inputNames: " + inputNames);
             }
-
-            @Setup
-            synchronized public void setup() throws IOException {
-                super.setupIndex();
-                super.setupQuery();
-            }
-
-            @Teardown
-            public void teardown() {
-
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) {
-
-                final UnionValue input = c.element().getValue();
-                if(isQueryInput(input)) {
-                    query(c);
-                } else {
-                    LOG.info("not query input: " + input + " for inputNames: " + inputNames);
-                }
-            }
-
         }
 
-        private class Neo4jQueryAndIndexDoFn extends Neo4jDoFn {
+    }
 
-            protected static final String STATE_ID_INDEX_BUFFER = "indexBuffer";
-            protected static final String STATE_ID_INTERVAL_COUNTER = "intervalCounter";
+    private static class Neo4jQueryAndIndexDoFn extends Neo4jDoFn {
 
-            Neo4jQueryAndIndexDoFn(final String name,
-                                   final List<String> inputNames,
-                                   final Map<String, Schema> outputSchemas,
-                                   final IndexDefinition index,
-                                   final List<QueryDefinition> queries,
-                                   final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter,
-                                   final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator,
-                                   final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator,
-                                   final TimestampConverter timestampConverter) {
+        protected static final String STATE_ID_INDEX_BUFFER = "indexBuffer";
+        protected static final String STATE_ID_INTERVAL_COUNTER = "intervalCounter";
 
-                super(name, inputNames, outputSchemas,
-                        index, queries,
-                        schemaConverter, valueCreator, neo4jValueCreator, timestampConverter);
-            }
+        Neo4jQueryAndIndexDoFn(final String name,
+                               final List<String> inputNames,
+                               final Map<String, Schema> outputSchemas,
+                               final IndexDefinition index,
+                               final List<QueryDefinition> queries,
+                               final Map<String, TupleTag<MElement>> outputTags,
+                               final TupleTag<MElement> failureTag) {
 
-            protected void setup() throws IOException {
-                super.setupIndex();
-                super.setupQuery();
-            }
-
-            protected void teardown() throws IOException {
-                //super.uploadIndex();
-            }
-
-            protected void processElement(final ProcessContext c,
-                                          final ValueState<List<UnionValue>> bufferIndexBufferValueState,
-                                          final ValueState<Integer> bufferUpdateIntervalValueState) {
-
-                final List<UnionValue> buffer = Optional
-                        .ofNullable(bufferIndexBufferValueState.read())
-                        .orElseGet(ArrayList::new);
-
-                final UnionValue input = c.element().getValue();
-                buffer.add(input);
-
-                final boolean isQueryInput = isQueryInput(input);
-
-                // indexing
-                if(isQueryInput || buffer.size() > 100) {
-                    index(buffer);
-                    bufferIndexBufferValueState.clear();
-                } else {
-                    bufferIndexBufferValueState.write(buffer);
-                }
-
-                // query
-                if(isQueryInput) {
-                    query(c);
-                }
-
-            }
-
+            super(name, inputNames, outputSchemas, index, queries, outputTags, failureTag);
         }
 
-        protected class Neo4jQueryAndIndexBatchDoFn extends Neo4jQueryAndIndexDoFn {
+        protected void setup() throws IOException {
+            super.setupIndex();
+            super.setupQuery();
+        }
 
-            @StateId(STATE_ID_INDEX_BUFFER)
-            private final StateSpec<ValueState<List<UnionValue>>> indexBufferSpec;
-            @StateId(STATE_ID_INTERVAL_COUNTER)
-            private final StateSpec<ValueState<Integer>> bufferIntervalCounterSpec;
+        protected void teardown() throws IOException {
+            //super.uploadIndex();
+        }
 
-            Neo4jQueryAndIndexBatchDoFn(
-                    final String name,
-                    final List<String> inputNames,
-                    final Map<String, Schema> outputSchemas,
-                    final IndexDefinition index,
-                    final List<QueryDefinition> queries,
-                    final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter,
-                    final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator,
-                    final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator,
-                    final TimestampConverter timestampConverter,
-                    final Coder<UnionValue> unionCoder) {
+        protected void processElement(final ProcessContext c,
+                                      final ValueState<List<MElement>> bufferIndexBufferValueState,
+                                      final ValueState<Integer> bufferUpdateIntervalValueState) {
 
-                super(name, inputNames, outputSchemas,
-                        index, queries,
-                        schemaConverter, valueCreator, neo4jValueCreator, timestampConverter);
+            final List<MElement> buffer = Optional
+                    .ofNullable(bufferIndexBufferValueState.read())
+                    .orElseGet(ArrayList::new);
 
-                this.indexBufferSpec = StateSpecs.value(ListCoder.of(unionCoder));
-                this.bufferIntervalCounterSpec = StateSpecs.value(VarIntCoder.of());
-            }
+            final MElement input = c.element().getValue();
+            buffer.add(input);
 
-            @Setup
-            public void setup() throws IOException {
-                super.setup();
-            }
+            final boolean isQueryInput = isQueryInput(input);
 
-            @Teardown
-            public void teardown() throws IOException {
-                super.teardown();
-            }
-
-            @ProcessElement
-            @RequiresTimeSortedInput
-            public void processElement(
-                    final ProcessContext c,
-                    final @AlwaysFetched @StateId(STATE_ID_INDEX_BUFFER) ValueState<List<UnionValue>> bufferIndexBufferValueState,
-                    final @AlwaysFetched @StateId(STATE_ID_INTERVAL_COUNTER) ValueState<Integer> bufferUpdateIntervalValueState) {
-
-                super.processElement(c, bufferIndexBufferValueState, bufferUpdateIntervalValueState);
-            }
-
-            @OnWindowExpiration
-            public void onWindowExpiration(
-                    @StateId(STATE_ID_INDEX_BUFFER) ValueState<List<UnionValue>> bufferIndexBufferValueState) {
-
-                LOG.info("onWindowExpiration");
-
-                final List<UnionValue> buffer = Optional
-                        .ofNullable(bufferIndexBufferValueState.read())
-                        .orElseGet(ArrayList::new);
-
+            // indexing
+            if(isQueryInput || buffer.size() > 100) {
                 index(buffer);
+                bufferIndexBufferValueState.clear();
+            } else {
+                bufferIndexBufferValueState.write(buffer);
             }
 
-        }
-
-        protected class Neo4jQueryAndIndexStreamingDoFn extends Neo4jQueryAndIndexDoFn {
-
-            @StateId(STATE_ID_INDEX_BUFFER)
-            private final StateSpec<ValueState<List<UnionValue>>> indexBufferSpec;
-            @StateId(STATE_ID_INTERVAL_COUNTER)
-            private final StateSpec<ValueState<Integer>> bufferIntervalCounterSpec;
-
-            Neo4jQueryAndIndexStreamingDoFn(
-                    final String name,
-                    final List<String> inputNames,
-                    final Map<String, Schema> outputSchemas,
-                    final IndexDefinition index,
-                    final List<QueryDefinition> queries,
-                    final SchemaUtil.SchemaConverter<Schema, RuntimeSchemaT> schemaConverter,
-                    final SchemaUtil.ValueCreator<RuntimeSchemaT, T> valueCreator,
-                    final SchemaUtil.ValueCreator<RuntimeSchemaT, T> neo4jValueCreator,
-                    final TimestampConverter timestampConverter,
-                    final Coder<UnionValue> unionCoder) {
-
-                super(name, inputNames, outputSchemas,
-                        index, queries,
-                        schemaConverter, valueCreator, neo4jValueCreator, timestampConverter);
-
-                this.indexBufferSpec = StateSpecs.value(ListCoder.of(unionCoder));
-                this.bufferIntervalCounterSpec = StateSpecs.value(VarIntCoder.of());
-            }
-
-            @Setup
-            public void setup() throws IOException {
-                super.setup();
-            }
-
-            @Teardown
-            public void teardown() throws IOException {
-                super.teardown();
-            }
-
-            @ProcessElement
-            public void processElement(
-                    final ProcessContext c,
-                    final @AlwaysFetched @StateId(STATE_ID_INDEX_BUFFER) ValueState<List<UnionValue>> bufferIndexBufferValueState,
-                    final @AlwaysFetched @StateId(STATE_ID_INTERVAL_COUNTER) ValueState<Integer> bufferUpdateIntervalValueState) {
-
-                super.processElement(c, bufferIndexBufferValueState, bufferUpdateIntervalValueState);
-
+            // query
+            if(isQueryInput) {
+                query(c);
             }
 
         }
 
     }
 
-    private interface TimestampConverter extends Serializable {
-        Object toTimestampValue(long epochMillis);
+    protected static class Neo4jQueryAndIndexBatchDoFn extends Neo4jQueryAndIndexDoFn {
+
+        @StateId(STATE_ID_INDEX_BUFFER)
+        private final StateSpec<ValueState<List<MElement>>> indexBufferSpec;
+        @StateId(STATE_ID_INTERVAL_COUNTER)
+        private final StateSpec<ValueState<Integer>> bufferIntervalCounterSpec;
+
+        Neo4jQueryAndIndexBatchDoFn(
+                final String name,
+                final List<String> inputNames,
+                final Map<String, Schema> outputSchemas,
+                final IndexDefinition index,
+                final List<QueryDefinition> queries,
+                final Map<String, TupleTag<MElement>> outputTags,
+                final TupleTag<MElement> failureTag,
+                final Coder<MElement> unionCoder) {
+
+            super(name, inputNames, outputSchemas, index, queries, outputTags, failureTag);
+
+            this.indexBufferSpec = StateSpecs.value(ListCoder.of(unionCoder));
+            this.bufferIntervalCounterSpec = StateSpecs.value(VarIntCoder.of());
+        }
+
+        @Setup
+        public void setup() throws IOException {
+            super.setup();
+        }
+
+        @Teardown
+        public void teardown() throws IOException {
+            super.teardown();
+        }
+
+        @ProcessElement
+        @RequiresTimeSortedInput
+        public void processElement(
+                final ProcessContext c,
+                final @AlwaysFetched @StateId(STATE_ID_INDEX_BUFFER) ValueState<List<MElement>> bufferIndexBufferValueState,
+                final @AlwaysFetched @StateId(STATE_ID_INTERVAL_COUNTER) ValueState<Integer> bufferUpdateIntervalValueState) {
+
+            super.processElement(c, bufferIndexBufferValueState, bufferUpdateIntervalValueState);
+        }
+
+        @OnWindowExpiration
+        public void onWindowExpiration(
+                @StateId(STATE_ID_INDEX_BUFFER) ValueState<List<MElement>> bufferIndexBufferValueState) {
+
+            LOG.info("onWindowExpiration");
+
+            final List<MElement> buffer = Optional
+                    .ofNullable(bufferIndexBufferValueState.read())
+                    .orElseGet(ArrayList::new);
+
+            index(buffer);
+        }
+
     }
+
+    protected static class Neo4jQueryAndIndexStreamingDoFn extends Neo4jQueryAndIndexDoFn {
+
+        @StateId(STATE_ID_INDEX_BUFFER)
+        private final StateSpec<ValueState<List<MElement>>> indexBufferSpec;
+        @StateId(STATE_ID_INTERVAL_COUNTER)
+        private final StateSpec<ValueState<Integer>> bufferIntervalCounterSpec;
+
+        Neo4jQueryAndIndexStreamingDoFn(
+                final String name,
+                final List<String> inputNames,
+                final Map<String, Schema> outputSchemas,
+                final IndexDefinition index,
+                final List<QueryDefinition> queries,
+                final Map<String, TupleTag<MElement>> outputTags,
+                final TupleTag<MElement> failureTag,
+                final Coder<MElement> unionCoder) {
+
+            super(name, inputNames, outputSchemas, index, queries, outputTags, failureTag);
+
+            this.indexBufferSpec = StateSpecs.value(ListCoder.of(unionCoder));
+            this.bufferIntervalCounterSpec = StateSpecs.value(VarIntCoder.of());
+        }
+
+        @Setup
+        public void setup() throws IOException {
+            super.setup();
+        }
+
+        @Teardown
+        public void teardown() throws IOException {
+            super.teardown();
+        }
+
+        @ProcessElement
+        public void processElement(
+                final ProcessContext c,
+                final @AlwaysFetched @StateId(STATE_ID_INDEX_BUFFER) ValueState<List<MElement>> bufferIndexBufferValueState,
+                final @AlwaysFetched @StateId(STATE_ID_INTERVAL_COUNTER) ValueState<Integer> bufferUpdateIntervalValueState) {
+
+            super.processElement(c, bufferIndexBufferValueState, bufferUpdateIntervalValueState);
+
+        }
+
+    }
+
+         */
 
 }
