@@ -1,4 +1,4 @@
-package com.mercari.solution.util.converter;
+package com.mercari.solution.util.schema.converter;
 
 import com.google.cloud.spanner.Struct;
 import com.google.cloud.spanner.Type;

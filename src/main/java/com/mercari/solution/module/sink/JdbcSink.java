@@ -2,7 +2,7 @@ package com.mercari.solution.module.sink;
 
 import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
 import com.mercari.solution.module.*;
-import com.mercari.solution.util.converter.ToStatementConverter;
+import com.mercari.solution.util.schema.converter.ToStatementConverter;
 import com.mercari.solution.util.gcp.JdbcUtil;
 import com.mercari.solution.util.gcp.SecretManagerUtil;
 import com.mercari.solution.util.pipeline.Union;
