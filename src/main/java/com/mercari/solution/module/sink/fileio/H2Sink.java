@@ -2,7 +2,7 @@ package com.mercari.solution.module.sink.fileio;
 
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
-import com.mercari.solution.util.converter.ToStatementConverter;
+import com.mercari.solution.util.schema.converter.ToStatementConverter;
 import com.mercari.solution.util.domain.search.H2Util;
 import com.mercari.solution.util.domain.search.ZipFileUtil;
 import com.mercari.solution.util.gcp.JdbcUtil;
