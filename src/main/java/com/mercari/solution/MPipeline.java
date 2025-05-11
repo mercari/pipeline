@@ -6,10 +6,7 @@ import com.mercari.solution.util.pipeline.OptionUtil;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.options.Default;
-import org.apache.beam.sdk.options.Description;
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.options.*;
 import org.apache.beam.sdk.transforms.Create;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +22,7 @@ public class MPipeline {
     public interface MPipelineOptions extends PipelineOptions {
 
         @Description("Config text body or config resource name.")
+        @Validation.Required
         String getConfig();
         void setConfig(String config);
 
@@ -48,18 +46,12 @@ public class MPipeline {
         spark
     }
 
-    public enum Platform {
-        gcp,
-        aws,
-        azure,
-        other
-    }
-
-    public static void main(final String[] args) throws Exception {
+    public static void main(final String[] args) throws IOException {
 
         final MPipelineOptions pipelineOptions = PipelineOptionsFactory
                 .fromArgs(OptionUtil.filterPipelineArgs(args))
                 .as(MPipelineOptions.class);
+
         final Runner runner = OptionUtil.getRunner(pipelineOptions);
         LOG.info("Runner: {}", runner);
 
@@ -69,19 +61,11 @@ public class MPipeline {
                 pipelineOptions.getFormat(),
                 args);
 
-        if(Optional.ofNullable(config.getEmpty()).orElse(false)) {
-            LOG.info("Empty pipeline");
-            final Pipeline pipeline = Pipeline.create(pipelineOptions);
-            pipeline.apply("Empty", Create.of("").withCoder(StringUtf8Coder.of()));
-            pipeline.run();
-            return;
-        }
-
         Options.setOptions(pipelineOptions, config.getOptions());
 
         final Pipeline pipeline = Pipeline.create(pipelineOptions);
 
-        final Map<String, MCollection> outputs = apply(pipeline, config);
+        final Map<String, MCollection> outputs = apply(pipeline, pipelineOptions, args, config);
 
         for(final Map.Entry<String, MCollection> entry : outputs.entrySet()) {
             if(entry.getKey().endsWith(".failures")) {
@@ -93,6 +77,35 @@ public class MPipeline {
         final PipelineResult result = pipeline.run();
     }
 
+    private static Map<String, MCollection> apply(
+            final Pipeline pipeline,
+            final MPipelineOptions pipelineOptions,
+            final String[] args,
+            final Config config) throws IOException {
+
+        if(Optional.ofNullable(config.getEmpty()).orElse(false)) {
+            LOG.info("Empty pipeline");
+            pipeline.apply("Empty", Create.of("").withCoder(StringUtf8Coder.of()));
+            pipeline.run();
+            return new HashMap<>();
+        }
+
+        try {
+            return apply(pipeline, config);
+        } catch (final Throwable e) {
+            LOG.error("Failed to apply pipeline config: {}", config);
+            if(config.getSystem().getFailure().getAlterConfig() == null) {
+                throw new IllegalArgumentException("Failed to apply pipeline config: " + config, e);
+            }
+            final Config alterConfig = Config.load(
+                    config.getSystem().getFailure().getAlterConfig(),
+                    pipelineOptions.getContext(),
+                    pipelineOptions.getFormat(),
+                    args);
+            return apply(pipeline, pipelineOptions, args, alterConfig);
+        }
+    }
+
     public static Map<String, MCollection> apply(final Pipeline pipeline, final Config config) {
 
         final Map<String, MCollection> outputs = new HashMap<>();
@@ -100,13 +113,13 @@ public class MPipeline {
         final Set<String> moduleNames = moduleNames(config);
 
         final int size = moduleNames.size();
-        int preOutputSize = 0;
 
         try(final MErrorHandler errorHandler = MErrorHandler.createPipelineErrorHandler(pipeline, config)) {
+            int preOutputSize = 0;
             while(preOutputSize < size) {
-                setSourceResult(pipeline, config.getSources(), outputs, executedModuleNames, errorHandler);
-                setTransformResult(pipeline, config.getTransforms(), outputs, executedModuleNames, errorHandler);
-                setSinkResult(pipeline, config.getSinks(), outputs, executedModuleNames, errorHandler);
+                setResult(pipeline, config.getSources(), outputs, executedModuleNames, errorHandler);
+                setResult(pipeline, config.getTransforms(), outputs, executedModuleNames, errorHandler);
+                setResult(pipeline, config.getSinks(), outputs, executedModuleNames, errorHandler);
                 if(preOutputSize == executedModuleNames.size()) {
                     moduleNames.removeAll(executedModuleNames);
                     final String message = String.format("No input for modules: %s", String.join(",", moduleNames));
@@ -114,238 +127,113 @@ public class MPipeline {
                 }
                 preOutputSize = executedModuleNames.size();
             }
-        } catch (final IOException e) {
-            throw new IllegalArgumentException("Failed to register error handler", e);
         }
 
         return outputs;
     }
 
-    private static void setSourceResult(
+    private static void setResult(
             final Pipeline pipeline,
-            final List<SourceConfig> sourceConfigs,
+            final List<? extends ModuleConfig> moduleConfigs,
             final Map<String, MCollection> outputs,
             final Set<String> executedModuleNames,
             final MErrorHandler errorHandler) {
 
-        final List<SourceConfig> notDoneModules = new ArrayList<>();
-        for (final SourceConfig sourceConfig : sourceConfigs) {
+        final List<ModuleConfig> notDoneModules = new ArrayList<>();
+        for(final ModuleConfig moduleConfig : moduleConfigs) {
             // Skip null config(ketu comma)
-            if(sourceConfig == null) {
+            if(moduleConfig == null) {
                 continue;
             }
 
             // Ignore if parameter ignore is true
-            if(sourceConfig.getIgnore() != null && sourceConfig.getIgnore()) {
+            if(moduleConfig.getIgnore() != null && moduleConfig.getIgnore()) {
                 continue;
             }
 
             // Skip already done module.
-            if(executedModuleNames.contains(sourceConfig.getName())) {
-                continue;
-            }
-
-            if(sourceConfig.getWaits() != null && !outputs.keySet().containsAll(sourceConfig.getWaits())) {
-                notDoneModules.add(sourceConfig);
-                continue;
-            }
-
-            final List<MCollection> waits;
-            if(sourceConfig.getWaits() == null) {
-                waits = new ArrayList<>();
-            } else {
-                waits = sourceConfig.getWaits().stream()
-                        .map(outputs::get)
-                        .toList();
-            }
-
-            try {
-                final Source source = Source.create(sourceConfig, pipeline.getOptions(), waits, errorHandler);
-                final MCollectionTuple output = pipeline.begin()
-                        .apply(sourceConfig.getName(), source)
-                        .withSource(sourceConfig.getName());
-                outputs.putAll(output.asCollectionMap());
-                executedModuleNames.add(sourceConfig.getName());
-            } catch (final IllegalModuleException e) {
-                throw new IllegalModuleException(sourceConfig.getName(), sourceConfig.getModule(), e.errorMessages);
-            } catch (final Throwable e) {
-                throw new IllegalModuleException(sourceConfig.getName(), sourceConfig.getModule(), e);
-            }
-        }
-
-        if(notDoneModules.isEmpty()) {
-            return;
-        }
-        if(notDoneModules.size() == sourceConfigs.size()) {
-            return;
-        }
-        setSourceResult(pipeline, notDoneModules, outputs, executedModuleNames, errorHandler);
-    }
-
-    private static void setTransformResult(
-            final Pipeline pipeline,
-            final List<TransformConfig> transformConfigs,
-            final Map<String, MCollection> outputs,
-            final Set<String> executedModuleNames,
-            final MErrorHandler errorHandler) {
-
-        final List<TransformConfig> notDoneModules = new ArrayList<>();
-        for(final TransformConfig transformConfig : transformConfigs) {
-            // Skip null config(ketu comma)
-            if(transformConfig == null) {
-                continue;
-            }
-
-            // Ignore if parameter ignore is true
-            if(transformConfig.getIgnore() != null && transformConfig.getIgnore()) {
-                continue;
-            }
-
-            // Skip already done module.
-            if(executedModuleNames.contains(transformConfig.getName())) {
+            if(executedModuleNames.contains(moduleConfig.getName())) {
                 continue;
             }
 
             // Add queue if wait not done.
-            if(transformConfig.getWaits() != null && !outputs.keySet().containsAll(transformConfig.getWaits())) {
-                notDoneModules.add(transformConfig);
+            if(!outputs.keySet().containsAll(moduleConfig.getWaits())) {
+                notDoneModules.add(moduleConfig);
                 continue;
             }
+            final List<MCollection> waits = moduleConfig.getWaits()
+                    .stream()
+                    .map(outputs::get)
+                    .toList();
 
             // Add queue if sideInputs not done.
-            if(transformConfig.getSideInputs() != null && !outputs.keySet().containsAll(transformConfig.getSideInputs())) {
-                notDoneModules.add(transformConfig);
+            if(!outputs.keySet().containsAll(moduleConfig.getSideInputs())) {
+                notDoneModules.add(moduleConfig);
                 continue;
             }
+            final List<MCollection> sideInputs = moduleConfig.getSideInputs()
+                    .stream()
+                    .map(outputs::get)
+                    .toList();
 
-            // Add queue if all input not done.
-            if(!outputs.keySet().containsAll(transformConfig.getInputs())) {
-                notDoneModules.add(transformConfig);
+            // Add queue if inputs not done.
+            final List<String> inputNames = switch (moduleConfig) {
+                case TransformConfig transformConfig -> transformConfig.getInputs();
+                case SinkConfig sinkConfig -> sinkConfig.getInputs();
+                default -> new ArrayList<>();
+            };
+
+            if(!outputs.keySet().containsAll(inputNames)) {
+                notDoneModules.add(moduleConfig);
                 continue;
             }
-
-            final List<MCollection> waits;
-            if(transformConfig.getWaits() == null) {
-                waits = new ArrayList<>();
-            } else {
-                waits = transformConfig.getWaits().stream()
-                        .map(outputs::get)
-                        .toList();
-            }
-
-            final List<MCollection> sideInputs;
-            if(transformConfig.getSideInputs() == null) {
-                sideInputs = new ArrayList<>();
-            } else {
-                sideInputs = transformConfig.getSideInputs().stream()
-                        .map(outputs::get)
-                        .toList();
-            }
-
-            final List<MCollection> inputs = transformConfig.getInputs().stream()
+            final List<MCollection> inputs = inputNames.stream()
                     .map(outputs::get)
                     .collect(Collectors.toList());
+
             try {
-                final MCollectionTuple input = MCollectionTuple.mergeCollection(inputs);
-                final Transform transform = Transform.create(transformConfig, pipeline.getOptions(), waits, sideInputs, errorHandler);
-                final MCollectionTuple output = input
-                        .apply(transformConfig.getName(), transform)
-                        .withSource(transformConfig.getName());
-                outputs.putAll(output.asCollectionMap());
-                executedModuleNames.add(transformConfig.getName());
+                final MCollectionTuple output = switch (moduleConfig) {
+                    case SourceConfig sourceConfig -> {
+                        final Source source = Source.create(
+                                sourceConfig, pipeline.getOptions(), waits, errorHandler);
+                        yield pipeline
+                                .begin()
+                                .apply(moduleConfig.getName(), source);
+                    }
+                    case TransformConfig transformConfig -> {
+                        final Transform transform = Transform.create(
+                                transformConfig, pipeline.getOptions(), waits, sideInputs, errorHandler);
+                        yield MCollectionTuple
+                                .mergeCollection(inputs)
+                                .apply(moduleConfig.getName(), transform);
+                    }
+                    case SinkConfig sinkConfig -> {
+                        final Sink sink = Sink.create(
+                                sinkConfig, pipeline.getOptions(), waits, errorHandler);
+                        final MCollectionTuple input = inputs.isEmpty()
+                                ? MCollectionTuple.empty(pipeline)
+                                : MCollectionTuple.mergeCollection(inputs);
+                        yield input.apply(moduleConfig.getName(), sink);
+                    }
+                    default -> throw new IllegalModuleException("Not supported config type: " + moduleConfig);
+                };
+                outputs.putAll(output.withSource(moduleConfig.getName()).asCollectionMap());
+                executedModuleNames.add(moduleConfig.getName());
+
             } catch (final IllegalModuleException e) {
-                throw new IllegalModuleException(transformConfig.getName(), transformConfig.getModule(), e.errorMessages);
+                throw new IllegalModuleException(moduleConfig.getName(), moduleConfig.getModule(), e.errorMessages);
             } catch (final Throwable e) {
-                throw new IllegalModuleException(transformConfig.getName(), transformConfig.getModule(), e);
+                throw new IllegalModuleException(moduleConfig.getName(), moduleConfig.getModule(), e);
             }
         }
 
         if(notDoneModules.isEmpty()) {
             return;
         }
-        if(notDoneModules.size() == transformConfigs.size()) {
+        if(notDoneModules.size() == moduleConfigs.size()) {
             return;
         }
-        setTransformResult(pipeline, notDoneModules, outputs, executedModuleNames, errorHandler);
-    }
-
-    private static void setSinkResult(
-            final Pipeline pipeline,
-            final List<SinkConfig> sinkConfigs,
-            final Map<String, MCollection> outputs,
-            final Set<String> executedModuleNames,
-            final MErrorHandler errorHandler) {
-
-        final List<SinkConfig> notDoneModules = new ArrayList<>();
-        for(final SinkConfig sinkConfig : sinkConfigs) {
-            // Skip null config(ketu comma)
-            if(sinkConfig == null) {
-                continue;
-            }
-
-            // Ignore if parameter ignore is true
-            if(sinkConfig.getIgnore() != null && sinkConfig.getIgnore()) {
-                continue;
-            }
-
-            // Skip already done module.
-            if(executedModuleNames.contains(sinkConfig.getName())) {
-                continue;
-            }
-
-            // Add queue if wait not done.
-            if(sinkConfig.getWaits() != null && !outputs.keySet().containsAll(sinkConfig.getWaits())) {
-                notDoneModules.add(sinkConfig);
-                continue;
-            }
-
-            // Add queue if input not done.
-            if(!outputs.keySet().containsAll(sinkConfig.getInputs())) {
-                notDoneModules.add(sinkConfig);
-                continue;
-            }
-
-            // Add waits
-            final List<MCollection> waits;
-            if(sinkConfig.getWaits() == null) {
-                waits = new ArrayList<>();
-            } else {
-                waits = sinkConfig.getWaits().stream()
-                        .map(outputs::get)
-                        .collect(Collectors.toList());
-            }
-
-            final List<MCollection> inputs = sinkConfig.getInputs().stream()
-                    .map(outputs::get)
-                    .collect(Collectors.toList());
-
-            try {
-                final MCollectionTuple input;
-                if("action".equalsIgnoreCase(sinkConfig.getModule())) {
-                    input = MCollectionTuple.empty(pipeline);
-                } else {
-                    input = MCollectionTuple.mergeCollection(inputs);
-                }
-                final Sink sink = Sink.create(sinkConfig, pipeline.getOptions(), waits, errorHandler);
-                final MCollectionTuple output = input
-                        .apply(sinkConfig.getName(), sink)
-                        .withSource(sinkConfig.getName());
-                outputs.putAll(output.asCollectionMap());
-                executedModuleNames.add(sinkConfig.getName());
-            } catch (final IllegalModuleException e) {
-                throw new IllegalModuleException(sinkConfig.getName(), sinkConfig.getModule(), e.errorMessages);
-            } catch (final Throwable e) {
-                throw new IllegalModuleException(sinkConfig.getName(), sinkConfig.getModule(), e);
-            }
-        }
-
-        if(notDoneModules.isEmpty()) {
-            return;
-        }
-        if(notDoneModules.size() == sinkConfigs.size()) {
-            return;
-        }
-        setSinkResult(pipeline, notDoneModules, outputs, executedModuleNames, errorHandler);
+        setResult(pipeline, notDoneModules, outputs, executedModuleNames, errorHandler);
     }
 
     private static Set<String> moduleNames(final Config config) {

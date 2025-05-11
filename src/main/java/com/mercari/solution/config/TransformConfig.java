@@ -11,7 +11,6 @@ public class TransformConfig extends ModuleConfig {
     private List<String> inputs;
     private JsonObject schema;
     private Strategy strategy;
-    private List<String> sideInputs;
 
     public List<String> getInputs() {
         return inputs;
@@ -27,10 +26,6 @@ public class TransformConfig extends ModuleConfig {
 
     public Strategy getStrategy() {
         return strategy;
-    }
-
-    public List<String> getSideInputs() {
-        return sideInputs;
     }
 
 }

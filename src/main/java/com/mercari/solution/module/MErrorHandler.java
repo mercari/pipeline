@@ -13,7 +13,6 @@ import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
 import org.apache.beam.sdk.values.PCollection;
 
-import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,10 +38,10 @@ public class MErrorHandler implements AutoCloseable, Serializable {
         if(config.getFailures().isEmpty()) {
             return empty();
         }
-        if(Optional.ofNullable(config.getSystem().getFailures().getFailFast()).orElse(false)) {
+        if(Optional.ofNullable(config.getSystem().getFailure().getFailFast()).orElse(false)) {
             return empty();
         }
-        if(!config.getSystem().getFailures().getUnion()) {
+        if(!config.getSystem().getFailure().getUnion()) {
             return empty();
         }
         return of(registerErrorHandler(pipeline, config));
@@ -67,7 +66,7 @@ public class MErrorHandler implements AutoCloseable, Serializable {
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
         if(errorHandler != null && !errorHandler.isClosed()) {
             errorHandler.close();
         }
