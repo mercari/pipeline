@@ -25,7 +25,7 @@ public class DatastoreSink extends Sink {
 
     private static final Logger LOG = LoggerFactory.getLogger(DatastoreSink.class);
 
-    private static class DatastoreSinkParameters implements Serializable {
+    private static class Parameters implements Serializable {
 
         private String projectId;
         private String kind;
@@ -64,10 +64,10 @@ public class DatastoreSink extends Sink {
 
     @Override
     public MCollectionTuple expand(
-            MCollectionTuple inputs,
-            MErrorHandler errorHandler) {
+            final MCollectionTuple inputs,
+            final MErrorHandler errorHandler) {
 
-        final DatastoreSinkParameters parameters = getParameters(DatastoreSinkParameters.class);
+        final Parameters parameters = getParameters(Parameters.class);
         parameters.validate();
         parameters.setDefaults();
 
@@ -84,11 +84,13 @@ public class DatastoreSink extends Sink {
 
         final String projectId = Optional.ofNullable(parameters.projectId).orElse(execEnvProject);
 
-        final PDone done;
         if(parameters.delete) {
-            final DatastoreV1.DeleteEntity delete = DatastoreIO.v1().deleteEntity()
+            final DatastoreV1.DeleteEntity delete = DatastoreIO
+                    .v1()
+                    .deleteEntity()
                     .withProjectId(projectId);
-            done = entities.apply("DeleteEntity", delete);
+            final PDone done = entities.apply("DeleteEntity", delete);
+            return MCollectionTuple.done(done);
         } else {
             final DatastoreV1.Write write;
             if(parameters.enableRampupThrottling) {
@@ -99,10 +101,12 @@ public class DatastoreSink extends Sink {
                         .withRampupThrottlingDisabled()
                         .withProjectId(projectId);
             }
-            done = entities.apply("DeleteEntity", write);
+            final PCollection<MElement> output = entities
+                    .apply("WriteEntity", write.withResults())
+                    .apply("Format", ParDo.of(new SummaryWriteDoFn()));
+            return MCollectionTuple.of(output, createSummarySchema());
         }
 
-        return MCollectionTuple.done(done);
     }
 
     private static class EntityDoFn extends DoFn<MElement, Entity> {
@@ -118,7 +122,7 @@ public class DatastoreSink extends Sink {
         private transient Template templateKey;
 
         public EntityDoFn(final Schema inputSchema,
-                          final DatastoreSinkParameters parameters) {
+                          final Parameters parameters) {
 
             this.inputSchema = inputSchema;
             this.kind = parameters.kind;
@@ -214,6 +218,32 @@ public class DatastoreSink extends Sink {
             c.output(entity);
         }
 
+    }
+
+    private static class SummaryWriteDoFn extends DoFn<DatastoreV1.WriteSuccessSummary, MElement> {
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final DatastoreV1.WriteSuccessSummary successSummary = c.element();
+            if(successSummary == null) {
+                return;
+            }
+
+            final MElement output = MElement.builder()
+                    .withInt32("numWrites", successSummary.getNumWrites())
+                    .withInt64("numBytes", successSummary.getNumBytes())
+                    .withEventTime(c.timestamp())
+                    .build();
+            c.output(output);
+        }
+
+    }
+
+    private static Schema createSummarySchema() {
+        return Schema.builder()
+                .withField("numWrites", Schema.FieldType.INT32)
+                .withField("numBytes", Schema.FieldType.INT64)
+                .build();
     }
 
 }

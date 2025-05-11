@@ -15,6 +15,7 @@ import org.apache.beam.sdk.io.gcp.firestore.FirestoreOptions;
 import org.apache.beam.sdk.io.gcp.firestore.FirestoreV1;
 import org.apache.beam.sdk.io.gcp.firestore.RpcQosOptions;
 import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.joda.time.Duration;
@@ -203,17 +204,19 @@ public class FirestoreSink extends Sink {
                             .withRpcQosOptions(parameters.getRpcQos().create())
                             .build())
                     .apply("Format", ParDo.of(new SummaryDoFn()));
+            return MCollectionTuple.of(output, createSummarySchema());
         } else {
-            final PCollection<MElement> output = writes
+            final PCollection<BadRecord> badRecords = writes
                     .apply("WriteDocument", FirestoreIO.v1().write()
                             .batchWrite()
                             .withRpcQosOptions(parameters.getRpcQos().create())
                             .withDeadLetterQueue()
                             .build())
                     .apply("Format", ParDo.of(new FailureDoFn()));
+            errorHandler.addError(badRecords);
+            return MCollectionTuple.empty(inputs.getPipeline());
         }
 
-        return null;
     }
 
     private static class ConvertWriteDoFn extends DoFn<MElement, Write> {
@@ -310,20 +313,41 @@ public class FirestoreSink extends Sink {
     }
 
     private static class SummaryDoFn extends DoFn<FirestoreV1.WriteSuccessSummary, MElement> {
+
         @ProcessElement
         public void processElement(ProcessContext c) {
-
+            final FirestoreV1.WriteSuccessSummary successSummary = c.element();
+            if(successSummary == null) {
+                return;
+            }
+            final MElement output = MElement.builder()
+                    .withInt32("numWrites", successSummary.getNumWrites())
+                    .withInt64("numBytes", successSummary.getNumBytes())
+                    .withEventTime(c.timestamp())
+                    .build();
+            c.output(output);
         }
 
     }
 
-    private static class FailureDoFn extends DoFn<FirestoreV1.WriteFailure, MElement> {
+    private static class FailureDoFn extends DoFn<FirestoreV1.WriteFailure, BadRecord> {
 
         @ProcessElement
         public void processElement(ProcessContext c) {
-
+            final FirestoreV1.WriteFailure writeFailure = c.element();
+            if(writeFailure == null) {
+                return;
+            }
+            // TODO
         }
 
+    }
+
+    private static Schema createSummarySchema() {
+        return Schema.builder()
+                .withField("numWrites", Schema.FieldType.INT32)
+                .withField("numBytes", Schema.FieldType.INT64)
+                .build();
     }
 
 }
