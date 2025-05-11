@@ -14,27 +14,26 @@
   <properties>
     <beam.version>2.64.0</beam.version>
 
-    <hadoop.version>3.4.1</hadoop.version>
-    <hbase.version>2.6.2</hbase.version>
-    <onnxruntime.version>1.21.0</onnxruntime.version>
-    <onnxruntime-extensions.version>0.13.0</onnxruntime-extensions.version>
-    <onnx.version>1.17.0-1.5.11</onnx.version>
-
+    <snakeyaml.version>2.9</snakeyaml.version>
     <freemarker.version>2.3.34</freemarker.version>
     <exp4j.version>0.4.8</exp4j.version>
-    <jsoup.version>1.19.1</jsoup.version>
-    <snakeyaml.version>2.9</snakeyaml.version>
     <commons-math3.version>3.6.1</commons-math3.version>
-    <lucene.version>10.1.0</lucene.version>
-    <pdfbox.version>3.0.4</pdfbox.version>
+    <lucene.version>10.2.1</lucene.version>
+    <pdfbox.version>3.0.5</pdfbox.version>
+    <jsoup.version>1.20.1</jsoup.version>
 
+    <hbase.version>2.6.2</hbase.version>
     <mysql-connector.version>8.4.0</mysql-connector.version>
-    <postgresql-connector.version>42.7.4</postgresql-connector.version>
+    <postgresql-connector.version>42.7.5</postgresql-connector.version>
     <sqlserver-connector.version>8.4.1.jre11</sqlserver-connector.version>
-    <alloydb-connector.version>1.1.8</alloydb-connector.version>
-    <jdbc-socket-factory.version>1.21.0</jdbc-socket-factory.version>
+    <alloydb-connector.version>1.2.2</alloydb-connector.version>
+    <jdbc-socket-factory.version>1.25.0</jdbc-socket-factory.version>
     <h2.version>2.3.232</h2.version>
-    <drive.version>v3-rev20250220-2.0.0</drive.version>
+    <drive.version>v3-rev20250427-2.0.0</drive.version>
+
+    <onnxruntime.version>1.22.0</onnxruntime.version>
+    <onnxruntime-extensions.version>0.13.0</onnxruntime-extensions.version>
+    <onnx.version>1.17.0-1.5.11</onnx.version>
 
     <slf4j.version>2.0.16</slf4j.version>
     <junit.version>4.13.1</junit.version>
@@ -438,21 +437,6 @@
     -->
 
     <!-- Big Data -->
-    <!-- https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-mapreduce-client-core -->
-    <!--
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-mapreduce-client-core</artifactId>
-      <version>${hadoop.version}</version>
-      <exclusions>
-        <exclusion>
-          <groupId>*</groupId>
-          <artifactId>*</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    -->
-
     <!-- https://mvnrepository.com/artifact/org.apache.hbase/hbase-common -->
     <dependency>
       <groupId>org.apache.hbase</groupId>
