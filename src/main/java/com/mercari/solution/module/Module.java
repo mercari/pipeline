@@ -19,7 +19,6 @@ import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.*;
 
 public abstract class Module<T extends PInput> extends PTransform<T, MCollectionTuple> {
@@ -175,22 +174,16 @@ public abstract class Module<T extends PInput> extends PTransform<T, MCollection
         if(getFailFast()) {
             try(final MErrorHandler errorHandler = MErrorHandler.empty()) {
                 return expand(input, errorHandler);
-            } catch (final IOException e) {
-                throw new IllegalStateException(e);
             }
         } else if(pipelineErrorHandler != null && !pipelineErrorHandler.isEmpty()) {
             return expand(input, pipelineErrorHandler);
         } else if(hasFailures()) {
             try(final MErrorHandler errorHandler = MErrorHandler.of(registerErrorHandler(input))) {
                 return expand(input, errorHandler);
-            } catch (final IOException e) {
-                throw new IllegalStateException(e);
             }
         } else {
             try(final MErrorHandler errorHandler = MErrorHandler.empty()) {
                 return expand(input, errorHandler);
-            } catch (final IOException e) {
-                throw new IllegalStateException(e);
             }
         }
     }

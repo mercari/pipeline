@@ -7,6 +7,7 @@ import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
 import org.apache.avro.reflect.Nullable;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
 import org.apache.beam.sdk.coders.DefaultCoder;
@@ -103,6 +104,41 @@ public class JdbcUtil {
         return new CloseableDataSource(new PoolingDataSource(connectionPool));
     }
 
+    public static Schema createAvroSchemaFromTable(
+            final String driverClassName,
+            final String url,
+            final String username,
+            final String password,
+            final String table) throws SQLException {
+
+        try {
+            Class.forName(driverClassName);
+            try(final Connection connection = DriverManager.getConnection(url, username, password)) {
+                final String tableQuery = String.format("SELECT * FROM %s LIMIT 1", table);
+                try(final PreparedStatement statement = connection.prepareStatement(tableQuery, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+                    if(statement.getMetaData() == null) {
+                        throw new IllegalArgumentException("Failed to get schema for query: " + tableQuery);
+                    }
+                    final Schema schema = ResultSetToRecordConverter.convertSchema(statement.getMetaData());
+                    final List<String> parameterFieldNames = getPrimaryKeyNames(connection, null, null, table);
+                    final String parameterFieldNamesAttr = String.join(",", parameterFieldNames);
+                    final SchemaBuilder.FieldAssembler<Schema> schemaBuilder = SchemaBuilder
+                            .record("root")
+                            .prop("primaryKeys", parameterFieldNamesAttr)
+                            .fields();
+                    schema.getFields().forEach(f -> {
+                        if(parameterFieldNames.contains(f.name())) {
+                            schemaBuilder.name(f.name()).type(f.schema()).noDefault();
+                        }
+                    });
+                    return schemaBuilder.endRecord();
+                }
+            }
+        } catch (final ClassNotFoundException e) {
+            throw new RuntimeException("driver class: " + driverClassName + " not found", e);
+        }
+    }
+
     public static Schema createAvroSchemaFromQuery(
             final String driverClassName,
             final String url,
@@ -111,10 +147,13 @@ public class JdbcUtil {
             final String query,
             final List<String> prepareCalls) throws Exception {
 
-        try(final CloseableDataSource source = createDataSource(driverClassName, url, username, password, true)) {
-            try(final Connection connection = source.getConnection()) {
+        try {
+            Class.forName(driverClassName);
+            try(final Connection connection = DriverManager.getConnection(url, username, password)) {
                 return createAvroSchemaFromQuery(connection, query, prepareCalls);
             }
+        } catch (final ClassNotFoundException e) {
+            throw new RuntimeException("driver class: " + driverClassName + " not found", e);
         }
     }
 
@@ -180,21 +219,13 @@ public class JdbcUtil {
             throw new IllegalArgumentException("jdbc module does not support DELETE op.");
         }
 
-        switch (db) {
-            case MYSQL -> {
-                return createMySQLStatement(table, schema, op, keyFields);
-            }
-            case POSTGRESQL -> {
-                return createPostgreSQLStatement(table, schema, op, keyFields);
-            }
-            case H2 -> {
-                return createH2Statement(table, schema, op, keyFields);
-            }
-            case SQLSERVER -> {
-                return createSQLServerStatement(table, schema, op, keyFields);
-            }
+        return switch (db) {
+            case MYSQL -> createMySQLStatement(table, schema, op, keyFields);
+            case POSTGRESQL -> createPostgreSQLStatement(table, schema, op, keyFields);
+            case H2 -> createH2Statement(table, schema, op, keyFields);
+            case SQLSERVER -> createSQLServerStatement(table, schema, op, keyFields);
             default -> throw new IllegalArgumentException("Not supported database: " + db);
-        }
+        };
     }
 
     private static PreparedStatementTemplate createMySQLStatement(final String table, final Schema schema,
@@ -422,17 +453,9 @@ public class JdbcUtil {
             return;
         }
         switch (fieldSchema.getType()) {
-            case BOOLEAN: {
-                statement.setBoolean(parameterIndex, (Boolean) fieldValue);
-                break;
-            }
-            case ENUM:
-            case STRING: {
-                statement.setString(parameterIndex, fieldValue.toString());
-                break;
-            }
-            case FIXED:
-            case BYTES: {
+            case BOOLEAN -> statement.setBoolean(parameterIndex, (Boolean) fieldValue);
+            case ENUM, STRING -> statement.setString(parameterIndex, fieldValue.toString());
+            case FIXED, BYTES -> {
                 if(AvroSchemaUtil.isLogicalTypeDecimal(fieldSchema)) {
                     final ByteBuffer byteBuffer = (ByteBuffer) fieldValue;
                     final BigDecimal decimal = AvroSchemaUtil.getAsBigDecimal(fieldSchema, byteBuffer);
@@ -440,9 +463,8 @@ public class JdbcUtil {
                 } else {
                     statement.setBytes(parameterIndex, ((ByteBuffer) fieldValue).array());
                 }
-                break;
             }
-            case INT: {
+            case INT -> {
                 final Integer value = (Integer) fieldValue;
                 if(LogicalTypes.date().equals(fieldSchema.getLogicalType())) {
                     statement.setDate(parameterIndex, java.sql.Date.valueOf(LocalDate.ofEpochDay(Long.valueOf(value))));
@@ -451,9 +473,8 @@ public class JdbcUtil {
                 } else {
                     statement.setInt(parameterIndex, value);
                 }
-                break;
             }
-            case LONG: {
+            case LONG -> {
                 final Long value = (Long) fieldValue;
                 if(LogicalTypes.timestampMillis().equals(fieldSchema.getLogicalType())) {
                     statement.setTimestamp(parameterIndex, java.sql.Timestamp.valueOf(DateTimeUtil.toLocalDateTime(value * 1000L)));
@@ -466,34 +487,19 @@ public class JdbcUtil {
                 }
                 break;
             }
-            case FLOAT: {
-                statement.setFloat(parameterIndex, (Float) fieldValue);
-                break;
-            }
-            case DOUBLE: {
-                statement.setDouble(parameterIndex, (Double) fieldValue);
-                break;
-            }
-            case NULL: {
-                break;
-            }
-            case UNION: {
-                setStatement(statement, parameterIndex, AvroSchemaUtil.unnestUnion(fieldSchema), fieldValue);
-                break;
-            }
-            case MAP:
-            case RECORD:
-            case ARRAY:
-            default: {
-                throw new IllegalStateException("Not supported prepare parameter type: " + fieldSchema.getType().getName());
-            }
+            case FLOAT -> statement.setFloat(parameterIndex, (Float) fieldValue);
+            case DOUBLE -> statement.setDouble(parameterIndex, (Double) fieldValue);
+            case NULL -> {}
+            case UNION -> setStatement(statement, parameterIndex, AvroSchemaUtil.unnestUnion(fieldSchema), fieldValue);
+            default -> throw new IllegalStateException("Not supported prepare parameter type: " + fieldSchema.getType().getName());
         }
     }
 
-    public static List<String> getPrimaryKeyNames(final Connection connection,
-                                                  final String database,
-                                                  final String namespace,
-                                                  final String table) throws SQLException {
+    public static List<String> getPrimaryKeyNames(
+            final Connection connection,
+            final String database,
+            final String namespace,
+            final String table) throws SQLException {
 
         final DatabaseMetaData metaData = connection.getMetaData();
         try (final ResultSet resultSet = metaData.getPrimaryKeys(database, namespace, table)) {
@@ -538,148 +544,105 @@ public class JdbcUtil {
     }
 
     private static boolean isValidColumnType(final Schema fieldSchema) {
-        switch (fieldSchema.getType()) {
-            case MAP:
-            case RECORD:
-                return false;
-            case ARRAY:
-                if(!isValidColumnType(fieldSchema.getElementType())) {
-                    return false;
-                }
-                return true;
-            case UNION:
-                return isValidColumnType(AvroSchemaUtil.unnestUnion(fieldSchema));
-            default:
-                return true;
-        }
+        return switch (fieldSchema.getType()) {
+            case MAP, RECORD -> false;
+            case ARRAY -> isValidColumnType(fieldSchema.getElementType());
+            case UNION -> isValidColumnType(AvroSchemaUtil.unnestUnion(fieldSchema));
+            default -> true;
+        };
     }
 
     private static String getColumnType(final Schema schema, final DB db, final boolean isPrimaryKey) {
         final Schema avroSchema = AvroSchemaUtil.unnestUnion(schema);
-        switch (avroSchema.getType()) {
-            case BOOLEAN: {
-                switch (db) {
-                    case MYSQL:
-                        return "TINYINT(1)";
-                    case POSTGRESQL:
-                        return "BOOLEAN";
-                    default:
-                        return "BOOLEAN";
-                }
-            }
-            case ENUM: {
-                switch (db) {
-                    case MYSQL: {
-                        return "VARCHAR(32) CHARACTER SET utf8mb4";
-                    }
-                    case POSTGRESQL:
-                    default:
-                        return "VARCHAR(32)";
-                }
-            }
-            case STRING: {
-                switch (db) {
-                    case MYSQL: {
-                        if (isPrimaryKey) {
-                            return "VARCHAR(64) CHARACTER SET utf8mb4";
-                        } else {
-                            return "TEXT CHARACTER SET utf8mb4";
-                        }
-                    }
-                    case POSTGRESQL:
-                    default: {
-                        if (isPrimaryKey) {
-                            return "VARCHAR(64)";
-                        } else {
-                            return "TEXT";
-                        }
+        return switch (avroSchema.getType()) {
+            case BOOLEAN -> switch (db) {
+                case MYSQL -> "TINYINT(1)";
+                default -> "BOOLEAN";
+            };
+            case ENUM -> switch (db) {
+                case MYSQL -> "VARCHAR(32) CHARACTER SET utf8mb4";
+                default -> "VARCHAR(32)";
+            };
+            case STRING -> switch (db) {
+                case MYSQL -> {
+                    if (isPrimaryKey) {
+                        yield "VARCHAR(64) CHARACTER SET utf8mb4";
+                    } else {
+                        yield "TEXT CHARACTER SET utf8mb4";
                     }
                 }
-            }
-            case FIXED:
-            case BYTES: {
+                default -> {
+                    if (isPrimaryKey) {
+                        yield "VARCHAR(64)";
+                    } else {
+                        yield "TEXT";
+                    }
+                }
+            };
+            case FIXED, BYTES -> {
                 if (AvroSchemaUtil.isLogicalTypeDecimal(avroSchema)) {
-                    return "DECIMAL(38, 9)";
+                    yield "DECIMAL(38, 9)";
                 }
-                switch (db) {
-                    case MYSQL:
-                        return "MEDIUMBLOB";
-                    case POSTGRESQL:
-                        return "BYTEA";
-                    default:
-                        break;
-                }
-                return "BLOB";
+                yield switch (db) {
+                    case MYSQL -> "MEDIUMBLOB";
+                    case POSTGRESQL -> "BYTEA";
+                    default -> "BLOB";
+                };
             }
-            case INT:
+            case INT -> {
                 if (LogicalTypes.date().equals(avroSchema.getLogicalType())) {
-                    return "DATE";
+                    yield "DATE";
                 } else if (LogicalTypes.timeMillis().equals(avroSchema.getLogicalType())) {
-                    return "TIME";
+                    yield "TIME";
                 } else {
-                    return "INTEGER";
-                }
-            case LONG: {
-                switch (db) {
-                    case MYSQL: {
-                        if (LogicalTypes.timestampMillis().equals(avroSchema.getLogicalType())) {
-                            return "TIMESTAMP DEFAULT CURRENT_TIMESTAMP";
-                        } else if (LogicalTypes.timestampMicros().equals(avroSchema.getLogicalType())) {
-                            return "TIMESTAMP DEFAULT CURRENT_TIMESTAMP";
-                        } else if (LogicalTypes.timeMicros().equals(avroSchema.getLogicalType())) {
-                            return "TIME";
-                        } else {
-                            return "BIGINT";
-                        }
-                    }
-                    case POSTGRESQL: {
-                        if (LogicalTypes.timestampMillis().equals(avroSchema.getLogicalType())) {
-                            return "TIMESTAMP";
-                        } else if (LogicalTypes.timestampMicros().equals(avroSchema.getLogicalType())) {
-                            return "TIMESTAMP";
-                        } else if (LogicalTypes.timeMicros().equals(avroSchema.getLogicalType())) {
-                            return "TIME";
-                        } else {
-                            return "BIGINT";
-                        }
-                    }
-                    case SQLSERVER: {
-                        if (LogicalTypes.timestampMillis().equals(avroSchema.getLogicalType())) {
-                            return "TIMESTAMP";
-                        } else if (LogicalTypes.timestampMicros().equals(avroSchema.getLogicalType())) {
-                            return "TIMESTAMP";
-                        } else if (LogicalTypes.timeMicros().equals(avroSchema.getLogicalType())) {
-                            return "TIME";
-                        } else {
-                            return "BIGINT";
-                        }
-                    }
+                    yield "INTEGER";
                 }
             }
-            case FLOAT:
-                return "REAL";
-            case DOUBLE: {
-                switch (db) {
-                    case MYSQL:
-                        return "DOUBLE";
-                    case POSTGRESQL:
-                        return "DOUBLE PRECISION";
-                    default:
-                        break;
+            case LONG -> switch (db) {
+                case MYSQL -> {
+                    if (LogicalTypes.timestampMillis().equals(avroSchema.getLogicalType())) {
+                        yield "TIMESTAMP DEFAULT CURRENT_TIMESTAMP";
+                    } else if (LogicalTypes.timestampMicros().equals(avroSchema.getLogicalType())) {
+                        yield "TIMESTAMP DEFAULT CURRENT_TIMESTAMP";
+                    } else if (LogicalTypes.timeMicros().equals(avroSchema.getLogicalType())) {
+                        yield "TIME";
+                    } else {
+                        yield "BIGINT";
+                    }
                 }
-                return "DOUBLE";
-            }
-            case ARRAY: {
+                case POSTGRESQL -> {
+                    if (LogicalTypes.timestampMillis().equals(avroSchema.getLogicalType())) {
+                        yield "TIMESTAMP";
+                    } else if (LogicalTypes.timestampMicros().equals(avroSchema.getLogicalType())) {
+                        yield "TIMESTAMP";
+                    } else if (LogicalTypes.timeMicros().equals(avroSchema.getLogicalType())) {
+                        yield "TIME";
+                    } else {
+                        yield "BIGINT";
+                    }
+                }
+                case SQLSERVER -> {
+                    if (LogicalTypes.timestampMillis().equals(avroSchema.getLogicalType())) {
+                        yield "TIMESTAMP";
+                    } else if (LogicalTypes.timestampMicros().equals(avroSchema.getLogicalType())) {
+                        yield "TIMESTAMP";
+                    } else if (LogicalTypes.timeMicros().equals(avroSchema.getLogicalType())) {
+                        yield "TIME";
+                    } else {
+                        yield "BIGINT";
+                    }
+                }
+                default -> "BIGINT";
 
-            }
-            case NULL:
-            case MAP:
-            case RECORD:
-            case UNION:
-            default:
-                throw new IllegalArgumentException(String.format("DataType: %s is not supported!", avroSchema.getType().name()));
-
-        }
+            };
+            case FLOAT -> "REAL";
+            case DOUBLE -> switch (db) {
+                case MYSQL -> "DOUBLE";
+                case POSTGRESQL -> "DOUBLE PRECISION";
+                default -> "DOUBLE";
+            };
+            default -> throw new IllegalArgumentException(String.format("DataType: %s is not supported!", avroSchema.getType().name()));
+        };
     }
 
     private static String replaceReservedKeyword(final String term) {
@@ -698,55 +661,29 @@ public class JdbcUtil {
         final IndexOffset firstFromOffset = from.get(0);
         final IndexOffset firstToOffset = to.get(0);
 
-        final List<IndexOffset> splitOffsets;
-        switch (firstFromOffset.getFieldType()) {
-            case BOOLEAN:
-                splitOffsets = splitBoolean(firstFromOffset.getFieldName(), firstToOffset.getAscending());
-                break;
-            case INT:
-                splitOffsets = splitInteger(firstFromOffset.getFieldName(),
+        final List<IndexOffset> splitOffsets = switch (firstFromOffset.getFieldType()) {
+            case BOOLEAN -> splitBoolean(firstFromOffset.getFieldName(), firstToOffset.getAscending());
+            case INT -> splitInteger(firstFromOffset.getFieldName(),
                         firstFromOffset.getIntValue(), firstToOffset.getIntValue(),
                         firstFromOffset.getAscending(), splitNum);
-                break;
-            case LONG:
-                splitOffsets = splitLong(firstFromOffset.getFieldName(),
+            case LONG -> splitLong(firstFromOffset.getFieldName(),
                         firstFromOffset.getLongValue(), firstToOffset.getLongValue(),
                         firstFromOffset.getAscending(), splitNum);
-                break;
-            case FLOAT:
-                splitOffsets = splitFloat(firstFromOffset.getFieldName(),
+            case FLOAT -> splitFloat(firstFromOffset.getFieldName(),
                         firstFromOffset.getFloatValue(), firstToOffset.getFloatValue(),
                         firstFromOffset.getAscending(), splitNum);
-                break;
-            case DOUBLE:
-                splitOffsets = splitDouble(firstFromOffset.getFieldName(),
+            case DOUBLE -> splitDouble(firstFromOffset.getFieldName(),
                         firstFromOffset.getDoubleValue(), firstToOffset.getDoubleValue(),
                         firstFromOffset.getAscending(), splitNum);
-                break;
-            case ENUM:
-            case STRING: {
-                splitOffsets = splitString(firstFromOffset.getFieldName(),
+            case ENUM, STRING -> splitString(firstFromOffset.getFieldName(),
                         firstFromOffset.getStringValue(), firstToOffset.getStringValue(),
                         firstFromOffset.getAscending(), splitNum,
                         firstFromOffset.getIsCaseSensitive());
-                break;
-            }
-            case FIXED:
-            case BYTES: {
-                splitOffsets = splitBytes(firstFromOffset.getFieldName(),
+            case FIXED, BYTES -> splitBytes(firstFromOffset.getFieldName(),
                         firstFromOffset.getBytesValue(), firstToOffset.getBytesValue(),
                         firstFromOffset.getAscending(), splitNum);
-                break;
-            }
-            case UNION:
-            case RECORD:
-            case MAP:
-            case ARRAY:
-            case NULL:
-            default: {
-                throw new IllegalArgumentException("Not supported range type: " + firstFromOffset.getFieldType());
-            }
-        }
+            default -> throw new IllegalArgumentException("Not supported range type: " + firstFromOffset.getFieldType());
+        };
 
         List<IndexOffset> parentOffsets = new ArrayList<>();
         if(parents != null && !parents.isEmpty()) {
@@ -1354,40 +1291,17 @@ public class JdbcUtil {
         }
 
         public Object getValue() {
-            switch (this.fieldType) {
-                case BOOLEAN: {
-                    return this.booleanValue;
-                }
-                case ENUM:
-                case STRING: {
-                    return this.stringValue;
-                }
-                case FIXED:
-                case BYTES: {
-                    return this.bytesValue;
-                }
-                case INT: {
-                    return this.intValue;
-                }
-                case LONG: {
-                    return this.longValue;
-                }
-                case FLOAT: {
-                    return this.floatValue;
-                }
-                case DOUBLE: {
-                    return this.doubleValue;
-                }
-                case NULL:
-                    return null;
-                case UNION:
-                case MAP:
-                case RECORD:
-                case ARRAY:
-                default: {
-                    throw new IllegalArgumentException("Not supported range type: " + fieldType);
-                }
-            }
+            return switch (this.fieldType) {
+                case BOOLEAN -> this.booleanValue;
+                case ENUM, STRING -> this.stringValue;
+                case FIXED, BYTES -> this.bytesValue;
+                case INT -> this.intValue;
+                case LONG -> this.longValue;
+                case FLOAT -> this.floatValue;
+                case DOUBLE -> this.doubleValue;
+                case NULL -> null;
+                default -> throw new IllegalArgumentException("Not supported range type: " + fieldType);
+            };
         }
 
         public boolean isGreaterThan(final IndexOffset another) {
@@ -1406,49 +1320,30 @@ public class JdbcUtil {
             } else if(another.getValue() == null) {
                 return 1;
             }
-            switch (this.fieldType) {
-                case BOOLEAN: {
-                    return this.booleanValue.compareTo(another.getBooleanValue());
-                }
-                case ENUM:
-                case STRING: {
+            return switch (this.fieldType) {
+                case BOOLEAN -> this.booleanValue.compareTo(another.getBooleanValue());
+                case ENUM, STRING -> {
                     if(isCaseSensitive) {
-                        return this.stringValue.compareTo(another.getStringValue());
+                        yield this.stringValue.compareTo(another.getStringValue());
                     } else {
-                        return this.stringValue.compareToIgnoreCase(another.getStringValue());
+                        yield this.stringValue.compareToIgnoreCase(another.getStringValue());
                     }
                 }
-                case FIXED:
-                case BYTES: {
+                case FIXED, BYTES -> {
                     if("decimal".equals(logicalType)) {
-                        return BigDecimal.valueOf(new BigInteger(this.bytesValue.array()).longValue(), 9)
+                        yield BigDecimal.valueOf(new BigInteger(this.bytesValue.array()).longValue(), 9)
                                 .compareTo(BigDecimal.valueOf(new BigInteger(another.bytesValue.array()).longValue(), 9));
                     }
-                    return new String(Hex.encodeHex(this.bytesValue.array()))
+                    yield new String(Hex.encodeHex(this.bytesValue.array()))
                             .compareTo(new String(Hex.encodeHex(another.bytesValue.array())));
                 }
-                case INT: {
-                    return this.intValue.compareTo(another.getIntValue());
-                }
-                case LONG: {
-                    return this.longValue.compareTo(another.getLongValue());
-                }
-                case FLOAT: {
-                    return this.floatValue.compareTo(another.getFloatValue());
-                }
-                case DOUBLE: {
-                    return this.doubleValue.compareTo(another.getDoubleValue());
-                }
-                case NULL:
-                    return 0;
-                case UNION:
-                case MAP:
-                case RECORD:
-                case ARRAY:
-                default: {
-                    throw new IllegalArgumentException("Not supported range type: " + fieldType);
-                }
-            }
+                case INT -> this.intValue.compareTo(another.getIntValue());
+                case LONG -> this.longValue.compareTo(another.getLongValue());
+                case FLOAT -> this.floatValue.compareTo(another.getFloatValue());
+                case DOUBLE -> this.doubleValue.compareTo(another.getDoubleValue());
+                case NULL -> 0;
+                default -> throw new IllegalArgumentException("Not supported range type: " + fieldType);
+            };
         }
 
         @Override
@@ -1462,53 +1357,36 @@ public class JdbcUtil {
             if(getValue() == null) {
                 return "null";
             }
-            switch (this.fieldType) {
-                case BOOLEAN: {
-                    return this.booleanValue.toString();
-                }
-                case ENUM:
-                case STRING: {
-                    return this.stringValue;
-                }
-                case FIXED:
-                case BYTES: {
-                    if("decimal".equals(logicalType)) {
-                        return BigDecimal.valueOf(new BigInteger(this.bytesValue.array()).longValue(), 9).toString();
+            return switch (this.fieldType) {
+                case BOOLEAN -> this.booleanValue.toString();
+                case ENUM, STRING -> this.stringValue;
+                case FIXED, BYTES -> {
+                    if ("decimal".equals(logicalType)) {
+                        yield BigDecimal.valueOf(new BigInteger(this.bytesValue.array()).longValue(), 9).toString();
                     }
-                    return new String(Hex.encodeHex(this.bytesValue.array()));
+                    yield new String(Hex.encodeHex(this.bytesValue.array()));
                 }
-                case INT: {
-                    if("date".equals(logicalType)) {
-                        return LocalDate.ofEpochDay(this.intValue).toString();
-                    } else if("time-millis".equals(logicalType)) {
-                        return LocalTime.ofNanoOfDay(1000000L * this.intValue).toString();
+                case INT -> {
+                    if ("date".equals(logicalType)) {
+                        yield LocalDate.ofEpochDay(this.intValue).toString();
+                    } else if ("time-millis".equals(logicalType)) {
+                        yield LocalTime.ofNanoOfDay(1000000L * this.intValue).toString();
                     }
-                    return this.intValue.toString();
+                    yield this.intValue.toString();
                 }
-                case LONG: {
-                    if("timestamp-micros".equals(logicalType)) {
-                        return DateTimeUtil.toLocalDateTime(this.longValue).toString();
-                    } else if("time-micros".equals(logicalType)) {
-                        return LocalTime.ofNanoOfDay(1000L * this.intValue).toString();
+                case LONG -> {
+                    if ("timestamp-micros".equals(logicalType)) {
+                        yield DateTimeUtil.toLocalDateTime(this.longValue).toString();
+                    } else if ("time-micros".equals(logicalType)) {
+                        yield LocalTime.ofNanoOfDay(1000L * this.intValue).toString();
                     }
-                    return this.longValue.toString();
+                    yield this.longValue.toString();
                 }
-                case FLOAT: {
-                    return this.floatValue.toString();
-                }
-                case DOUBLE: {
-                    return this.doubleValue.toString();
-                }
-                case NULL:
-                    return null;
-                case UNION:
-                case MAP:
-                case RECORD:
-                case ARRAY:
-                default: {
-                    throw new IllegalArgumentException("Not supported range type: " + fieldType);
-                }
-            }
+                case FLOAT -> this.floatValue.toString();
+                case DOUBLE -> this.doubleValue.toString();
+                case NULL -> null;
+                default -> throw new IllegalArgumentException("Not supported range type: " + fieldType);
+            };
         }
 
         public static IndexOffset of(final String fieldName, final Schema.Type fieldType, final Boolean ascending, final Object value) {
@@ -1532,25 +1410,20 @@ public class JdbcUtil {
             indexOffset.setLogicalType(logicalType);
             indexOffset.setIsCaseSensitive(isCaseSensitive);
             switch (fieldType) {
-                case BOOLEAN: {
+                case BOOLEAN -> {
                     indexOffset.booleanValue = (Boolean) value;
-                    break;
                 }
-                case ENUM:
-                case STRING: {
+                case ENUM, STRING -> {
                     if(value == null) {
                         indexOffset.stringValue = null;
                     } else {
                         indexOffset.stringValue = value.toString();
                     }
-                    break;
                 }
-                case FIXED:
-                case BYTES: {
+                case FIXED, BYTES -> {
                     indexOffset.bytesValue = (ByteBuffer) value;
-                    break;
                 }
-                case INT: {
+                case INT -> {
                     if(value == null) {
                         indexOffset.intValue = null;
                     } else if(value instanceof Long) {
@@ -1558,29 +1431,18 @@ public class JdbcUtil {
                     } else {
                         indexOffset.intValue = (Integer) value;
                     }
-                    break;
                 }
-                case LONG: {
+                case LONG -> {
                     indexOffset.longValue = (Long) value;
-                    break;
                 }
-                case FLOAT: {
+                case FLOAT -> {
                     indexOffset.floatValue = (Float) value;
-                    break;
                 }
-                case DOUBLE: {
+                case DOUBLE -> {
                     indexOffset.doubleValue = (Double) value;
-                    break;
                 }
-                case NULL:
-                case UNION:
-                    break;
-                case MAP:
-                case RECORD:
-                case ARRAY:
-                default: {
-                    throw new IllegalArgumentException("Not supported range type: " + fieldType);
-                }
+                case NULL, UNION -> {}
+                default -> throw new IllegalArgumentException("Not supported range type: " + fieldType);
             }
             return indexOffset;
         }

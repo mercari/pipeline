@@ -5,10 +5,7 @@ import com.mercari.solution.module.DataType;
 import com.mercari.solution.module.Logging;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 public class ModuleConfig implements Serializable {
 
@@ -18,6 +15,7 @@ public class ModuleConfig implements Serializable {
 
     private Set<String> tags;
     private Set<String> waits;
+    private List<String> sideInputs;
     private List<Logging> loggings;
 
     private Boolean ignore;
@@ -49,7 +47,17 @@ public class ModuleConfig implements Serializable {
     }
 
     public Set<String> getWaits() {
+        if(waits == null) {
+            return new HashSet<>();
+        }
         return waits;
+    }
+
+    public List<String> getSideInputs() {
+        if(sideInputs == null) {
+            return new ArrayList<>();
+        }
+        return sideInputs;
     }
 
     public List<Logging> getLoggings() {

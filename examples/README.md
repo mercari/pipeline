@@ -11,6 +11,7 @@ Try to find and arrange a configuration file that is similar to the data process
     * [BigQuery to Cloud Firestore](bigquery-to-firestore.json)
     * [BigQuery to Cloud Datastore](bigquery-to-datastore.json)
     * [BigQuery to Cloud Bigtable](bigquery-to-bigtable.json)
+    * [BigQuery to AlloyDB](bigquery-to-alloydb.yaml)
     * [BigQuery to Cloud SQL](bigquery-to-jdbc.json)
     * [BigQuery to AWS S3(Avro)](bigquery-to-aws-avro.json)
     * [BigQuery to Vertex AI Matching Engine](bigquery-to-matchingengine.json)
