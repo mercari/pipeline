@@ -1,0 +1,18 @@
+sources:
+  - name: bigquery
+    module: bigquery
+    parameters:
+      table: "myproject.mydataset.mytable"
+sinks:
+  - name: jdbc
+    module: jdbc
+    inputs:
+      - bigquery
+    parameters:
+      table: mytable
+      url: "jdbc:postgresql:///mydatabase?alloydbInstanceName=projects/myproject/locations/us-central1/clusters/mycluster/instances/myinstance-primary&socketFactory=com.google.cloud.alloydb.SocketFactory"
+      driver: "org.postgresql.Driver"
+      user: postgres
+      password: test
+      op: INSERT
+      batchSize: 1000
