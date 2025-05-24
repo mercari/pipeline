@@ -7,6 +7,8 @@ import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import net.objecthunter.exp4j.Expression;
 import org.joda.time.Instant;
 
@@ -26,7 +28,7 @@ public class Std implements AggregateFunction {
     private Boolean outputVar;
     private String condition;
 
-    private List<Range> ranges;
+    private Range range;
 
     private Boolean ignore;
 
@@ -51,7 +53,7 @@ public class Std implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -60,7 +62,7 @@ public class Std implements AggregateFunction {
         std.field = field;
         std.expression = expression;
         std.condition = condition;
-        std.ranges = ranges;
+        std.range = range;
         std.ignore = ignore;
 
         if(params.has("ddof") && params.get("ddof").isJsonPrimitive()) {
@@ -78,19 +80,23 @@ public class Std implements AggregateFunction {
         std.inputFields = new ArrayList<>();
 
         if(field != null) {
-            std.inputFields.add(Schema.Field.of(field, Schema.getField(inputFields, field).getFieldType()));
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(field, inputFields);
+            std.inputFields.add(Schema.Field.of(field, inputFieldType));
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                std.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                std.inputFields.add(Schema.Field.of(variable, inputFieldType));
             }
         }
         if(params.has("weightField")) {
             std.weightField = params.get("weightField").getAsString();
-            std.inputFields.add(Schema.Field.of(std.weightField, Schema.getField(inputFields, std.weightField).getFieldType()));
+            final Schema.FieldType weightFieldType = ElementSchemaUtil.getInputFieldType(std.weightField, inputFields);
+            std.inputFields.add(Schema.Field.of(std.weightField, weightFieldType));
         } else if(params.has("weightExpression")) {
             std.weightExpression = params.get("weightExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(std.weightExpression)) {
-                std.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType weightFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                std.inputFields.add(Schema.Field.of(variable, weightFieldType));
             }
         }
 
@@ -121,12 +127,12 @@ public class Std implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
     @Override
@@ -173,7 +179,7 @@ public class Std implements AggregateFunction {
         if(field != null) {
             inputValue = input.getAsDouble(field);
         } else {
-            inputValue = AggregateFunction.eval(this.exp, variables, input);
+            inputValue = ExpressionUtil.eval(this.exp, variables, input);
         }
         if(inputValue == null || Double.isNaN(inputValue)) {
             return accumulator;
@@ -182,7 +188,7 @@ public class Std implements AggregateFunction {
         if(weightField != null) {
             inputWeight = input.getAsDouble(weightField);
         } else if(weightExpression != null) {
-            inputWeight = AggregateFunction.eval(this.weightExp, weightVariables, input);
+            inputWeight = ExpressionUtil.eval(this.weightExp, weightVariables, input);
         } else {
             inputWeight = 1D;
         }

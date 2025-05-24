@@ -4,9 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
-import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
-import net.objecthunter.exp4j.Expression;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -34,10 +32,10 @@ public interface AggregateFunction extends StatefulFunction {
     Accumulator mergeAccumulator(Accumulator base, Accumulator input);
 
     static AggregateFunction of(final JsonElement element, final List<Schema.Field> inputFields) {
-        return of(element, inputFields, new ArrayList<>());
+        return of(element, inputFields, null);
     }
 
-    static AggregateFunction of(final JsonElement element, final List<Schema.Field> inputFields, final List<Range> ranges) {
+    static AggregateFunction of(final JsonElement element, final List<Schema.Field> inputFields, final Range range) {
         if (element == null || element.isJsonNull() || !element.isJsonObject()) {
             return null;
         }
@@ -90,41 +88,20 @@ public interface AggregateFunction extends StatefulFunction {
         }
 
         return switch (op) {
-            case count -> Count.of(name, condition, ranges, ignore);
-            case sum -> Sum.of(name, inputFields, field, expression, condition, ranges, ignore);
-            case max -> Max.of(name, inputFields, field, expression, condition, ranges, ignore, false);
-            case min -> Max.of(name, inputFields, field, expression, condition, ranges, ignore, true);
-            case last -> Last.of(name, inputFields, condition, ranges, ignore, params, false);
-            case first -> Last.of(name, inputFields, condition, ranges, ignore, params, true);
-            case argmax -> ArgMax.of(name, inputFields, condition, ranges, ignore, params);
-            case argmin -> ArgMax.of(name, inputFields, condition, ranges, ignore, params, true);
-            case avg -> Avg.of(name, inputFields, field, expression, condition, ranges, ignore, params);
-            case std -> Std.of(name, inputFields, field, expression, condition, ranges, ignore, params);
-            case simple_regression -> SimpleRegression.of(name, inputFields, field, expression, condition, ranges, ignore, params);
-            case array_agg -> ArrayAgg.of(name, inputFields, condition, ranges, ignore, params);
+            case count -> Count.of(name, condition, range, ignore);
+            case sum -> Sum.of(name, inputFields, field, expression, condition, range, ignore);
+            case max -> Max.of(name, inputFields, field, expression, condition, range, ignore, false);
+            case min -> Max.of(name, inputFields, field, expression, condition, range, ignore, true);
+            case last -> Last.of(name, inputFields, condition, range, ignore, params, false);
+            case first -> Last.of(name, inputFields, condition, range, ignore, params, true);
+            case argmax -> ArgMax.of(name, inputFields, condition, range, ignore, params);
+            case argmin -> ArgMax.of(name, inputFields, condition, range, ignore, params, true);
+            case avg -> Avg.of(name, inputFields, field, expression, condition, range, ignore, params);
+            case std -> Std.of(name, inputFields, field, expression, condition, range, ignore, params);
+            case simple_regression -> SimpleRegression.of(name, inputFields, field, expression, condition, range, ignore, params);
+            case array_agg -> ArrayAgg.of(name, inputFields, condition, range, ignore, params);
             default -> throw new IllegalArgumentException("Not supported aggregation op: " + op);
         };
-    }
-
-    static Boolean filter(final Filter.ConditionNode conditionNode, final MElement element) {
-        if(conditionNode == null) {
-            return true;
-        }
-        final Map<String, Object> values = new HashMap<>();
-        for(final String variable : conditionNode.getRequiredVariables()) {
-            values.put(variable, element.getPrimitiveValue(variable));
-        }
-        return Filter.filter(conditionNode, values);
-    }
-
-    static Double eval(final Expression expression, final Set<String> variables, final MElement element) {
-        final Map<String, Double> values = new HashMap<>();
-        for(final String variable : variables) {
-            final Double value = element.getAsDouble(variable);
-            values.put(variable, Optional.ofNullable(value).orElse(Double.NaN));
-        }
-        double expResult = expression.setVariables(values).evaluate();
-        return Double.isNaN(expResult) ? null : expResult;
     }
 
     static boolean compare(final Object v1, final Object v2) {

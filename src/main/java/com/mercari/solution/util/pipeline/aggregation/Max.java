@@ -6,6 +6,8 @@ import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import net.objecthunter.exp4j.Expression;
 import org.joda.time.Instant;
 
@@ -23,7 +25,7 @@ public class Max implements AggregateFunction {
 
     private Boolean opposite;
 
-    private List<Range> ranges;
+    private Range range;
 
     private Boolean ignore;
 
@@ -43,12 +45,12 @@ public class Max implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
 
@@ -58,7 +60,7 @@ public class Max implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final Boolean opposite) {
 
@@ -67,18 +69,19 @@ public class Max implements AggregateFunction {
         max.field = field;
         max.expression = expression;
         max.condition = condition;
-        max.ranges = ranges;
+        max.range = range;
         max.ignore = ignore;
         max.opposite = opposite;
 
         max.inputFields = new ArrayList<>();
         if (field != null) {
-            final Schema.Field inputField = Schema.getField(inputFields, field);
-            max.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
-            max.outputFieldType = inputField.getFieldType();
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(field, inputFields);
+            max.inputFields.add(Schema.Field.of(field, inputFieldType));
+            max.outputFieldType = inputFieldType;
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                max.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                max.inputFields.add(Schema.Field.of(variable, inputFieldType));
             }
             max.outputFieldType = Schema.FieldType.FLOAT64.withNullable(true);
         }
@@ -128,23 +131,13 @@ public class Max implements AggregateFunction {
         if(field != null) {
             inputValue = input.getPrimitiveValue(field);
         } else {
-            inputValue = AggregateFunction.eval(this.exp, variables, input);
+            inputValue = ExpressionUtil.eval(this.exp, variables, input);
         }
 
-        if(getRanges().isEmpty()) {
-            final Object prevValue = accumulator.get(name);
-            final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
-            accumulator.put(name, maxNext);
-        } else {
-            for(final Range range : getRanges()) {
-                if(!range.filter(timestamp, input.getTimestamp(), count)) {
-                    continue;
-                }
-                final Object prevValue = accumulator.get(range.name);
-                final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
-                accumulator.put(range.name, maxNext);
-            }
-        }
+        final Object prevValue = accumulator.get(name);
+        final Object maxNext = AggregateFunction.max(prevValue, inputValue, opposite);
+        accumulator.put(name, maxNext);
+
         return accumulator;
 
     }

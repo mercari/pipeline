@@ -7,6 +7,8 @@ import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import net.objecthunter.exp4j.Expression;
 import org.joda.time.Instant;
 
@@ -26,7 +28,7 @@ public class ArgMax implements AggregateFunction {
     private String comparingExpression;
     private String condition;
 
-    private List<Range> ranges;
+    private Range range;
 
     private Boolean ignore;
 
@@ -50,30 +52,30 @@ public class ArgMax implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
     public static ArgMax of(
             final String name,
             final List<Schema.Field> inputFields,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final JsonObject params) {
 
-        return of(name, inputFields, condition, ranges, ignore, params, false);
+        return of(name, inputFields, condition, range, ignore, params, false);
     }
 
     public static ArgMax of(
             final String name,
             final List<Schema.Field> inputFields,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final JsonObject params,
             final boolean opposite) {
@@ -81,7 +83,7 @@ public class ArgMax implements AggregateFunction {
         final ArgMax argmax = new ArgMax();
         argmax.name = name;
         argmax.condition = condition;
-        argmax.ranges = ranges;
+        argmax.range = range;
         argmax.ignore = ignore;
         argmax.fields = new ArrayList<>();
 
@@ -94,15 +96,15 @@ public class ArgMax implements AggregateFunction {
                     continue;
                 }
                 argmax.fields.add(f);
-                final Schema.Field inputField = Schema.getField(inputFields, f);
-                argmax.inputFields.add(Schema.Field.of(f, inputField.getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(f, inputFields);
+                argmax.inputFields.add(Schema.Field.of(f, inputFieldType));
             }
             argmax.expandOutputName = true;
             argmax.outputFieldType = Schema.FieldType.element(new ArrayList<>(argmax.inputFields));
         } else if(params.has("field")) {
             final String f = params.get("field").getAsString();
             argmax.fields.add(f);
-            final Schema.FieldType inputFieldType = Schema.getField(inputFields, f).getFieldType();
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(f, inputFields);
             argmax.inputFields.add(Schema.Field.of(f, inputFieldType));
             argmax.expandOutputName = false;
             argmax.outputFieldType = inputFieldType;
@@ -110,15 +112,16 @@ public class ArgMax implements AggregateFunction {
 
         if(params.has("comparingField")) {
             argmax.comparingField = params.get("comparingField").getAsString();
-            final Schema.Field inputField = Schema.getField(inputFields, argmax.comparingField);
-            argmax.inputFields.add(Schema.Field.of(argmax.comparingField, inputField.getFieldType()));
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(argmax.comparingField, inputFields);
+            argmax.inputFields.add(Schema.Field.of(argmax.comparingField, inputFieldType));
         } else {
             argmax.comparingField = null;
         }
         if(params.has("comparingExpression")) {
             argmax.comparingExpression = params.get("comparingExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(argmax.comparingExpression)) {
-                argmax.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                argmax.inputFields.add(Schema.Field.of(variable, inputFieldType));
             }
         } else {
             argmax.comparingExpression = null;
@@ -180,7 +183,7 @@ public class ArgMax implements AggregateFunction {
         if(comparingField != null) {
             inputComparingValue = input.getPrimitiveValue(comparingField);
         } else {
-            inputComparingValue = AggregateFunction.eval(this.comparingExp, comparingVariables, input);
+            inputComparingValue = ExpressionUtil.eval(this.comparingExp, comparingVariables, input);
         }
 
         if(AggregateFunction.compare(inputComparingValue, prevComparingValue, opposite)) {

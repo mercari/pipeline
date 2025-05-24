@@ -1,27 +1,23 @@
 package com.mercari.solution.util.pipeline.select.stateful;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.IllegalModuleException;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
+import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.pipeline.aggregation.*;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public interface StatefulFunction extends SelectFunction {
 
     class Range implements Serializable {
-
-        public String name;
 
         public Integer count;
         public Duration duration;
@@ -31,29 +27,12 @@ public interface StatefulFunction extends SelectFunction {
 
         public RangeType type;
 
-        public Boolean isSingle;
-
-        public static List<Range> of(final JsonArray jsonArray) {
-            final List<Range> ranges = new ArrayList<>();
-            for(final JsonElement element : jsonArray) {
-                final Range range = of(null, element.getAsJsonObject());
-                range.isSingle = false;
-                ranges.add(range);
-            }
-            return ranges;
-        }
-
-        public static Range of(final String name, final JsonObject jsonObject) {
+        private static Range of(final JsonObject jsonObject) {
             if(jsonObject == null || jsonObject.isJsonNull()) {
-                return null;
+                return empty();
             }
 
             final Range range = new Range();
-            if(jsonObject.has("name")) {
-                range.name = jsonObject.get("name").getAsString();
-            } else {
-                range.name = name;
-            }
             if(jsonObject.has("count")) {
                 range.count = jsonObject.get("count").getAsInt();
             }
@@ -97,12 +76,21 @@ public interface StatefulFunction extends SelectFunction {
                 range.offsetDuration = Duration.ZERO;
             }
 
-            range.isSingle = true;
             return range;
         }
 
-        public List<String> validate() {
+        private static Range empty() {
+            final Range range = new Range();
+            range.type = RangeType.empty;
+            return range;
+        }
+
+        private List<String> validate() {
             final List<String> errorMessages = new ArrayList<>();
+            if(RangeType.empty.equals(type)) {
+                return errorMessages;
+            }
+
             if(count == null && duration == null) {
                 errorMessages.add("");
             } else if(count != null && duration != null) {
@@ -123,19 +111,27 @@ public interface StatefulFunction extends SelectFunction {
 
         public boolean filter(final Instant timestamp, final Instant bufferTimestamp, final Integer bufferCount) {
             return switch (type) {
-                case count -> bufferCount < this.count;
+                case count -> {
+                    final boolean flag = bufferCount < this.count && bufferCount >= 0;
+                    if(offsetCount != null && offsetCount == 0) {
+                        yield flag;
+                    } else {
+                        yield flag; // TODO offsetCount
+                    }
+                }
                 case duration -> {
-                    final boolean flag = bufferTimestamp.isAfter(timestamp.minus(duration));
+                    final boolean flag = bufferTimestamp.isAfter(timestamp.minus(duration)) || bufferTimestamp.isEqual(timestamp.minus(duration));
                     if(offsetDuration != null && offsetDuration.getMillis() == 0) {
                         yield flag;
                     } else {
                         yield flag && (bufferTimestamp.isBefore(timestamp.minus(offsetDuration)) || bufferTimestamp.isEqual(timestamp.minus(offsetDuration)));
                     }
                 }
+                case empty -> true;
             };
         }
 
-        public Duration getDuration() {
+        private Duration getDuration() {
             if(duration == null) {
                 return Duration.ZERO;
             }
@@ -144,7 +140,8 @@ public interface StatefulFunction extends SelectFunction {
 
         public enum RangeType {
             count,
-            duration
+            duration,
+            empty
         }
 
     }
@@ -155,8 +152,8 @@ public interface StatefulFunction extends SelectFunction {
         public final Duration maxDuration;
 
         private RangeBound(final Integer maxCount, final Duration maxDuration) {
-            this.maxCount = maxCount;
-            this.maxDuration = maxDuration;
+            this.maxCount = Optional.ofNullable(maxCount).orElse(0);
+            this.maxDuration = Optional.ofNullable(maxDuration).orElse(Duration.ZERO);
         }
 
         public static RangeBound of(final Integer maxCount, final Duration maxDuration) {
@@ -167,10 +164,6 @@ public interface StatefulFunction extends SelectFunction {
             return eventTime.minus(maxDuration);
         }
 
-        public Integer firstCount() {
-            return maxCount;
-        }
-
         @Override
         public String toString() {
             return String.format("maxCount: %d, maxDuration: %s", maxCount, maxDuration);
@@ -178,7 +171,7 @@ public interface StatefulFunction extends SelectFunction {
     }
 
     enum Func implements Serializable {
-        multi_regression;
+        lag;
 
         public static Func is(String value) {
             for(final Func func : values()) {
@@ -194,7 +187,7 @@ public interface StatefulFunction extends SelectFunction {
     List<String> validate(int parent, int index);
     Accumulator addInput(Accumulator accumulator, MElement values, Integer count, Instant timestamp);
     Object extractOutput(Accumulator accumulator, Map<String, Object> values);
-    List<Range> getRanges();
+    Range getRange();
 
     static StatefulFunction of(final JsonElement element, final List<Schema.Field> inputFields) {
         if (element == null || element.isJsonNull() || !element.isJsonObject()) {
@@ -220,6 +213,13 @@ public interface StatefulFunction extends SelectFunction {
             condition = null;
         }
 
+        final String expression;
+        if(params.has("expression")) {
+            expression = params.get("expression").getAsString();
+        } else {
+            expression = null;
+        }
+
         final boolean ignore;
         if(params.has("ignore")) {
             ignore = params.get("ignore").getAsBoolean();
@@ -227,21 +227,15 @@ public interface StatefulFunction extends SelectFunction {
             ignore = false;
         }
 
-        final List<Range> ranges = new ArrayList<>();
+        final Range range;
         if(params.has("range")) {
             final JsonElement rangeJson = params.get("range");
             if(!rangeJson.isJsonObject()) {
                 throw new IllegalArgumentException("Aggregator requires func or op parameter");
             }
-            final Range range = Range.of(name, rangeJson.getAsJsonObject());
-            ranges.add(range);
-        } else if(params.has("ranges")) {
-            final JsonElement rangesJson = params.get("ranges");
-            if(!rangesJson.isJsonArray()) {
-                throw new IllegalArgumentException("Aggregator requires func or op parameter");
-            }
-            final List<Range> rangesList = Range.of(rangesJson.getAsJsonArray());
-            ranges.addAll(rangesList);
+            range = Range.of(rangeJson.getAsJsonObject());
+        } else {
+            range = Range.empty();
         }
 
         final Func op;
@@ -252,27 +246,9 @@ public interface StatefulFunction extends SelectFunction {
         }
 
         return switch (op) {
-            case multi_regression -> Count.of(name, condition, ranges, ignore);
-            case null -> AggregateFunction.of(element, inputFields, ranges);
+            case lag -> Lag.of(name, inputFields, expression, condition, ignore);
+            case null -> AggregateFunction.of(element, inputFields, range);
         };
-    }
-
-    static Accumulator addInput(
-            Accumulator accumulator,
-            final List<SelectFunction> selectFunctions,
-            final MElement input,
-            final Instant timestamp,
-            final Integer count) {
-
-        for(final SelectFunction selectFunction : selectFunctions) {
-            if(selectFunction.ignore()) {
-                continue;
-            }
-            if(selectFunction instanceof StatefulFunction statefulFunction) {
-                accumulator = statefulFunction.addInput(accumulator, input, count, timestamp);
-            }
-        }
-        return accumulator;
     }
 
     static RangeBound calcMaxRange(final List<SelectFunction> selectFunctions) {
@@ -283,17 +259,17 @@ public interface StatefulFunction extends SelectFunction {
             if(!(selectFunction instanceof StatefulFunction statefulFunction)) {
                 continue;
             }
-            final List<Range> ranges = statefulFunction.getRanges();
-            for(final Range range : ranges) {
-                switch (range.type) {
+
+            if(statefulFunction.getRange() != null) {
+                switch (statefulFunction.getRange().type) {
                     case count -> {
-                        if(range.count > countMax) {
-                            countMax = range.count;
+                        if(statefulFunction.getRange().count > countMax) {
+                            countMax = statefulFunction.getRange().count;
                         }
                     }
                     case duration -> {
-                        if(range.getDuration().compareTo(durationMax) > 0) {
-                            durationMax = range.getDuration();
+                        if(statefulFunction.getRange().getDuration().compareTo(durationMax) > 0) {
+                            durationMax = statefulFunction.getRange().getDuration();
                         }
                     }
                 }
@@ -301,6 +277,17 @@ public interface StatefulFunction extends SelectFunction {
         }
 
         return RangeBound.of(countMax, durationMax);
+    }
+
+    static Boolean filter(final Filter.ConditionNode conditionNode, final MElement element) {
+        if(conditionNode == null) {
+            return true;
+        }
+        final Map<String, Object> values = new HashMap<>();
+        for(final String variable : conditionNode.getRequiredVariables()) {
+            values.put(variable, element.getPrimitiveValue(variable));
+        }
+        return Filter.filter(conditionNode, values);
     }
 
 }

@@ -6,6 +6,8 @@ import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import org.joda.time.Instant;
 
 import java.io.Serializable;
@@ -21,7 +23,7 @@ public class ArrayAgg implements AggregateFunction {
     private List<String> fields;
     private String condition;
 
-    private List<Range> ranges;
+    private Range range;
 
     private Boolean ignore;
     private Boolean expandOutputName;
@@ -38,7 +40,7 @@ public class ArrayAgg implements AggregateFunction {
             final String name,
             final List<Schema.Field> inputFields,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -47,27 +49,29 @@ public class ArrayAgg implements AggregateFunction {
         arrayAgg.fields = new ArrayList<>();
         arrayAgg.inputFields = new ArrayList<>();
         arrayAgg.condition = condition;
-        arrayAgg.ranges = ranges;
+        arrayAgg.range = range;
         arrayAgg.ignore = ignore;
 
         if(params.has("fields") && params.get("fields").isJsonArray()) {
             final List<Schema.Field> fs = new ArrayList<>();
             for(JsonElement element : params.get("fields").getAsJsonArray()) {
                 final String fieldName = element.getAsString();
-                final Schema.Field inputField = Schema.getField(inputFields, fieldName);
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(fieldName, inputFields);
+                final Schema.Field inputField = Schema.Field.of(fieldName, inputFieldType);
                 arrayAgg.inputFields.add(inputField);
                 arrayAgg.fields.add(fieldName);
-                fs.add(Schema.Field.of(inputField.getName(), inputField.getFieldType()));
+                fs.add(inputField);
             }
             arrayAgg.expandOutputName = true;
             arrayAgg.outputFieldType = Schema.FieldType.array(Schema.FieldType.element(fs).withNullable(true));
         } else if(params.has("field")) {
             final String fieldName = params.get("field").getAsString();
-            final Schema.Field inputField = Schema.getField(inputFields, fieldName);
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(fieldName, inputFields);
+            final Schema.Field inputField = Schema.Field.of(fieldName, inputFieldType);
             arrayAgg.inputFields.add(inputField);
             arrayAgg.fields.add(fieldName);
             arrayAgg.expandOutputName = false;
-            arrayAgg.outputFieldType = Schema.FieldType.array(inputField.getFieldType().withNullable(true));
+            arrayAgg.outputFieldType = Schema.FieldType.array(inputFieldType.withNullable(true));
         }
 
         if(params.has("order")) {
@@ -91,12 +95,12 @@ public class ArrayAgg implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
     @Override

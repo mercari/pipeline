@@ -31,7 +31,7 @@ public class DebugSink extends Sink {
 
         private void setDefaults() {
             if(this.logLevel == null) {
-                this.logLevel = LogLevel.debug;
+                this.logLevel = LogLevel.info;
             }
         }
 
@@ -183,6 +183,7 @@ public class DebugSink extends Sink {
             }
 
             final String message = String.format("%s: %s", name, text);
+            System.out.println(message);
             switch (logLevel) {
                 case trace -> LOG.trace(message);
                 case debug -> LOG.debug(message);

@@ -7,6 +7,8 @@ import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import net.objecthunter.exp4j.Expression;
 import org.joda.time.Instant;
 
@@ -26,7 +28,7 @@ public class SimpleRegression implements AggregateFunction {
     private Boolean hasIntercept;
     private String condition;
 
-    private List<Range> ranges;
+    private Range range;
 
     private Boolean ignore;
 
@@ -71,7 +73,7 @@ public class SimpleRegression implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -80,7 +82,7 @@ public class SimpleRegression implements AggregateFunction {
         regression.field = field;
         regression.expression = expression;
         regression.condition = condition;
-        regression.ranges = ranges;
+        regression.range = range;
         regression.ignore = ignore;
 
         regression.accumKeyCountName = name + ".count";
@@ -105,20 +107,24 @@ public class SimpleRegression implements AggregateFunction {
         regression.inputFields = new ArrayList<>();
 
         if(field != null) {
-            regression.inputFields.add(Schema.Field.of(field, Schema.getField(inputFields, field).getFieldType()));
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(field, inputFields);
+            regression.inputFields.add(Schema.Field.of(field, inputFieldType));
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                regression.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                regression.inputFields.add(Schema.Field.of(variable, inputFieldType));
             }
         }
 
         if(params.has("weightField")) {
             regression.weightField = params.get("weightField").getAsString();
-            regression.inputFields.add(Schema.Field.of(regression.weightField, Schema.getField(inputFields, regression.weightField).getFieldType()));
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(regression.weightField, inputFields);
+            regression.inputFields.add(Schema.Field.of(regression.weightField, inputFieldType));
         } else if(params.has("weightExpression")) {
             regression.weightExpression = params.get("weightExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(regression.weightExpression)) {
-                regression.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                regression.inputFields.add(Schema.Field.of(variable, inputFieldType));
             }
         }
 
@@ -157,12 +163,12 @@ public class SimpleRegression implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
     @Override
@@ -210,7 +216,7 @@ public class SimpleRegression implements AggregateFunction {
         if(field != null) {
             y = input.getAsDouble(field);
         } else {
-            y = AggregateFunction.eval(this.exp, variables, input);
+            y = ExpressionUtil.eval(this.exp, variables, input);
         }
         final Double x;
         if(xField != null) {
@@ -227,7 +233,7 @@ public class SimpleRegression implements AggregateFunction {
         if(weightField != null) {
             inputWeight = Optional.ofNullable(input.getAsDouble(weightField)).orElse(0D);
         } else if(weightExpression != null) {
-            inputWeight = Optional.ofNullable(AggregateFunction.eval(this.weightExp, weightVariables, input)).orElse(0D);
+            inputWeight = Optional.ofNullable(ExpressionUtil.eval(this.weightExp, weightVariables, input)).orElse(0D);
         } else {
             inputWeight = 1D;
         }

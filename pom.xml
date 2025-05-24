@@ -12,7 +12,7 @@
   <packaging>${packaging}</packaging>
 
   <properties>
-    <beam.version>2.64.0</beam.version>
+    <beam.version>2.65.0</beam.version>
 
     <snakeyaml.version>2.9</snakeyaml.version>
     <freemarker.version>2.3.34</freemarker.version>
@@ -28,6 +28,7 @@
     <sqlserver-connector.version>8.4.1.jre11</sqlserver-connector.version>
     <alloydb-connector.version>1.2.2</alloydb-connector.version>
     <jdbc-socket-factory.version>1.25.0</jdbc-socket-factory.version>
+    <hikaricp.version>6.3.0</hikaricp.version>
     <h2.version>2.3.232</h2.version>
     <drive.version>v3-rev20250427-2.0.0</drive.version>
 
@@ -590,6 +591,12 @@
       <groupId>com.h2database</groupId>
       <artifactId>h2</artifactId>
       <version>${h2.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <version>${hikaricp.version}</version>
     </dependency>
 
     <!-- Utils -->

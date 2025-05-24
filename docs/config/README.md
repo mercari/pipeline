@@ -8,27 +8,23 @@ In the Config file, four modules, `options`, `sources`, `transforms`, and `sinks
 
 ```JSON:config
 {
-  "args": {
-    "xxx": "yyy"
-  },
-  "system": {
-    "context": "xxx",
-    "failures": {...}
-  },
-  "options": [
-    {...}
-  ],
+  "system": {...},
+  "options": {...},
   "sources": [
-    {...}
+    {...},
+    ...
   ],
   "transforms": [
-    {...}
+    {...},
+    ...
   ],
   "sinks": [
-    {...}
+    {...},
+    ...
   ],
   "failures": [
-    {...}
+    {...},
+    ...
   ]
 }
 ```
@@ -52,7 +48,7 @@ The common settings of the three types of modules are as follows.
 | module     | String               | required | Set [module](module/README.md) name                                                                                                                                                                                                                                                                 |
 | parameters | Map<String, Object\> | required | Specify the parameters defined in each module.                                                                                                                                                                                                                                                      |
 | strategy   | Strategy             | optional | Specify beam windowing strategy([Window](https://beam.apache.org/documentation/programming-guide/#windowing), [Trigger](https://beam.apache.org/documentation/programming-guide/#triggers), [AccumulationMode](https://beam.apache.org/documentation/programming-guide/#window-accumulation-modes)) |
-| wait       | Array<String\>       | optional | If you want to wait for the completion of other steps and then start this step, assign a step Name to wait for completion.                                                                                                                                                                          |
+| waits      | Array<String\>       | optional | If you want to wait for the completion of other steps and then start this step, assign a step Name to wait for completion.                                                                                                                                                                          |
 | failFast   | Boolean              | optional | Specify true if you want the job to fail immediately when an error occurs. The default is true for batch and false for streaming.                                                                                                                                                                   |
 | ignore     | Boolean              | optional | Specify true if you want to ignore this module.                                                                                                                                                                                                                                                     |
 

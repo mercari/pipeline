@@ -1,5 +1,7 @@
 package com.mercari.solution.util;
 
+import com.google.common.collect.Sets;
+import com.mercari.solution.module.MElement;
 import net.objecthunter.exp4j.Expression;
 import net.objecthunter.exp4j.ExpressionBuilder;
 import net.objecthunter.exp4j.function.Function;
@@ -26,6 +28,11 @@ public class ExpressionUtil {
     public static final Pattern DELIMITER_PATTERN = Pattern.compile("[()+\\-*/%^<>=!&|#§$~:,]");
     public static final Pattern FIELD_NO_PATTERN = Pattern.compile("[a-zA-Z_]\\w*_([0-9]\\d*)$");
 
+    private static final String REPLACEMENT_FIELD_FORMAT = "%s___%d";
+    private static final String REPLACEMENT_ARRAY = "$1___$2";
+    private static final String REGEX_ARRAY = "(\\w+)\\[(\\d+)]";
+    private static final Pattern PATTERN_ARRAY = Pattern.compile(REGEX_ARRAY);
+
     private static final String[] RESERVED_NAMES = {
             "pi","π","e","φ",
             "abs","acos","asin","atan","cbrt","ceil","cos","cosh",
@@ -36,8 +43,18 @@ public class ExpressionUtil {
     private static final Set<String> RESERVED_NAMES_SET = new HashSet<>(Arrays.asList(RESERVED_NAMES));
 
     public static Set<String> estimateVariables(final String expression) {
+        return estimateVariables(expression, true);
+    }
+
+    private static Set<String> estimateVariables(String expression, boolean includeArray) {
         if(expression == null) {
             return new HashSet<>();
+        }
+
+        if(includeArray) {
+            expression = expression.replaceAll(REGEX_ARRAY, "$1");
+        } else {
+            expression = expression.replaceAll(REGEX_ARRAY, "");
         }
 
         final String str = expression.replaceAll(" ","");
@@ -93,6 +110,59 @@ public class ExpressionUtil {
                         new TimestampDiffFunction("day"))
                 .build();
     }
+
+    public static String replaceArrayFieldName(final String variable, final int index) {
+        return String.format(REPLACEMENT_FIELD_FORMAT, variable, index);
+    }
+
+    public static String replaceArrayExpression(final String expression) {
+        if(expression == null) {
+            return null;
+        }
+        String a = expression.replaceAll(REGEX_ARRAY, REPLACEMENT_ARRAY);
+        return a.replaceAll("___0", "");
+    }
+
+    public static Map<String,Set<Integer>> extractArrayIndexes(final String expression) {
+        final Map<String, Set<Integer>> variables = new HashMap<>();
+        final Matcher matcher = PATTERN_ARRAY.matcher(expression);
+        while(matcher.find()) {
+            final String name = matcher.group(1);
+            final Integer value = Integer.parseInt(matcher.group(2));
+            variables.merge(name, Set.of(value), Sets::union);
+        }
+        final Set<String> notArrayVariables = estimateVariables(expression, false);
+        for(final String variable : notArrayVariables) {
+            variables.merge(variable, Set.of(0), Sets::union);
+        }
+        return variables;
+    }
+
+    public static Map<Integer,Set<String>> reverseArrayIndexes(final String expression) {
+        final Map<String,Set<Integer>> arrayIndexes = extractArrayIndexes(expression);
+        return reverseArrayIndexes(arrayIndexes);
+    }
+
+    public static Map<Integer,Set<String>> reverseArrayIndexes(final Map<String,Set<Integer>> arrayIndexes) {
+        final Map<Integer, Set<String>> reverseVariables = new HashMap<>();
+        if(arrayIndexes == null || arrayIndexes.isEmpty()) {
+            return reverseVariables;
+        }
+        final Set<Integer> indexes = arrayIndexes.values().stream().flatMap(Collection::stream).collect(Collectors.toSet());
+        for(final Integer index : indexes) {
+            for(Map.Entry<String,Set<Integer>> entry : arrayIndexes.entrySet()) {
+                if(entry.getValue().contains(index)) {
+                    reverseVariables.merge(index, Set.of(entry.getKey()), Sets::union);
+                }
+            }
+        }
+        return reverseVariables;
+    }
+
+    public static Integer maxArrayIndex(final Map<Integer,Set<String>> reverseArrayIndexes) {
+        return reverseArrayIndexes.keySet().stream().max(Integer::compareTo).orElse(0);
+    }
+
 
     public static Map<String, Integer> extractBufferSizes(final Set<String> variables) {
         return extractBufferSizes(variables, 0, DEFAULT_SEPARATOR);
@@ -168,6 +238,16 @@ public class ExpressionUtil {
 
     public static Set<String> extractInputs(final List<Set<String>> variablesList, final String separator) {
         return variablesList.stream().flatMap(v -> extractInputs(v, separator).stream()).collect(Collectors.toSet());
+    }
+
+    public static Double eval(final Expression expression, final Set<String> variables, final MElement element) {
+        final Map<String, Double> values = new HashMap<>();
+        for(final String variable : variables) {
+            final Double value = element.getAsDouble(variable);
+            values.put(variable, Optional.ofNullable(value).orElse(Double.NaN));
+        }
+        double expResult = expression.setVariables(values).evaluate();
+        return Double.isNaN(expResult) ? null : expResult;
     }
 
     public static Double getAsDouble(final Object value) {

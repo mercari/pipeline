@@ -6,6 +6,8 @@ import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import org.joda.time.Instant;
 
 import java.util.*;
@@ -19,7 +21,7 @@ public class Last implements AggregateFunction {
     private List<String> fields;
     private String condition;
 
-    private List<Range> ranges;
+    private Range range;
 
     private Boolean opposite;
     private Boolean ignore;
@@ -41,19 +43,19 @@ public class Last implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
     public static Last of(
             final String name,
             final List<Schema.Field> inputFields,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final JsonObject params,
             final Boolean opposite) {
@@ -61,7 +63,7 @@ public class Last implements AggregateFunction {
         final Last last = new Last();
         last.name = name;
         last.condition = condition;
-        last.ranges = ranges;
+        last.range = range;
         last.ignore = ignore;
         last.opposite = opposite;
         last.fields = new ArrayList<>();
@@ -70,19 +72,23 @@ public class Last implements AggregateFunction {
         if(params.has("fields") && params.get("fields").isJsonArray()) {
             final List<Schema.Field> fs = new ArrayList<>();
             for(JsonElement element : params.get("fields").getAsJsonArray()) {
-                final Schema.Field inputField = Schema.getField(inputFields, element.getAsString());
+                final String fieldName = element.getAsString();
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(fieldName, inputFields);
+                final Schema.Field inputField = Schema.Field.of(fieldName, inputFieldType);
                 last.inputFields.add(inputField);
-                last.fields.add(element.getAsString());
-                fs.add(Schema.Field.of(inputField.getName(), inputField.getFieldType()));
+                last.fields.add(fieldName);
+                fs.add(inputField);
             }
             last.expandOutputName = true;
             last.outputFieldType = Schema.FieldType.element(fs);
         } else if(params.has("field")) {
-            final Schema.Field inputField = Schema.getField(inputFields, params.get("field").getAsString());
+            final String fieldName = params.get("field").getAsString();
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(fieldName, inputFields);
+            final Schema.Field inputField = Schema.Field.of(fieldName, inputFieldType);
             last.inputFields.add(inputField);
-            last.fields.add(params.get("field").getAsString());
+            last.fields.add(fieldName);
             last.expandOutputName = false;
-            last.outputFieldType = inputField.getFieldType();
+            last.outputFieldType = inputFieldType;
         }
 
         last.timestampKeyName = name + ".timestamp";
