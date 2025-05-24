@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package auxia.event.v1;
+
+import "google/protobuf/timestamp.proto";
+
+message LogEventsRequest {
+  // For a given Auxia customer, this should always be the same.
+  // Required.
+  string project_id = 1;
+
+  // Unique ID for the user that can be joined to events and attributes.
+  // Firebase or Amplitude events should have this ID in each event.
+  // Required.
+  string user_id = 2;
+
+  // Events for the user.
+  // Required.
+  repeated Event events = 3;
+}
+
+// Attributes of a single event.
+message Event {
+  // A unique identifier for the event.
+  // Required.
+  string event_name = 1;
+
+  // A unique identifier for the event. Auxia uses this identifier to de-duplicate the events for the same user.
+  // Optional.
+  string insert_id = 2;
+
+  // A dictionary of key value pairs that represent data associated with the event.
+  // Optional.
+  map<string, PropertyValue> event_properties = 3;
+
+  // A dictionary of key value pairs that represent data associated with the user.
+  // Optional.
+  map<string, PropertyValue> user_properties = 4;
+
+  // The timestamp of the event.
+  // Required.
+  google.protobuf.Timestamp client_event_timestamp = 5;
+
+  // The timestamp at which the event was received by the server.
+  // Optional.
+  google.protobuf.Timestamp server_received_timestamp = 6;
+
+  // Unique identifier for the user when the user was signed out.
+  // This identifier is used to identify a user across signed out and signed in sessions.
+  // Required to support merging user across signed out and signed in sessions.
+  // Optional.
+  string pre_login_temp_user_id = 7;
+
+  // Unique identifier for a single user session.
+  // Optional.
+  string session_id = 8;
+
+  // Country of the user.
+  // Optional.
+  string country = 9;
+
+  // Region of the user.
+  // Optional.
+  string region = 10;
+
+  // City of the user.
+  // Optional.
+  string city = 11;
+
+  // IP Address of the user.
+  // Optional.
+  string ip_address = 12;
+
+  // Unique identifier for the user's device.
+  // Optional.
+  string device_id = 13;
+
+  // Version of the app that the events correspond to.
+  // Optional.
+  string app_version_id = 14;
+}
+
+// Value corresponding to the property.
+// Required.
+message PropertyValue {
+  oneof property_value {
+    // long value
+    int64 long_value = 1;
+    // double value
+    double double_value = 2;
+    // string value
+    string string_value = 3;
+    // bool value
+    bool boolean_value = 4;
+    // timestamp value
+    google.protobuf.Timestamp timestamp_value = 5;
+  }
+}
