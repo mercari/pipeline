@@ -63,7 +63,18 @@ public class Filter implements Serializable {
     }
 
     public boolean filter(final MElement element) {
-        return this.filter(element.asPrimitiveMap());
+        if(conditionNode == null) {
+            return true;
+        }
+        //return filter(element.asPrimitiveMap(conditionNode.getRequiredVariables()));
+        return filter(element.asPrimitiveMap());
+    }
+
+    public boolean filter(final List<Schema.Field> fields, final MElement element) {
+        if(conditionNode == null) {
+            return true;
+        }
+        return filter(element.asStandardMap(fields, conditionNode.getRequiredVariables()));
     }
 
     public boolean filter(final Map<String, Object> primitiveValues) {

@@ -1,6 +1,7 @@
 package com.mercari.solution.util.pipeline;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.coder.ElementCoder;
@@ -38,8 +39,17 @@ public class Select implements Serializable {
                 .orElseGet(ArrayList::new);
     }
 
+    public static Select of(final JsonArray select, final List<Schema.Field> inputFields) {
+        final List<SelectFunction > selectFunctions = SelectFunction.of(select, inputFields);
+        return new Select(selectFunctions);
+    }
+
     public static Select of(final List<SelectFunction> selectFunctions) {
         return new Select(selectFunctions);
+    }
+
+    public static Schema createOutputSchema(final Select select) {
+        return SelectFunction.createSchema(select.selectFunctions);
     }
 
     public static Map<String, Object> apply(

@@ -10,6 +10,10 @@ public class Unnest implements Serializable {
 
     private final String flattenField;
 
+    public String getFlattenField() {
+        return flattenField;
+    }
+
     private Unnest(final String flattenField) {
         this.flattenField = flattenField;
     }
