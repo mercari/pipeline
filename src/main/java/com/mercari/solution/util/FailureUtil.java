@@ -4,24 +4,40 @@ import com.google.cloud.spanner.Struct;
 import com.google.datastore.v1.Entity;
 import com.google.firestore.v1.Document;
 import com.google.gson.JsonObject;
+import com.google.protobuf.DynamicMessage;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.MessageSchemaUtil;
+import com.mercari.solution.util.schema.RowSchemaUtil;
 import com.mercari.solution.util.schema.converter.*;
+import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.io.gcp.bigquery.AvroWriteRequest;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.Row;
+import org.apache.commons.io.IOUtils;
 import org.joda.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
 public class FailureUtil {
+
+    private static final Logger LOG = LoggerFactory.getLogger(FailureUtil.class);
+
+    private static final String RESOURCE_BAD_RECORD_AVRO_SCHEMA_PATH = "/schema/avro/badrecord.avsc";
+    private static final String RESOURCE_RUNTIME_BAD_RECORD_AVRO_SCHEMA_PATH = "/template/MPipeline/resources/schema/avro/badrecord.avsc";
 
     private FailureUtil() {}
 
@@ -77,16 +93,53 @@ public class FailureUtil {
         try {
             return switch (element.getType()) {
                 case ELEMENT -> {
-                    final String json = MapToJsonConverter.convert((Map<String, Object>) element.getValue());
+                    final Map<String, Object> values = (Map<String, Object>) element.getValue();
+                    final String json = MapToJsonConverter.convert(values);
                     yield createRecord("ElementCoder", new byte[0], json);
                 }
                 case AVRO -> {
-                    final String json = AvroToJsonConverter.convert((GenericRecord) element.getValue());
-                    yield createRecord("AvroCoder", new byte[0], json);
+                    final GenericRecord record = (GenericRecord) element.getValue();
+                    byte[] bytes;
+                    try {
+                        bytes = AvroSchemaUtil.encode(record);
+                    } catch (Throwable e) {
+                        bytes = new byte[0];
+                    }
+                    String json;
+                    try {
+                        json = AvroToJsonConverter.convert(record);
+                    } catch (Throwable e) {
+                        json = null;
+                    }
+                    yield createRecord("AvroCoder", bytes, json);
                 }
                 case ROW -> {
-                    final String json = RowToJsonConverter.convert((Row) element.getValue());
-                    yield createRecord("RowCoder", new byte[0], json);
+                    final Row row = (Row) element.getValue();
+                    final String json = RowToJsonConverter.convert(row);
+                    byte[] bytes;
+                    try {
+                        bytes = RowSchemaUtil.encode(row);
+                    } catch (Throwable e) {
+                        bytes = new byte[0];
+                    }
+                    yield createRecord("RowCoder", bytes, json);
+                }
+                case PROTO -> {
+                    final DynamicMessage message = (DynamicMessage) element.getValue();
+                    byte[] bytes;
+                    try {
+                        bytes = message.toByteArray();
+                    } catch (Throwable e) {
+                        bytes = new byte[0];
+                    }
+                    String json;
+                    try {
+                        json = ProtoToJsonConverter.convert(message);
+                    } catch (Throwable e) {
+                        json = null;
+                    }
+
+                    yield createRecord("DynamicProtoCoder", bytes, json);
                 }
                 case STRUCT -> {
                     final String json = StructToJsonConverter.convert((Struct) element.getValue());
@@ -101,8 +154,20 @@ public class FailureUtil {
                     yield createRecord("SerializableCoder", new byte[0], json);
                 }
                 case MESSAGE -> {
-                    final String json = MessageSchemaUtil.toJsonString((PubsubMessage) element.getValue());
-                    yield createRecord("SerializableCoder", new byte[0], json);
+                    final PubsubMessage message = (PubsubMessage) element.getValue();
+                    byte[] bytes;
+                    try {
+                        bytes = MessageSchemaUtil.encode(message);
+                    } catch (Throwable e) {
+                        bytes = new byte[0];
+                    }
+                    String json;
+                    try {
+                        json = MessageSchemaUtil.toJsonString(message);
+                    } catch (Throwable e) {
+                        json = null;
+                    }
+                    yield createRecord("PubsubMessageWithAttributesAndMessageIdAndOrderingKeyCoder", bytes, json);
                 }
                 default -> {
                     final JsonObject jsonObject = new JsonObject();
@@ -219,6 +284,24 @@ public class FailureUtil {
         values.put("timestamp", DateTimeUtil.toEpochMicroSecond(java.time.Instant.now()));
         values.put("eventtime", eventTime.getMillis() * 1000L);
         return values;
+    }
+
+    public static Schema createBadRecordSchema() {
+        try (final InputStream is = FailureUtil.class.getResourceAsStream(RESOURCE_BAD_RECORD_AVRO_SCHEMA_PATH)) {
+            if(is == null) {
+                LOG.info("BadRecord avro file is not found: " + RESOURCE_BAD_RECORD_AVRO_SCHEMA_PATH);
+                try(final InputStream iss = Files.newInputStream(Path.of(RESOURCE_RUNTIME_BAD_RECORD_AVRO_SCHEMA_PATH))) {
+                    final String schemaJson = IOUtils.toString(iss,  StandardCharsets.UTF_8);
+                    return AvroSchemaUtil.convertSchema(schemaJson);
+                } catch (Throwable e) {
+                    throw new IllegalArgumentException("BadRecord avro file is not found", e);
+                }
+            }
+            final String schemaJson = IOUtils.toString(is,  StandardCharsets.UTF_8);
+            return AvroSchemaUtil.convertSchema(schemaJson);
+        } catch (final IOException e) {
+            throw new IllegalArgumentException("Not found event descriptor file", e);
+        }
     }
 
 }

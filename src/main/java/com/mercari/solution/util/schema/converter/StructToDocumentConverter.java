@@ -14,8 +14,11 @@ import java.util.stream.Collectors;
 
 public class StructToDocumentConverter {
 
-    public static Document.Builder convert(final Type type, final Struct struct) {
+    public static Document.Builder convert(final Struct struct) {
+        return convert(struct.getType(), struct);
+    }
 
+    public static Document.Builder convert(final Type type, final Struct struct) {
         final Document.Builder builder = Document.newBuilder();
         for(Type.StructField field : type.getStructFields()) {
             if(FirestoreUtil.NAME_FIELD.equals(field.getName())) {

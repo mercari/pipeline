@@ -181,7 +181,7 @@ public class ElementToAvroConverter {
                 case Boolean b -> b;
                 case String s -> Boolean.parseBoolean(s);
                 case Number n -> n.doubleValue() > 0;
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported boolean value: " + value + ", class: " + value.getClass().getName());
             };
             case STRING -> switch (value) {
                 case String s -> s;
@@ -192,27 +192,27 @@ public class ElementToAvroConverter {
                 case byte[] b -> b;
                 case ByteBuffer b -> b;
                 case String s -> Base64.getDecoder().decode(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported bytes value: " + value + ", class: " + value.getClass().getName());
             };
             case INT -> switch (value) {
                 case Number n -> n.intValue();
                 case String s -> Integer.parseInt(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported int value: " + value + ", class: " + value.getClass().getName());
             };
             case LONG -> switch (value) {
                 case Number n -> n.longValue();
                 case String s -> Long.parseLong(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported long value: " + value + ", class: " + value.getClass().getName());
             };
             case FLOAT -> switch (value) {
                 case Number n -> n.floatValue();
                 case String s -> Float.parseFloat(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported float value: " + value + ", class: " + value.getClass().getName());
             };
             case DOUBLE -> switch (value) {
                 case Number n -> n.doubleValue();
                 case String s -> Double.parseDouble(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported double value: " + value + ", class: " + value.getClass().getName());
             };
             case ENUM -> {
                 final int index = (Integer) value;
@@ -230,7 +230,7 @@ public class ElementToAvroConverter {
             case ARRAY -> ((List<Object>) value).stream()
                     .map(v -> convertValue(name, fieldSchema.getElementType(), v))
                     .toList();
-            default -> throw new IllegalArgumentException();
+            default -> throw new IllegalArgumentException("Not supported schema: " + fieldSchema + " for value: " + value + ", class: " + value.getClass().getName());
         };
     }
 

@@ -8,16 +8,16 @@ import com.google.protobuf.util.Timestamps;
 import com.google.type.*;
 import com.google.type.Date;
 import com.google.type.TimeZone;
+import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.gcp.ArtifactRegistryUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
+import org.apache.beam.sdk.extensions.protobuf.DynamicProtoCoder;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -500,6 +500,302 @@ public class ProtoSchemaUtil {
         };
     }
 
+    public static Object getAsPrimitive(
+            final DynamicMessage message,
+            final String field) {
+
+        if(message == null || field == null) {
+            return null;
+        }
+        if(!hasField(message, field)) {
+            return null;
+        }
+
+        final Descriptors.Descriptor descriptor = message.getDescriptorForType();
+        final Descriptors.FieldDescriptor fieldDescriptor = getField(descriptor, field);
+        final Object value = message.getField(fieldDescriptor);
+
+        return getAsPrimitive(fieldDescriptor, value, null);
+    }
+
+    public static Object getAsPrimitive(
+            final Descriptors.FieldDescriptor field,
+            final Object value) {
+
+        return getAsPrimitive(field, value, null);
+    }
+
+    public static Object getAsPrimitive(
+            final Descriptors.FieldDescriptor field,
+            final Object value,
+            final JsonFormat.Printer printer) {
+
+        if(field.isRepeated()) {
+            if(field.isMapField()) {
+                if(value == null) {
+                    return new HashMap<>();
+                }
+                final Descriptors.FieldDescriptor keyFieldDescriptor = field.getMessageType().findFieldByName("key");
+                final Descriptors.FieldDescriptor valueFieldDescriptor = field.getMessageType().getFields().stream()
+                        .filter(f -> f.getName().equals("value"))
+                        .findAny()
+                        .orElseThrow(() -> new IllegalStateException("Map value not found for field: " + field));
+                return ((List<DynamicMessage>) value).stream()
+                        .collect(Collectors.toMap(
+                                e -> e.getField(keyFieldDescriptor),
+                                e -> getAsPrimitive(valueFieldDescriptor, e.getField(field.getMessageType().findFieldByName("value")), printer)));
+            }
+            if(value == null) {
+                return new ArrayList<>();
+            }
+            return ((List<Object>) value).stream()
+                    .map(v -> getAsPrimitiveInner(field, v, printer))
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+        }
+        return getAsPrimitiveInner(field, value, printer);
+    }
+
+    private static Object getAsPrimitiveInner(
+            final Descriptors.FieldDescriptor field,
+            final Object value,
+            final JsonFormat.Printer printer) {
+
+        boolean isNull = value == null;
+        return switch (field.getJavaType()) {
+            case BOOLEAN -> isNull ? false : (Boolean)value;
+            case STRING -> isNull ? "" : (String)value;
+            case INT -> isNull ? 0 : (Integer)value;
+            case LONG -> isNull ? 0 : (Long)value;
+            case FLOAT -> isNull ? 0f : (Float)value;
+            case DOUBLE -> isNull ? 0d : (Double)value;
+            case ENUM -> isNull ? 0 : ((Descriptors.EnumValueDescriptor)value).getIndex();
+            case BYTE_STRING -> ByteBuffer.wrap(isNull ? ByteArray.copyFrom("").toByteArray() : ((ByteString) value).toByteArray());
+            case MESSAGE -> {
+                final Object object  = convertBuildInValue(field.getMessageType().getFullName(), (DynamicMessage) value);
+                isNull = object == null;
+                yield switch (ProtoType.of(field.getMessageType().getFullName())) {
+                    case BOOL_VALUE -> !isNull && ((BoolValue) object).getValue();
+                    case BYTES_VALUE -> ByteBuffer.wrap(isNull ? ByteArray.copyFrom ("").toByteArray() : ((BytesValue) object).getValue().toByteArray());
+                    case STRING_VALUE -> isNull ? "" : ((StringValue) object).getValue();
+                    case INT32_VALUE -> isNull ? 0 : ((Int32Value) object).getValue();
+                    case INT64_VALUE -> isNull ? 0 : ((Int64Value) object).getValue();
+                    case UINT32_VALUE -> isNull ? 0 : ((UInt32Value) object).getValue();
+                    case UINT64_VALUE -> isNull ? 0 : ((UInt64Value) object).getValue();
+                    case FLOAT_VALUE -> isNull ? 0f : ((FloatValue) object).getValue();
+                    case DOUBLE_VALUE -> isNull ? 0d : ((DoubleValue) object).getValue();
+                    case DATE -> {
+                        final LocalDate localDate;
+                        if(isNull) {
+                            localDate = LocalDate.of(1, 1, 1);
+                        } else {
+                            final Date date = (Date) object;
+                            localDate = LocalDate.of(date.getYear(), date.getMonth(), date.getDay());
+                        }
+                        yield Long.valueOf(localDate.toEpochDay()).intValue();
+                    }
+                    case TIME -> {
+                        final LocalTime localTime;
+                        if(isNull) {
+                            localTime = LocalTime.of(0, 0, 0, 0);
+                        } else {
+                            final TimeOfDay timeOfDay = (TimeOfDay) object;
+                            localTime = LocalTime.of(timeOfDay.getHours(), timeOfDay.getMinutes(), timeOfDay.getSeconds(), timeOfDay.getNanos());
+                        }
+                        yield localTime.toNanoOfDay() / 1000L;
+                    }
+                    case DATETIME -> {
+                        final OffsetDateTime localDateTime;
+                        if(isNull) {
+                            localDateTime = LocalDateTime.of(
+                                            1, 1, 1,
+                                            0, 0, 0, 0)
+                                    .atOffset(ZoneOffset.UTC);
+                        } else {
+                            final DateTime dt = (DateTime) object;
+                            localDateTime = LocalDateTime.of(
+                                            dt.getYear(), dt.getMonth(), dt.getDay(),
+                                            dt.getHours(), dt.getMinutes(), dt.getSeconds(), dt.getNanos())
+                                    .atOffset(ZoneOffset.ofTotalSeconds((int)dt.getUtcOffset().getSeconds()));
+                        }
+                        yield localDateTime.toInstant();
+                    }
+                    case TIMESTAMP -> {
+                        final Instant instant;
+                        if (isNull) {
+                            instant = LocalDateTime.of(
+                                            1, 1, 1,
+                                            0, 0, 0, 0)
+                                    .atOffset(ZoneOffset.UTC)
+                                    .toInstant();
+                        } else {
+                            instant = DateTimeUtil.toInstant(((Timestamp) object));
+                        }
+                        yield DateTimeUtil.toEpochMicroSecond(instant);
+                    }
+                    case ANY -> {
+                        if(isNull) {
+                            yield "";
+                        }
+                        final Any any = (Any) object;
+                        if(printer == null) {
+                            yield any.getValue().toStringUtf8();
+                        }
+                        try {
+                            yield printer.print(any);
+                        } catch (InvalidProtocolBufferException e) {
+                            yield any.getValue().toStringUtf8();
+                        }
+                    }
+                    case EMPTY, NULL_VALUE -> null;
+                    case CUSTOM -> {
+                        final Map<String, Object> map = new HashMap<>();
+                        final DynamicMessage child = (DynamicMessage) object;
+                        for(final Descriptors.FieldDescriptor childField : field.getMessageType().getFields()) {
+                            map.put(childField.getName(), getAsPrimitive(childField, child.getField(childField), printer));
+                        }
+                        yield map;
+                    }
+                    default -> object;
+                };
+            }
+            default -> null;
+        };
+    }
+
+    public static Object getAsStandard(
+            final Descriptors.FieldDescriptor field,
+            final Object value) {
+
+        return getAsStandard(field, value, null);
+    }
+
+    public static Object getAsStandard(
+            final Descriptors.FieldDescriptor field,
+            final Object value,
+            final JsonFormat.Printer printer) {
+
+        if(field.isRepeated()) {
+            if(field.isMapField()) {
+                if(value == null) {
+                    return new HashMap<>();
+                }
+                final Descriptors.FieldDescriptor keyFieldDescriptor = field.getMessageType().findFieldByName("key");
+                final Descriptors.FieldDescriptor valueFieldDescriptor = field.getMessageType().getFields().stream()
+                        .filter(f -> f.getName().equals("value"))
+                        .findAny()
+                        .orElseThrow(() -> new IllegalStateException("Map value not found for field: " + field));
+                return ((List<DynamicMessage>) value).stream()
+                        .collect(Collectors.toMap(
+                                e -> e.getField(keyFieldDescriptor),
+                                e -> getAsStandard(valueFieldDescriptor, e.getField(field.getMessageType().findFieldByName("value")), printer)));
+            }
+            if(value == null) {
+                return new ArrayList<>();
+            }
+            return ((List<Object>) value).stream()
+                    .map(v -> getAsStandardInner(field, v, printer))
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+        }
+        return getAsStandardInner(field, value, printer);
+    }
+
+    private static Object getAsStandardInner(
+            final Descriptors.FieldDescriptor field,
+            final Object value,
+            final JsonFormat.Printer printer) {
+
+        boolean isNull = value == null;
+        return switch (field.getJavaType()) {
+            case BOOLEAN -> isNull ? false : (Boolean)value;
+            case STRING -> isNull ? "" : (String)value;
+            case INT -> isNull ? 0 : (Integer)value;
+            case LONG -> isNull ? 0 : (Long)value;
+            case FLOAT -> isNull ? 0f : (Float)value;
+            case DOUBLE -> isNull ? 0d : (Double)value;
+            case ENUM -> isNull ? "" : ((Descriptors.EnumValueDescriptor)value).getName();
+            case BYTE_STRING -> ByteBuffer.wrap(isNull ? ByteArray.copyFrom("").toByteArray() : ((ByteString) value).toByteArray());
+            case MESSAGE -> {
+                final Object object  = convertBuildInValue(field.getMessageType().getFullName(), (DynamicMessage) value);
+                isNull = object == null;
+                yield switch (ProtoType.of(field.getMessageType().getFullName())) {
+                    case BOOL_VALUE -> !isNull && ((BoolValue) object).getValue();
+                    case BYTES_VALUE -> ByteBuffer.wrap(isNull ? ByteArray.copyFrom ("").toByteArray() : ((BytesValue) object).getValue().toByteArray());
+                    case STRING_VALUE -> isNull ? "" : ((StringValue) object).getValue();
+                    case INT32_VALUE -> isNull ? 0 : ((Int32Value) object).getValue();
+                    case INT64_VALUE -> isNull ? 0 : ((Int64Value) object).getValue();
+                    case UINT32_VALUE -> isNull ? 0 : ((UInt32Value) object).getValue();
+                    case UINT64_VALUE -> isNull ? 0 : ((UInt64Value) object).getValue();
+                    case FLOAT_VALUE -> isNull ? 0f : ((FloatValue) object).getValue();
+                    case DOUBLE_VALUE -> isNull ? 0d : ((DoubleValue) object).getValue();
+                    case DATE -> {
+                        if(isNull) {
+                            yield LocalDate.of(1, 1, 1);
+                        }
+                        final Date date = (Date) object;
+                        yield LocalDate.of(date.getYear(), date.getMonth(), date.getDay());
+                    }
+                    case TIME -> {
+                        if(isNull) {
+                            yield LocalTime.of(0, 0, 0, 0);
+                        }
+                        final TimeOfDay timeOfDay = (TimeOfDay) object;
+                        yield LocalTime.of(timeOfDay.getHours(), timeOfDay.getMinutes(), timeOfDay.getSeconds(), timeOfDay.getNanos());
+                    }
+                    case DATETIME -> {
+                        if(isNull) {
+                            yield LocalDateTime.of(
+                                            1, 1, 1,
+                                            0, 0, 0, 0)
+                                    .atOffset(ZoneOffset.UTC);
+                        }
+                        final DateTime dt = (DateTime) object;
+                        yield LocalDateTime.of(
+                                        dt.getYear(), dt.getMonth(), dt.getDay(),
+                                        dt.getHours(), dt.getMinutes(), dt.getSeconds(), dt.getNanos())
+                                .atOffset(ZoneOffset.ofTotalSeconds((int)dt.getUtcOffset().getSeconds()));
+                    }
+                    case TIMESTAMP -> {
+                        if (isNull) {
+                            yield LocalDateTime.of(
+                                            1, 1, 1,
+                                            0, 0, 0, 0)
+                                    .atOffset(ZoneOffset.UTC)
+                                    .toInstant();
+                        }
+                        yield DateTimeUtil.toInstant(((Timestamp) object));
+                    }
+                    case ANY -> {
+                        if(isNull) {
+                            yield "";
+                        }
+                        final Any any = (Any) object;
+                        if(printer == null) {
+                            yield any.getValue().toStringUtf8();
+                        }
+                        try {
+                            yield printer.print(any);
+                        } catch (InvalidProtocolBufferException e) {
+                            yield any.getValue().toStringUtf8();
+                        }
+                    }
+                    case EMPTY, NULL_VALUE -> null;
+                    case CUSTOM -> {
+                        final Map<String, Object> map = new HashMap<>();
+                        final DynamicMessage child = (DynamicMessage) object;
+                        for(final Descriptors.FieldDescriptor childField : field.getMessageType().getFields()) {
+                            map.put(childField.getName(), getAsStandard(childField, child.getField(childField), printer));
+                        }
+                        yield map;
+                    }
+                    default -> object;
+                };
+            }
+            default -> null;
+        };
+    }
+
     public static Descriptors.FieldDescriptor getField(final Descriptors.Descriptor descriptor, final String field) {
         return descriptor.getFields().stream()
                 .filter(f -> f.getName().equals(field))
@@ -553,6 +849,68 @@ public class ProtoSchemaUtil {
         return getDescriptors(set.getFileList(), fileDescriptors);
     }
 
+    public static Map<String, Object> asPrimitiveMap(final DynamicMessage message) {
+        return asPrimitiveMap(message, null, null);
+    }
+
+    public static Map<String,Object> asStandardMap(final DynamicMessage message) {
+        return asStandardMap(message, null, null);
+    }
+
+    public static Map<String,Object> asPrimitiveMap(
+            final DynamicMessage message,
+            final Collection<String> fieldNames) {
+
+        return asPrimitiveMap(message, fieldNames, null);
+    }
+
+    public static Map<String,Object> asPrimitiveMap(
+            final DynamicMessage message,
+            final Collection<String> fieldNames,
+            final JsonFormat.Printer printer) {
+
+        final Map<String, Object> primitiveValues = new HashMap<>();
+        if(message == null) {
+            return primitiveValues;
+        }
+        for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : message.getAllFields().entrySet()) {
+            if(fieldNames != null && !fieldNames.isEmpty() && !fieldNames.contains(entry.getKey().getName())) {
+                continue;
+            }
+
+            final Object primitiveValue = getAsPrimitive(entry.getKey(), entry.getValue(), printer);
+            primitiveValues.put(entry.getKey().getName(), primitiveValue);
+        }
+        return primitiveValues;
+    }
+
+    public static Map<String,Object> asStandardMap(
+            final DynamicMessage message,
+            final Collection<String> fieldNames) {
+
+        return asStandardMap(message, fieldNames, null);
+    }
+
+    public static Map<String,Object> asStandardMap(
+            final DynamicMessage message,
+            final Collection<String> fieldNames,
+            final JsonFormat.Printer printer) {
+
+        final Map<String, Object> standardValues = new HashMap<>();
+        if(message == null) {
+            return standardValues;
+        }
+        for(final Map.Entry<Descriptors.FieldDescriptor, Object> entry : message.getAllFields().entrySet()) {
+            if(fieldNames != null && !fieldNames.isEmpty() && !fieldNames.contains(entry.getKey().getName())) {
+                continue;
+            }
+
+            final Object standardValue = getAsStandard(entry.getKey(), entry.getValue(), printer);
+            standardValues.put(entry.getKey().getName(), standardValue);
+        }
+        return standardValues;
+    }
+
     private static Map<String, Descriptors.Descriptor> getDescriptors(
             final List<DescriptorProtos.FileDescriptorProto> files,
             final List<Descriptors.FileDescriptor> fileDescriptors) {
@@ -585,6 +943,14 @@ public class ProtoSchemaUtil {
         }
 
         return descriptors;
+    }
+
+    public static byte[] encode(final DynamicMessage message) throws IOException {
+        final DynamicProtoCoder coder = DynamicProtoCoder.of(message.getDescriptorForType());
+        try(final ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
+            coder.encode(message, byteArrayOutputStream);
+            return byteArrayOutputStream.toByteArray();
+        }
     }
 
     public static DescriptorProtos.FileDescriptorSet deserializeFileDescriptorSet(final byte[] bytes) {

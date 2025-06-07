@@ -154,8 +154,7 @@ public class Lag implements StatefulFunction {
         }
         try {
             return exp.setVariables((Map<String, Double>) variables).evaluate();
-        } catch (IllegalArgumentException e) {
-            System.out.println(e.getMessage());
+        } catch (final IllegalArgumentException e) {
             return null;
         }
     }

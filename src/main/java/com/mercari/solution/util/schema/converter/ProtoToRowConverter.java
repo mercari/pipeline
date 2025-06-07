@@ -55,6 +55,15 @@ public class ProtoToRowConverter {
 
     public static Row convert(
             final Schema schema,
+            final DynamicMessage message,
+            final JsonFormat.Printer printer) {
+
+        final Row.FieldValueBuilder builder = convertBuilder(schema, message.getDescriptorForType(), message, printer);
+        return builder.build();
+    }
+
+    public static Row convert(
+            final Schema schema,
             final Descriptors.Descriptor messageDescriptor,
             final DynamicMessage message,
             final JsonFormat.Printer printer) {

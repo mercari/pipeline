@@ -3,28 +3,10 @@ package com.mercari.solution.module.source;
 import com.google.api.services.pubsub.model.SeekResponse;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.protobuf.Descriptors;
-import com.google.protobuf.util.JsonFormat;
 import com.mercari.solution.module.*;
-import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.gcp.PubSubUtil;
-import com.mercari.solution.util.gcp.StorageUtil;
-import com.mercari.solution.util.pipeline.Filter;
-import com.mercari.solution.util.pipeline.OptionUtil;
-import com.mercari.solution.util.pipeline.Select;
-import com.mercari.solution.util.pipeline.Unnest;
-import com.mercari.solution.util.pipeline.select.SelectFunction;
-import com.mercari.solution.util.schema.AvroSchemaUtil;
+import com.mercari.solution.util.pipeline.*;
 import com.mercari.solution.util.schema.MessageSchemaUtil;
-import com.mercari.solution.util.schema.ProtoSchemaUtil;
-import com.mercari.solution.util.schema.converter.*;
-import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericDatumReader;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.generic.GenericRecordBuilder;
-import org.apache.avro.io.BinaryDecoder;
-import org.apache.avro.io.DecoderFactory;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -42,7 +24,7 @@ import java.util.*;
 @Source.Module(name="pubsub")
 public class PubSubSource extends Source {
 
-    private static class Parameters implements Serializable {
+    private static class Parameters {
 
         private String topic;
         private String subscription;
@@ -50,14 +32,23 @@ public class PubSubSource extends Source {
         private String idAttribute;
         private SeekParameters seek;
 
-        private Format format;
+        private Serialize.Format format;
         private AdditionalFieldsParameters additionalFields;
         private Boolean outputOriginal;
+        private Boolean outputExcluded;
+        private Boolean deserializeOriginal;
         private String charset;
 
+        private JsonElement attributeFilter;
+
+        // single processing
         private JsonElement filter;
         private JsonArray select;
         private String flattenField;
+
+        // partitions processing
+        private Boolean exclusive;
+        private JsonArray partitions;
 
 
         private void validate(final PBegin begin, final Schema schema) {
@@ -127,7 +118,7 @@ public class PubSubSource extends Source {
 
         private void setDefaults() {
             if(format == null) {
-                format = Format.message;
+                format = Serialize.Format.message;
             }
             if(seek != null) {
                 seek.setDefaults();
@@ -138,8 +129,17 @@ public class PubSubSource extends Source {
             if(outputOriginal == null) {
                 outputOriginal = false;
             }
+            if(outputExcluded == null) {
+                outputExcluded = false;
+            }
+            if(deserializeOriginal == null) {
+                deserializeOriginal = false;
+            }
             if(charset == null) {
                 charset = StandardCharsets.UTF_8.name();
+            }
+            if(exclusive == null) {
+                exclusive = true;
             }
         }
 
@@ -190,13 +190,6 @@ public class PubSubSource extends Source {
 
     }
 
-    private enum Format {
-        json,
-        avro,
-        protobuf,
-        message
-    }
-
     @Override
     public MCollectionTuple expand(
             final PBegin begin,
@@ -229,55 +222,84 @@ public class PubSubSource extends Source {
             }
         }
 
-        final TupleTag<MElement> outputTag = new TupleTag<>() {};
-        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
-        final TupleTag<MElement> originalTag = new TupleTag<>() {};
-
         final DataType outputType = Optional
                 .ofNullable(getOutputType())
-                .orElse(DataType.ELEMENT);
+                .orElse(DataType.AVRO);
 
-        final Schema inputSchema = createDeserializedInputSchema(parameters, getSchema());
-        final Schema outputSchema;
-        final List<SelectFunction> selectFunctions = SelectFunction.of(parameters.select, inputSchema.getFields());
-        if (selectFunctions.isEmpty()) {
-            outputSchema = inputSchema
-                    .copy()
-                    .withType(outputType)
-                    .setup(outputType);
+        final Schema inputDeserializedSchema = createDeserializedInputSchema(parameters, getSchema());
+
+        final List<Partition> partitions;
+        if(parameters.partitions == null || !parameters.partitions.isJsonArray()) {
+            partitions = new ArrayList<>();
+            final Partition partition = Partition.of("", parameters.filter, parameters.select, parameters.flattenField, inputDeserializedSchema);
+            partitions.add(partition);
         } else {
-            outputSchema = SelectFunction
-                    .createSchema(selectFunctions, parameters.flattenField)
-                    .withType(outputType);
+            partitions = Partition.of(parameters.partitions, inputDeserializedSchema);
         }
 
+        final TupleTag<MElement> originalTag = new TupleTag<>() {};
+        final TupleTag<MElement> excludedTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
         final List<TupleTag<?>> outputTags = new ArrayList<>();
+
+        outputTags.add(excludedTag);
         outputTags.add(failuresTag);
-        if (parameters.outputOriginal) {
-            outputTags.add(originalTag);
+        for(final Partition partition : partitions) {
+            outputTags.add(partition.getOutputTag());
         }
+
+        final Filter attributeFilter = Filter.of(parameters.attributeFilter);
+
+        final Serialize serialize = Serialize.of(parameters.format, getSchema());
 
         final PCollectionTuple outputs = begin
                 .apply("Read", createRead(parameters, getTimestampAttribute(), errorHandler))
                 .apply("Format", ParDo
-                        .of(new OutputDoFn(getJobName(), getName(),
-                                inputSchema, outputSchema, parameters,
-                                outputType, getLoggings(), selectFunctions,
-                                getFailFast(), failuresTag, originalTag))
-                        .withOutputTags(outputTag, TupleTagList.of(outputTags)));
+                        .of(new OutputDoFn(parameters, inputDeserializedSchema, outputType,
+                                attributeFilter, serialize, partitions,
+                                originalTag, excludedTag, failuresTag,
+                                getLoggings(), getFailFast()))
+                        .withOutputTags(originalTag, TupleTagList.of(outputTags)));
 
         errorHandler.addError(outputs.get(failuresTag));
 
-        final MCollectionTuple outputTuple = MCollectionTuple
-                .of(outputs.get(outputTag), outputSchema);
-
-        if (parameters.outputOriginal) {
-            final Schema originalSchema = createMessageSchema().withType(DataType.MESSAGE);
-            return outputTuple
-                    .and("original", outputs.get(originalTag), originalSchema);
+        MCollectionTuple outputTuple;
+        if(partitions.size() == 1) {
+            final Partition partition = partitions.getFirst();
+            final Schema outputSchema = partition
+                    .getOutputSchema()
+                    .copy()
+                    .setup(outputType);
+            final PCollection<MElement> output = outputs.get(partition.getOutputTag());
+            outputTuple = MCollectionTuple.of(output, outputSchema.withType(outputType));
         } else {
-            return outputTuple;
+            outputTuple = MCollectionTuple.empty(begin.getPipeline());
+            for(final Partition partition : partitions) {
+                final Schema outputSchema = partition
+                        .getOutputSchema()
+                        .copy()
+                        .setup(outputType);
+                final PCollection<MElement> output = outputs.get(partition.getOutputTag());
+                outputTuple = outputTuple.and(partition.getName(), output, outputSchema.withType(outputType));
+            }
         }
+
+        if(parameters.outputOriginal) {
+            final Schema originalSchema;
+            if(parameters.deserializeOriginal) {
+                originalSchema = inputDeserializedSchema.withType(outputType);
+            } else {
+                originalSchema = createMessageSchema().withType(DataType.MESSAGE);
+            }
+            outputTuple = outputTuple
+                    .and("original", outputs.get(originalTag), originalSchema);
+        }
+        if(parameters.outputExcluded) {
+            outputTuple = outputTuple
+                    .and("excluded", outputs.get(excludedTag), inputDeserializedSchema.withType(outputType));
+        }
+
+        return outputTuple;
     }
 
     private static PubsubIO.Read<PubsubMessage> createRead(
@@ -305,7 +327,7 @@ public class PubSubSource extends Source {
     }
 
     private static Schema createDeserializedInputSchema(Parameters parameters, Schema schema) {
-        if(Format.message.equals(parameters.format)) {
+        if(Serialize.Format.message.equals(parameters.format)) {
             return createMessageSchema().withType(DataType.MESSAGE);
         }
 
@@ -334,334 +356,162 @@ public class PubSubSource extends Source {
 
     private static class OutputDoFn extends DoFn<PubsubMessage, MElement> {
 
-        private final String jobName;
-        private final String moduleName;
-
-        private final Format format;
-        private final AdditionalFieldsParameters messageFields;
-
-        private final Map<String, Logging> loggings;
         private final DataType outputType;
+        private final Map<String, Logging> loggings;
 
-        private final Filter filter;
-        private final Select select;
-        private final Unnest unnest;
+        private final Filter attributeFilter;
+        private final Serialize serialize;
+        private final List<Partition> partitions;
+        private final AdditionalFieldsParameters messageFields;
+        private final Schema inputSchema;
 
-        private final String charset;
-
-        private final boolean failFast;
+        private final boolean exclusive;
         private final boolean outputOriginal;
-        private final TupleTag<BadRecord> failuresTag;
+        private final boolean outputExcluded;
+        private final boolean deserializeOriginal;
+        private final boolean failFast;
+
         private final TupleTag<MElement> originalTag;
-
-        // for deserialize message
-        //// for non format
-        private final List<Schema.Field> fields;
-
-        //// for avro format
-        //// https://beam.apache.org/documentation/programming-guide/#user-code-thread-compatibility
-        private final String avroSchemaJson;
-        private transient GenericDatumReader<GenericRecord> datumReader;
-        private transient BinaryDecoder decoder = null;
-
-        //// for protobuf format
-        private final String descriptorFile;
-        private final String messageName;
-        private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();
-        private static final Map<String, JsonFormat.Printer> printers = new HashMap<>();
-
-        // for select result output schema
-        private final Schema outputSchema;
+        private final TupleTag<MElement> excludedTag;
+        private final TupleTag<BadRecord> failuresTag;
 
         OutputDoFn(
-                final String jobName,
-                final String moduleName,
-                //
-                final Schema inputSchema,
-                final Schema outputSchema,
                 final Parameters parameters,
+                final Schema inputSchema,
                 final DataType outputType,
-                final List<Logging> loggings,
-                // select
-                final List<SelectFunction> selectFunctions,
-                // failures
-                final boolean failFast,
+                final Filter attributeFilter,
+                final Serialize serialize,
+                final List<Partition> partitions,
+                final TupleTag<MElement> originalTag,
+                final TupleTag<MElement> excludedTag,
                 final TupleTag<BadRecord> failuresTag,
-                final TupleTag<MElement> originalTag) {
+                final List<Logging> loggings,
+                final boolean failFast) {
 
-            this.jobName = jobName;
-            this.moduleName = moduleName;
-            this.format = parameters.format;
+            this.attributeFilter = attributeFilter;
+            this.serialize = serialize;
+            this.partitions = partitions;
             this.messageFields = parameters.additionalFields;
             this.outputType = outputType;
-            this.loggings = Logging.map(loggings);
+            this.inputSchema = inputSchema;
 
-            this.filter = Filter.of(parameters.filter);
-            this.select = Select.of(selectFunctions);
-            this.unnest = Unnest.of(parameters.flattenField);
-
-            this.charset = parameters.charset;
-
-            this.failFast = failFast;
+            this.exclusive = parameters.exclusive;
             this.outputOriginal = parameters.outputOriginal;
-            this.failuresTag = failuresTag;
+            this.outputExcluded = parameters.outputExcluded;
+            this.deserializeOriginal = parameters.deserializeOriginal;
+            this.failFast = failFast;
             this.originalTag = originalTag;
+            this.excludedTag = excludedTag;
+            this.failuresTag = failuresTag;
 
-            switch (format) {
-                case protobuf -> {
-                    this.fields = inputSchema.getFields();
-                    this.descriptorFile = inputSchema.getProtobuf().getDescriptorFile();
-                    this.messageName = inputSchema.getProtobuf().getMessageName();
-                    this.avroSchemaJson = null;
-                }
-                case avro -> {
-                    this.fields = inputSchema.getFields();
-                    this.descriptorFile = null;
-                    this.messageName = null;
-                    this.avroSchemaJson = inputSchema.getAvro().getJson();
-                }
-                case message -> {
-                    this.fields = new ArrayList<>();
-                    this.descriptorFile = null;
-                    this.messageName = null;
-                    this.avroSchemaJson = null;
-                }
-                default -> {
-                    this.fields = inputSchema.getFields();
-                    this.descriptorFile = null;
-                    this.messageName = null;
-                    this.avroSchemaJson = null;
-                }
-            }
-
-            this.outputSchema = outputSchema;
+            this.loggings = Logging.map(loggings);
         }
 
         @Setup
         public void setup() {
-            switch (format) {
-                case avro -> {
-                    this.datumReader = new GenericDatumReader<>(AvroSchemaUtil.convertSchema(avroSchemaJson));
-                }
-                case protobuf -> {
-                    long start = java.time.Instant.now().toEpochMilli();
-                    final Descriptors.Descriptor descriptor = getOrLoadDescriptor(
-                            descriptors, printers, messageName, descriptorFile);
-                    long end = java.time.Instant.now().toEpochMilli();
-                    LOG.info("Finished setup PubSub source Output DoFn {} ms, thread id: {}, with descriptor: {}",
-                            (end - start),
-                            Thread.currentThread().getId(),
-                            descriptor.getFullName());
-                }
+            this.attributeFilter.setup();
+            this.serialize.setupDeserialize();
+            for(final Partition partition : partitions) {
+                partition.setup();
             }
-            this.outputSchema.setup(outputType);
         }
 
         @ProcessElement
-        public void processElement(ProcessContext c) {
+        public void processElement(final ProcessContext c) {
             final PubsubMessage message = c.element();
             if(message == null) {
                 return;
             }
             try {
-                Logging.log(LOG, loggings, "input", MessageSchemaUtil.toJsonString(message));
-                if(outputOriginal) {
+                if(loggings.containsKey("input")) {
+                    Logging.log(LOG, loggings, "input", MessageSchemaUtil.toJsonString(message));
+                }
+
+                if(outputOriginal && !deserializeOriginal) {
                     final MElement element = MElement.of(message, c.timestamp());
                     c.output(originalTag, element);
                 }
+
                 final Map attributes = message.getAttributeMap();
-                if(!filter.filter(attributes)) {
+                if(attributes != null && !attributes.isEmpty() && !attributeFilter.filter(attributes)) {
                     return;
                 }
-                final MElement output = switch (format) {
-                    case message -> MElement.of(message, c.timestamp());
-                    case json -> parseJson(message, c.timestamp());
-                    case avro -> parseAvro(message, c.timestamp());
-                    case protobuf -> parseProtobuf(message, c.timestamp());
-                };
 
-                Logging.log(LOG, loggings, "output", output);
-                c.output(output);
-            } catch (final Throwable e) {
-                ERROR_COUNTER.inc();
-                String errorMessage = FailureUtil.convertThrowableMessage(e);
-                LOG.error("pubsub source parse error: {}, {} for message: {}", e, errorMessage, message);
-                if(failFast) {
-                    throw new IllegalStateException(errorMessage, e);
+                final Map<String, Object> additionalValues = createMessageFields(messageFields, message, c.timestamp());
+                MElement deserialized = serialize
+                        .deserialize(message.getPayload(), c.timestamp())
+                        .withSchema(inputSchema);
+                if(!additionalValues.isEmpty()) {
+                    deserialized = deserialized
+                            .merge(additionalValues)
+                            .withSchema(inputSchema.withType(DataType.ELEMENT));
                 }
-                final BadRecord badRecord = FailureUtil.createBadRecord(message, "", e);
+
+                if(outputOriginal && deserializeOriginal) {
+                    final MElement deserialized_ = deserialized
+                            .convert(inputSchema.withType(outputType));
+                    c.output(originalTag, deserialized_);
+                }
+
+                boolean outputted = false;
+                for(final Partition partition : partitions) {
+                    final List<MElement> outputs = partition.execute(deserialized, c.timestamp());
+                    for(final MElement output : outputs) {
+                        final MElement output_ = output.convert(partition.getOutputSchema().withType(outputType));
+                        c.output(partition.getOutputTag(), output_);
+                        outputted = true;
+                        if(loggings.containsKey("output")) {
+                            final String text = "partition: " + partition.getName() + ", output: " + output_.toString();
+                            Logging.log(LOG, loggings, "output", text);
+                        }
+                    }
+                    if(exclusive && outputted) {
+                        return;
+                    }
+                }
+                if(outputExcluded && !outputted) {
+                    final MElement output_ = deserialized.convert(inputSchema.withType(outputType));
+                    c.output(excludedTag, output_);
+                    if(loggings.containsKey("output")) {
+                        final String text = "excluded output: " + output_.toString();
+                        Logging.log(LOG, loggings, "output", text);
+                    }
+                }
+            } catch (final Throwable e) {
+                final BadRecord badRecord = processError("pubsub source error: " + e.getMessage(), MElement.of(message, c.timestamp()), e, failFast);
                 c.output(failuresTag, badRecord);
             }
         }
 
-        private MElement parseJson(final PubsubMessage message, Instant timestamp) {
-            final byte[] content = message.getPayload();
-            final String json = new String(content, StandardCharsets.UTF_8);
-            if (select.useSelect()) {
-                Map<String, Object> values = JsonToElementConverter.convert(fields, json);
-                values = select.select(values, timestamp);
-                return switch (outputType) {
-                    case AVRO -> MElement.of(ElementToAvroConverter.convert(outputSchema.getAvroSchema(), values), timestamp);
-                    case ROW -> MElement.of(ElementToRowConverter.convert(outputSchema.getRowSchema(), values), timestamp);
-                    default -> MElement.of(values, timestamp);
-                };
-            } else {
-                return switch (outputType) {
-                    case AVRO -> MElement.of(JsonToAvroConverter.convert(outputSchema.getAvroSchema(), json), timestamp);
-                    case ROW -> MElement.of(JsonToRowConverter.convert(outputSchema.getRowSchema(), json), timestamp);
-                    default -> MElement.of(JsonToElementConverter.convert(fields, json), timestamp);
-                };
-            }
-        }
-
-        private MElement parseAvro(final PubsubMessage message, Instant timestamp) throws IOException {
-            final byte[] bytes = message.getPayload();
-            decoder = DecoderFactory.get().binaryDecoder(bytes, decoder);
-            GenericRecord record = new GenericData.Record(datumReader.getSchema());
-            record = datumReader.read(record, decoder);
-            if (select.useSelect()) {
-                final MElement values = MElement.of(record, timestamp);
-                final Map<String, Object> output = select.select(values, timestamp);
-                return switch (outputType) {
-                    case AVRO -> MElement.of(addMessageFields(
-                            ElementToAvroConverter.convertBuilder(outputSchema.getAvroSchema(), output),
-                            messageFields
-                            , message, timestamp), timestamp);
-                    case ROW -> MElement.of(ElementToRowConverter.convert(outputSchema.getRowSchema(), output), timestamp);
-                    default -> MElement.of(output, timestamp);
-                };
-            } else {
-                return switch (outputType) {
-                    case ROW -> MElement.of(AvroToRowConverter.convert(outputSchema.getRowSchema(), record), timestamp);
-                    default -> MElement.of(record, timestamp);
-                };
-            }
-        }
-
-        private MElement parseProtobuf(final PubsubMessage message, Instant timestamp) {
-            final byte[] bytes = message.getPayload();
-            final Descriptors.Descriptor descriptor = Optional
-                    .ofNullable(descriptors.get(messageName))
-                    .orElseGet(() -> getOrLoadDescriptor(descriptors, printers, messageName, descriptorFile));
-            final JsonFormat.Printer printer = printers.get(messageName);
-
-            if(select.useSelect()) {
-                Map<String, Object> values = ProtoToElementConverter.convert(fields, descriptor, bytes, printer);
-                values = addMessageFields(values, messageFields, message, timestamp);
-                final Map<String, Object> output = select.select(values, timestamp);
-                return switch (outputType) {
-                    case AVRO -> MElement.of(ElementToAvroConverter.convert(outputSchema.getAvroSchema(), output), timestamp);
-                    case ROW -> MElement.of(ElementToRowConverter.convert(outputSchema.getRowSchema(), output), timestamp);
-                    default -> MElement.of(output, timestamp);
-                };
-            } else {
-                return switch (outputType) {
-                    case AVRO -> MElement.of(addMessageFields(
-                            ProtoToAvroConverter.convertBuilder(outputSchema.getAvroSchema(), descriptor, bytes, printer),
-                            messageFields, message, timestamp),timestamp);
-                    case ROW -> MElement.of(ProtoToRowConverter.convert(outputSchema.getRowSchema(), descriptor, bytes, printer), timestamp);
-                    default -> MElement.of(addMessageFields(
-                            ProtoToElementConverter.convert(fields, descriptor, bytes, printer),
-                            messageFields, message, timestamp), timestamp);
-                };
-            }
-        }
-
-        private static Map<String, Object> addMessageFields(
-                final Map<String, Object> values,
+        private static Map<String, Object> createMessageFields(
                 final AdditionalFieldsParameters messageFields,
                 final PubsubMessage message,
                 final Instant timestamp) {
 
-            if(messageFields != null) {
-                if(messageFields.topic != null) {
-                    values.put(messageFields.topic, message.getTopic());
-                }
-                if(messageFields.id != null) {
-                    values.put(messageFields.id, message.getMessageId());
-                }
-                if(messageFields.timestamp != null) {
-                    values.put(messageFields.timestamp, timestamp.getMillis() * 1000L);
-                }
-                if(messageFields.orderingKey != null) {
-                    values.put(messageFields.orderingKey, message.getOrderingKey());
-                }
-                if(!messageFields.attributes.isEmpty()) {
-                    for(final Map.Entry<String, String> entry : messageFields.attributes.entrySet()) {
-                        values.put(entry.getValue(), message.getAttribute(entry.getKey()));
-                    }
+            final Map<String, Object> additionalValues = new HashMap<>();
+            if(messageFields == null) {
+                return additionalValues;
+            }
+            if(messageFields.topic != null) {
+                additionalValues.put(messageFields.topic, message.getTopic());
+            }
+            if(messageFields.id != null) {
+                additionalValues.put(messageFields.id, message.getMessageId());
+            }
+            if(messageFields.timestamp != null) {
+                additionalValues.put(messageFields.timestamp, timestamp.getMillis() * 1000L);
+            }
+            if(messageFields.orderingKey != null) {
+                additionalValues.put(messageFields.orderingKey, message.getOrderingKey());
+            }
+            if(!messageFields.attributes.isEmpty()) {
+                for(final Map.Entry<String, String> entry : messageFields.attributes.entrySet()) {
+                    additionalValues.put(entry.getValue(), message.getAttribute(entry.getKey()));
                 }
             }
-            return values;
+            return additionalValues;
         }
 
-        private static GenericRecord addMessageFields(
-                final GenericRecordBuilder builder,
-                final AdditionalFieldsParameters messageFields,
-                final PubsubMessage message,
-                final Instant timestamp) {
-
-            if(messageFields != null) {
-                if(messageFields.topic != null) {
-                    builder.set(messageFields.topic, message.getTopic());
-                }
-                if(messageFields.id != null) {
-                    builder.set(messageFields.id, message.getMessageId());
-                }
-                if(messageFields.timestamp != null) {
-                    builder.set(messageFields.timestamp, timestamp.getMillis() * 1000L);
-                }
-                if(messageFields.orderingKey != null) {
-                    builder.set(messageFields.orderingKey, message.getOrderingKey());
-                }
-                if(!messageFields.attributes.isEmpty()) {
-                    for(final Map.Entry<String, String> entry : messageFields.attributes.entrySet()) {
-                        builder.set(entry.getValue(), message.getAttribute(entry.getKey()));
-                    }
-                }
-            }
-            return builder.build();
-        }
-
-        private MFailure createFailureElement(
-                final ProcessContext c,
-                final PubsubMessage message,
-                final Throwable e) {
-
-            final JsonObject input = new JsonObject();
-            input.addProperty("messageId", message.getMessageId());
-            input.addProperty("orderingKey", message.getOrderingKey());
-            input.addProperty("topic", message.getTopic());
-            if(message.getAttributeMap() != null) {
-                final JsonObject attributes = new JsonObject();
-                for(final Map.Entry<String, String> entry : message.getAttributeMap().entrySet()) {
-                    attributes.addProperty(entry.getKey(), entry.getValue());
-                }
-                input.add("attributes", attributes);
-            }
-            return MFailure
-                    .of(jobName, moduleName, input.toString(), e, c.timestamp());
-        }
-
-        private String createInputJson(
-                final ProcessContext c,
-                final PubsubMessage message,
-                final Throwable e) {
-
-
-            final JsonObject input = new JsonObject();
-            input.addProperty("messageId", message.getMessageId());
-            input.addProperty("orderingKey", message.getOrderingKey());
-            input.addProperty("topic", message.getTopic());
-            if(message.getAttributeMap() != null) {
-                final JsonObject attributes = new JsonObject();
-                for(final Map.Entry<String, String> entry : message.getAttributeMap().entrySet()) {
-                    attributes.addProperty(entry.getKey(), entry.getValue());
-                }
-                input.add("attributes", attributes);
-            }
-            return input.toString();
-        }
     }
 
     private static Schema createMessageSchema() {
@@ -674,52 +524,6 @@ public class PubSubSource extends Source {
                 .withField("timestamp", Schema.FieldType.TIMESTAMP)
                 .withField("eventTime", Schema.FieldType.TIMESTAMP)
                 .build();
-    }
-
-    private synchronized static Descriptors.Descriptor getOrLoadDescriptor(
-            final Map<String, Descriptors.Descriptor> descriptors,
-            final Map<String, JsonFormat.Printer> printers,
-            final String messageName,
-            final String descriptorPath) {
-
-        if(descriptors.containsKey(messageName)) {
-            final Descriptors.Descriptor descriptor = descriptors.get(messageName);
-            if(descriptor != null) {
-                return descriptor;
-            } else {
-                descriptors.remove(messageName);
-            }
-        }
-        loadDescriptor(descriptors, printers, messageName, descriptorPath);
-        return descriptors.get(messageName);
-    }
-
-    private synchronized static void loadDescriptor(
-            final Map<String, Descriptors.Descriptor> descriptors,
-            final Map<String, JsonFormat.Printer> printers,
-            final String messageName,
-            final String descriptorPath) {
-
-        if(descriptors.containsKey(messageName) && descriptors.get(messageName) == null) {
-            descriptors.remove(messageName);
-        }
-
-        if(!descriptors.containsKey(messageName)) {
-            final byte[] bytes = StorageUtil.readBytes(descriptorPath);
-            final Map<String, Descriptors.Descriptor> map = ProtoSchemaUtil.getDescriptors(bytes);
-            if(!map.containsKey(messageName)) {
-                throw new IllegalArgumentException();
-            }
-
-            descriptors.put(messageName, map.get(messageName));
-
-            final JsonFormat.TypeRegistry.Builder builder = JsonFormat.TypeRegistry.newBuilder();
-            map.forEach((k, v) -> builder.add(v));
-            final JsonFormat.Printer printer = JsonFormat.printer().usingTypeRegistry(builder.build());
-            printers.put(messageName, printer);
-
-            LOG.info("setup pubsub source module. protoMessage: {} loaded", messageName);
-        }
     }
 
 }

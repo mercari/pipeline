@@ -3,6 +3,7 @@ package com.mercari.solution.util.pipeline;
 import com.google.gson.JsonObject;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.DynamicMessage;
+import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.JsonFormat;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.gcp.StorageUtil;
@@ -20,10 +21,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-public class Serialize {
+public class Serialize implements Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Serialize.class);
 
@@ -31,6 +33,7 @@ public class Serialize {
         json,
         avro,
         protobuf,
+        message,
         unknown
     }
 
@@ -38,6 +41,9 @@ public class Serialize {
 
     // for non format
     private final List<Schema.Field> fields;
+
+    // for json format
+    private final String charset;
 
     // for avro format
     // https://beam.apache.org/documentation/programming-guide/#user-code-thread-compatibility
@@ -53,6 +59,7 @@ public class Serialize {
     private final String messageName;
     private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();
     private static final Map<String, JsonFormat.Printer> printers = new HashMap<>();
+
 
     public static Serialize of(
             final Format format,
@@ -71,18 +78,25 @@ public class Serialize {
                 this.descriptorFile = inputSchema.getProtobuf().getDescriptorFile();
                 this.messageName = inputSchema.getProtobuf().getMessageName();
                 this.avroSchemaJson = null;
+                this.charset = StandardCharsets.UTF_8.name();
             }
             case avro -> {
                 this.fields = inputSchema.getFields();
                 this.descriptorFile = null;
                 this.messageName = null;
                 this.avroSchemaJson = inputSchema.getAvro().getJson();
+                this.charset = StandardCharsets.UTF_8.name();
             }
             default -> {
                 this.fields = inputSchema.getFields();
                 this.descriptorFile = null;
                 this.messageName = null;
                 this.avroSchemaJson = null;
+                if(inputSchema.getProtobuf().getDescriptor() != null) {
+                    final Descriptors.Descriptor descriptor = inputSchema.getProtobuf().getDescriptor();
+                    descriptors.put(descriptor.getFullName(), descriptor);
+                }
+                this.charset = StandardCharsets.UTF_8.name();
             }
         }
     }
@@ -97,7 +111,8 @@ public class Serialize {
                 final Descriptors.Descriptor descriptor = getOrLoadDescriptor(
                         descriptors, printers, messageName, descriptorFile);
                 long end = java.time.Instant.now().toEpochMilli();
-                LOG.info("Finished setup Output DoFn {} ms, thread id: {}, with descriptor: {}",
+                LOG.info("Finished to get descriptor: {}, {} ms, thread id: {}, with descriptor: {}",
+                        messageName,
                         (end - start),
                         Thread.currentThread().getId(),
                         descriptor.getFullName());
@@ -205,8 +220,15 @@ public class Serialize {
         final Descriptors.Descriptor descriptor = Optional
                 .ofNullable(descriptors.get(messageName))
                 .orElseGet(() -> getOrLoadDescriptor(descriptors, printers, messageName, descriptorFile));
-        final JsonFormat.Printer printer = printers.get(messageName);
-        return MElement.of(ProtoToElementConverter.convert(fields, descriptor, bytes, printer), timestamp);
+        try {
+            final DynamicMessage message = DynamicMessage
+                    .newBuilder(descriptor)
+                    .mergeFrom(bytes)
+                    .build();
+            return MElement.of(message, timestamp);
+        } catch (final InvalidProtocolBufferException e) {
+            throw new RuntimeException("failed to deserialize protobuf: ", e);
+        }
     }
 
     public synchronized static Descriptors.Descriptor getOrLoadDescriptor(

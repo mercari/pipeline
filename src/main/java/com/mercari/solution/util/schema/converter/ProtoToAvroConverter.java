@@ -90,10 +90,25 @@ public class ProtoToAvroConverter {
         }
     }
 
-    public static GenericRecord convert(final Schema schema,
-                                        final Descriptors.Descriptor messageDescriptor,
-                                        final DynamicMessage message,
-                                        final JsonFormat.Printer printer) {
+    public static GenericRecord convert(
+            final Schema schema,
+            final DynamicMessage message,
+            final JsonFormat.Printer printer) {
+
+        if(message == null) {
+            return null;
+        }
+
+        final Descriptors.Descriptor messageDescriptor = message.getDescriptorForType();
+        final GenericRecordBuilder builder = convertBuilder(schema, messageDescriptor, message, printer);
+        return builder.build();
+    }
+
+    public static GenericRecord convert(
+            final Schema schema,
+            final Descriptors.Descriptor messageDescriptor,
+            final DynamicMessage message,
+            final JsonFormat.Printer printer) {
 
         final GenericRecordBuilder builder = convertBuilder(schema, messageDescriptor, message, printer);
         return builder.build();

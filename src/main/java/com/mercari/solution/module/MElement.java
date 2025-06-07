@@ -6,6 +6,7 @@ import com.google.datastore.v1.Entity;
 import com.google.firestore.v1.Document;
 import com.google.gson.JsonObject;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.DynamicMessage;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.*;
 import com.mercari.solution.util.schema.converter.*;
@@ -32,6 +33,8 @@ public class MElement implements Serializable {
     private final Object value;
     private final long epochMillis;
 
+    private transient Schema schema;
+
     public int getIndex() {
         return index;
     }
@@ -46,6 +49,15 @@ public class MElement implements Serializable {
 
     public long getEpochMillis() {
         return epochMillis;
+    }
+
+    public Schema getSchema() {
+        return schema;
+    }
+
+    public MElement withSchema(Schema schema) {
+        this.schema = schema;
+        return this;
     }
 
     public org.joda.time.Instant getTimestamp() {
@@ -99,6 +111,14 @@ public class MElement implements Serializable {
 
     public static MElement of(GenericRecord record, long epochMillis) {
         return new MElement(0, DataType.AVRO, record, epochMillis);
+    }
+
+    public static MElement of(DynamicMessage message, org.joda.time.Instant timestamp) {
+        return of(message, timestamp.getMillis());
+    }
+
+    public static MElement of(DynamicMessage message, long epochMillis) {
+        return new MElement(0, DataType.PROTO, message, epochMillis);
     }
 
     public static MElement of(Struct struct, org.joda.time.Instant timestamp) {
@@ -191,6 +211,7 @@ public class MElement implements Serializable {
             case AVRO -> switch (type) {
                 case ELEMENT -> of(ElementToAvroConverter.convert(schema, this), epochMillis);
                 case AVRO -> this;
+                case PROTO -> of(ProtoToAvroConverter.convert(schema.getAvroSchema(), (DynamicMessage) value, null), epochMillis);
                 case ROW -> of(RowToRecordConverter.convert(schema.getAvroSchema(), (Row)value), epochMillis);
                 case STRUCT -> of(StructToAvroConverter.convert(schema.getAvroSchema(), (Struct) value), epochMillis);
                 case DOCUMENT -> of(DocumentToAvroConverter.convert(schema.getAvroSchema(), (Document) value), epochMillis);
@@ -200,7 +221,9 @@ public class MElement implements Serializable {
             case ROW -> switch (type) {
                 case ELEMENT -> of(ElementToRowConverter.convert(schema, this), epochMillis);
                 case AVRO -> of(AvroToRowConverter.convert(schema.getRowSchema(), (GenericRecord) value), epochMillis);
+                case PROTO -> of(ProtoToRowConverter.convert(schema.getRowSchema(), (DynamicMessage) value, null), epochMillis);
                 case ROW -> this;
+                case STRUCT -> of(StructToRowConverter.convert(schema.getRowSchema(), (Struct) value), epochMillis);
                 case DOCUMENT -> of(DocumentToRowConverter.convert(schema.getRowSchema(), (Document) value), epochMillis);
                 case ENTITY -> of(EntityToRowConverter.convert(schema.getRowSchema(), (Entity) value), epochMillis);
                 default -> throw new IllegalArgumentException("Convert from: " + type + " to Row is not yet supported");
@@ -209,6 +232,7 @@ public class MElement implements Serializable {
                 case ELEMENT -> of(ElementToDocumentConverter.convertBuilder(schema, this).build(), epochMillis);
                 case AVRO -> of(AvroToDocumentConverter.convertBuilder(schema.getAvroSchema(), (GenericRecord) value).build(), epochMillis);
                 case ROW -> of(RowToDocumentConverter.convertBuilder(schema.getRowSchema(), (Row) value).build(), epochMillis);
+                case STRUCT -> of(StructToDocumentConverter.convert((Struct) value).build(), epochMillis);
                 case DOCUMENT -> this;
                 case ENTITY -> of(EntityToDocumentConverter.convert(schema.getRowSchema(), (Entity) value).build(), epochMillis);
                 default -> throw new IllegalArgumentException("Convert from: " + type + " to Document is not yet supported");
@@ -233,6 +257,7 @@ public class MElement implements Serializable {
             case ELEMENT -> ElementSchemaUtil.getValue((Map<String, Object>) value, field);
             case ROW -> RowSchemaUtil.getAsPrimitive((Row) value, field);
             case AVRO -> AvroSchemaUtil.getAsPrimitive((GenericRecord) value, field);
+            case PROTO -> ProtoSchemaUtil.getAsPrimitive((DynamicMessage) value, field);
             case STRUCT -> StructSchemaUtil.getAsPrimitive(((Struct) value).getValue(field));
             case DOCUMENT -> DocumentSchemaUtil.getAsPrimitive(((Document) value).getFieldsMap().get(field));
             case ENTITY -> EntitySchemaUtil.getAsPrimitive(((Entity) value).getPropertiesMap().get(field));
@@ -255,10 +280,17 @@ public class MElement implements Serializable {
                 if(fieldNames == null || fieldNames.isEmpty()) {
                     yield new HashMap<>(map);
                 }
-                yield fieldNames.stream().collect(Collectors.toMap(f -> f, map::get));
+                final Map<String, Object> result = new HashMap<>();
+                for(final String fieldName : fieldNames) {
+                    final Object value = ElementSchemaUtil.getValue(map, fieldName);
+                    result.put(fieldName, value);
+                }
+                //yield fieldNames.stream().filter(Objects::nonNull).collect(Collectors.toMap(f -> f, map::get));
+                yield result;
             }
             case ROW -> RowSchemaUtil.asPrimitiveMap((Row) value);
             case AVRO -> AvroSchemaUtil.asPrimitiveMap((GenericRecord) value);
+            case PROTO -> ProtoSchemaUtil.asPrimitiveMap((DynamicMessage) value, fieldNames, null);
             case STRUCT -> StructSchemaUtil.asPrimitiveMap((Struct) value);
             case DOCUMENT -> DocumentSchemaUtil.asPrimitiveMap((Document) value);
             case ENTITY -> EntitySchemaUtil.asPrimitiveMap((Entity) value);
@@ -283,12 +315,16 @@ public class MElement implements Serializable {
     }
 
     public Map<String, Object> asStandardMap(final Schema schema, final Collection<String> fieldNames) {
+        return asStandardMap(schema.getFields(), fieldNames);
+    }
+
+    public Map<String, Object> asStandardMap(final List<Schema.Field> fields, final Collection<String> fieldNames) {
         return Optional.ofNullable(value)
                 .map(v -> switch (type) {
                     case ELEMENT -> {
                         final Map<String, Object> standardValues = new HashMap<>();
                         final Map<String, Object> primitiveValues = (Map<String, Object>) value;
-                        for(final Schema.Field field : schema.getFields()) {
+                        for(final Schema.Field field : fields) {
                             if(fieldNames != null && !fieldNames.isEmpty() && !fieldNames.contains(field.getName())) {
                                 continue;
                             }
@@ -298,6 +334,7 @@ public class MElement implements Serializable {
                         yield standardValues;
                     }
                     case AVRO -> AvroSchemaUtil.asStandardMap((GenericRecord) value, fieldNames);
+                    case PROTO -> ProtoSchemaUtil.asStandardMap((DynamicMessage) value, fieldNames, null);
                     case ROW -> RowSchemaUtil.asStandardMap((Row) value, fieldNames);
                     case STRUCT -> StructSchemaUtil.asStandardMap((Struct) value, fieldNames);
                     case DOCUMENT -> DocumentSchemaUtil.asStandardMap((Document) value, fieldNames);
@@ -552,6 +589,13 @@ public class MElement implements Serializable {
             case ENTITY -> EntitySchemaUtil.getTimestamp((Entity) value, field, null);
             default -> throw new IllegalArgumentException();
         };
+    }
+
+    public MElement merge(final Map<String, Object> primitiveValues) {
+        if(primitiveValues == null || primitiveValues.isEmpty()) {
+            return this;
+        }
+        return MElement.builder(this).withPrimitiveValues(primitiveValues).build();
     }
 
     public static Object getValue(Map<String, Object> primitiveMap, String fieldName, Schema.FieldType fieldType) {

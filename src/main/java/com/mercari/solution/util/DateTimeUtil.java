@@ -207,6 +207,13 @@ public class DateTimeUtil {
         }
     }
 
+    public static Instant toInstant(final com.google.protobuf.Timestamp timestamp) {
+        if(timestamp == null) {
+            return null;
+        }
+        return Instant.ofEpochSecond(timestamp.getSeconds(), timestamp.getNanos());
+    }
+
     public static org.joda.time.Instant toJodaInstant(final Object value) {
         final Instant timestamp = toInstant(value);
         final long epochMillis = toEpochMicroSecond(timestamp) / 1000L;
