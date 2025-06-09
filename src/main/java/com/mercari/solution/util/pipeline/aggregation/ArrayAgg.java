@@ -3,6 +3,7 @@ package com.mercari.solution.util.pipeline.aggregation;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.mercari.solution.module.IllegalModuleException;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
@@ -51,6 +52,10 @@ public class ArrayAgg implements AggregateFunction {
         arrayAgg.condition = condition;
         arrayAgg.range = range;
         arrayAgg.ignore = ignore;
+
+        if(!params.has("field") && !params.has("fields")) {
+            throw new IllegalModuleException("aggregation module array_agg requires field or fields attribute");
+        }
 
         if(params.has("fields") && params.get("fields").isJsonArray()) {
             final List<Schema.Field> fs = new ArrayList<>();

@@ -362,7 +362,7 @@ public class SelectTransform extends Transform {
 
             final Instant countMinTimestamp = Optional
                     .ofNullable(maxCountState.read())
-                    .orElseGet(() -> Instant.ofEpochMilli(Long.MAX_VALUE));
+                    .orElseGet(() -> Instant.ofEpochMilli(0L));
             final Instant durationMinTimestamp = maxRange.firstTimestamp(eventTime);
 
             // read state

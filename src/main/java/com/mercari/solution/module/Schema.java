@@ -499,7 +499,7 @@ public class Schema implements Serializable {
         private List<String> symbols; // for enumerate type
         private Integer scale; // for decimal type
         private Integer precision; // for decimal type
-        private List<Long> shape; // for matrix type
+        private List<Integer> shape; // for matrix type
         private FieldType matrixValueType; // for matrix type
         private Boolean nullable;
         private String defaultValue;
@@ -520,6 +520,10 @@ public class Schema implements Serializable {
             return mapValueType;
         }
 
+        public FieldType getMatrixValueType() {
+            return matrixValueType;
+        }
+
         public List<String> getSymbols() {
             return symbols;
         }
@@ -530,6 +534,10 @@ public class Schema implements Serializable {
 
         public Integer getPrecision() {
             return precision;
+        }
+
+        public List<Integer> getShape() {
+            return shape;
         }
 
         public Boolean getNullable() {
@@ -715,7 +723,7 @@ public class Schema implements Serializable {
             return fieldType;
         }
 
-        public static FieldType matrix(FieldType matrixValueType, List<Long> shape) {
+        public static FieldType matrix(FieldType matrixValueType, List<Integer> shape) {
             final FieldType fieldType = new FieldType();
             fieldType.type = Type.matrix;
             fieldType.matrixValueType = matrixValueType;
@@ -795,7 +803,7 @@ public class Schema implements Serializable {
                     jsonObject.add("matrixValueType", matrixValueType.toJsonObject());
                     final JsonArray shapeArray = new JsonArray();
                     if(symbols != null) {
-                        for(final Long s : shape) {
+                        for(final Integer s : shape) {
                             shapeArray.add(s);
                         }
                     }
