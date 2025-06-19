@@ -6,7 +6,7 @@
 
   <groupId>com.mercari.solution</groupId>
   <artifactId>pipeline</artifactId>
-  <version>1.0.0-alpha1</version>
+  <version>1.0.0-beta1</version>
   <name>Mercari Pipeline</name>
 
   <packaging>${packaging}</packaging>
@@ -14,7 +14,7 @@
   <properties>
     <beam.version>2.65.0</beam.version>
 
-    <snakeyaml.version>2.9</snakeyaml.version>
+    <snakeyaml.version>2.4</snakeyaml.version>
     <freemarker.version>2.3.34</freemarker.version>
     <exp4j.version>0.4.8</exp4j.version>
     <commons-math3.version>3.6.1</commons-math3.version>
@@ -24,13 +24,13 @@
 
     <hbase.version>2.6.2</hbase.version>
     <mysql-connector.version>8.4.0</mysql-connector.version>
-    <postgresql-connector.version>42.7.5</postgresql-connector.version>
+    <postgresql-connector.version>42.7.7</postgresql-connector.version>
     <sqlserver-connector.version>8.4.1.jre11</sqlserver-connector.version>
-    <alloydb-connector.version>1.2.2</alloydb-connector.version>
-    <jdbc-socket-factory.version>1.25.0</jdbc-socket-factory.version>
+    <alloydb-connector.version>1.2.4</alloydb-connector.version>
+    <jdbc-socket-factory.version>1.25.1</jdbc-socket-factory.version>
     <hikaricp.version>6.3.0</hikaricp.version>
     <h2.version>2.3.232</h2.version>
-    <drive.version>v3-rev20250427-2.0.0</drive.version>
+    <drive.version>v3-rev20250511-2.0.0</drive.version>
 
     <onnxruntime.version>1.22.0</onnxruntime.version>
     <onnxruntime-extensions.version>0.13.0</onnxruntime-extensions.version>
@@ -46,7 +46,9 @@
     <maven-shade-plugin.version>3.1.0</maven-shade-plugin.version>
     <maven-surefire-plugin.version>2.21.0</maven-surefire-plugin.version>
 
+    <jetty.version>11.0.25</jetty.version>
     <jakarta-servlet.version>6.1.0</jakarta-servlet.version>
+    <mcp.version>0.10.0</mcp.version>
 
     <packaging>jar</packaging>
     <jib.entrypoint>INHERIT</jib.entrypoint>
@@ -229,6 +231,71 @@
       </dependencies>
     </profile>
 
+    <!-- Makes the Pipeline API server on Jetty. -->
+    <profile>
+      <id>server</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <packaging>war</packaging>
+        <jib.image>jetty:${jetty.version}-jdk21</jib.image>
+        <jib.entrypoint>java,-jar,/usr/local/jetty/start.jar</jib.entrypoint>
+        <jib.appRoot>/var/lib/jetty/webapps/ROOT</jib.appRoot>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-direct-java</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.google.cloud.tools</groupId>
+            <artifactId>jib-maven-plugin</artifactId>
+            <configuration>
+              <container>
+                <environment>
+                  <GOOGLE_APPLICATION_CREDENTIALS>/mnt/gcloud/application_default_credentials.json</GOOGLE_APPLICATION_CREDENTIALS>
+                </environment>
+              </container>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>server-dev</id>
+      <activation>
+        <activeByDefault>false</activeByDefault>
+      </activation>
+      <properties>
+        <packaging>war</packaging>
+        <jib.image>jetty:${jetty.version}-jdk21</jib.image>
+        <jib.entrypoint>java,-jar,/usr/local/jetty/start.jar</jib.entrypoint>
+        <jib.appRoot>/var/lib/jetty/webapps/ROOT</jib.appRoot>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.beam</groupId>
+          <artifactId>beam-runners-direct-java</artifactId>
+          <scope>runtime</scope>
+        </dependency>
+      </dependencies>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-maven-plugin</artifactId>
+            <version>${jetty.version}</version>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!-- Makes the PrismRunner available when running a local pipeline job. -->
     <profile>
       <id>prism</id>
@@ -317,38 +384,6 @@
       </dependencies>
     </profile>
 
-    <!-- Makes the Config Builder on Jetty available. -->
-    <profile>
-      <id>server</id>
-      <activation>
-        <activeByDefault>false</activeByDefault>
-      </activation>
-      <properties>
-        <packaging>war</packaging>
-        <jetty.version>11.0.25</jetty.version>
-        <jib.image>jetty:${jetty.version}-jdk21</jib.image>
-        <jib.entrypoint>java,-jar,/usr/local/jetty/start.jar</jib.entrypoint>
-        <jib.appRoot>/var/lib/jetty/webapps/ROOT</jib.appRoot>
-      </properties>
-      <dependencies>
-        <dependency>
-          <groupId>org.apache.beam</groupId>
-          <artifactId>beam-runners-direct-java</artifactId>
-          <scope>runtime</scope>
-        </dependency>
-      </dependencies>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.eclipse.jetty</groupId>
-            <artifactId>jetty-maven-plugin</artifactId>
-            <version>${jetty.version}</version>
-          </plugin>
-        </plugins>
-      </build>
-
-    </profile>
-
   </profiles>
 
   <dependencyManagement>
@@ -394,20 +429,15 @@
       <artifactId>beam-sdks-java-io-parquet</artifactId>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-kafka -->
-    <dependency>
-      <groupId>org.apache.beam</groupId>
-      <artifactId>beam-sdks-java-io-kafka</artifactId>
-    </dependency>
-
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-io-iceberg</artifactId>
     </dependency>
 
+    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-kafka -->
     <dependency>
       <groupId>org.apache.beam</groupId>
-      <artifactId>beam-sdks-java-managed</artifactId>
+      <artifactId>beam-sdks-java-io-kafka</artifactId>
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-rrio -->
@@ -416,26 +446,23 @@
       <artifactId>beam-sdks-java-io-rrio</artifactId>
     </dependency>
 
+    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-io-clickhouse -->
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-io-clickhouse</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-sdks-java-managed</artifactId>
+    </dependency>
+
     <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-extensions-sql -->
     <dependency>
       <groupId>org.apache.beam</groupId>
       <artifactId>beam-sdks-java-extensions-sql</artifactId>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.apache.beam/beam-sdks-java-extensions-sql-zetasql -->
-    <!-- remove comment out if zetasql planner is needed -->
-    <!--
-    <dependency>
-      <groupId>org.apache.beam</groupId>
-      <artifactId>beam-sdks-java-extensions-sql-zetasql</artifactId>
-      <exclusions>
-        <exclusion>
-          <groupId>com.google.protobuf</groupId>
-          <artifactId>protobuf-javalite</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    -->
 
     <!-- Big Data -->
     <!-- https://mvnrepository.com/artifact/org.apache.hbase/hbase-common -->
@@ -443,14 +470,12 @@
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-common</artifactId>
       <version>${hbase.version}</version>
-      <!--
       <exclusions>
         <exclusion>
           <groupId>io.opentelemetry</groupId>
           <artifactId>*</artifactId>
         </exclusion>
       </exclusions>
-        -->
     </dependency>
 
     <!-- Machine Learning -->
@@ -462,11 +487,13 @@
     </dependency>
 
     <!-- https://mvnrepository.com/artifact/com.microsoft.onnxruntime/onnxruntime-extensions -->
+    <!--
     <dependency>
       <groupId>com.microsoft.onnxruntime</groupId>
       <artifactId>onnxruntime-extensions</artifactId>
       <version>${onnxruntime-extensions.version}</version>
     </dependency>
+    -->
 
     <!-- https://mvnrepository.com/artifact/org.bytedeco/onnx-platform -->
     <dependency>
@@ -621,10 +648,10 @@
       <version>${jsoup.version}</version>
     </dependency>
 
-    <!-- https://mvnrepository.com/artifact/org.snakeyaml/snakeyaml-engine -->
+    <!-- https://mvnrepository.com/artifact/org.yaml/snakeyaml -->
     <dependency>
-      <groupId>org.snakeyaml</groupId>
-      <artifactId>snakeyaml-engine</artifactId>
+      <groupId>org.yaml</groupId>
+      <artifactId>snakeyaml</artifactId>
       <version>${snakeyaml.version}</version>
     </dependency>
 
@@ -678,7 +705,7 @@
     <dependency>
       <groupId>io.modelcontextprotocol.sdk</groupId>
       <artifactId>mcp</artifactId>
-      <version>0.8.1</version>
+      <version>${mcp.version}</version>
     </dependency>
 
   </dependencies>

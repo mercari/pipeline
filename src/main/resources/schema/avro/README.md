@@ -2,14 +2,16 @@
 
 ## Schema List
 
-| name      | description                                                                      | file                             |
-|-----------|----------------------------------------------------------------------------------|----------------------------------|
-| BadRecord | Schema to hold error information. Used for storing in DWH, Messaging Queue, etc. | [badrecord.avsc](badrecord.avsc) |
+| name           | description                                                                      | file                                       |
+|----------------|----------------------------------------------------------------------------------|--------------------------------------------|
+| BadRecord      | Schema to hold error information. Used for storing in DWH, Messaging Queue, etc. | [badrecord.avsc](badrecord.avsc)           |
+| Bigtable Cells | Schema of Cloud Bigtable Cells.                                                  | [bigtable_cells.avsc](bigtable_cells.avsc) |
+| Bigtable CDC   | Schema of Cloud Bigtable Change Stream Record.                                   | [bigtable_cdc.avsc](bigtable_cdc.avsc)     |
 
 
-## BadRecord
+## BigQuery compatible table schema
 
-BigQuery compatible schema
+### BadRecord
 
 ```json
 [
@@ -80,7 +82,7 @@ BigQuery compatible schema
 ]
 ```
 
-## PubsubMessage
+### PubsubMessage
 
 ```json
 [
