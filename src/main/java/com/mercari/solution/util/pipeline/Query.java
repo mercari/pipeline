@@ -1,24 +1,11 @@
 package com.mercari.solution.util.pipeline;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
-import com.mercari.solution.util.coder.ElementCoder;
-import com.mercari.solution.util.pipeline.aggregation.AggregateFunction;
-import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.schema.CalciteSchemaUtil;
 import com.mercari.solution.util.sql.calcite.MemorySchema;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PCollectionTuple;
-import org.apache.beam.sdk.values.TupleTag;
 
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.config.Lex;
-import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.RelNode;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.RelRoot;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.RelWriter;
@@ -34,113 +21,172 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.PrintWriter;
+import java.io.Serializable;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
-public class Query {
+public class Query implements Serializable {
 
+    private static final String DEFAULT_TABLE_NAME = "INPUT";
     private static final Logger LOG = LoggerFactory.getLogger(Query.class);
 
-    private String name;
-    private QueryType type;
-    private Schema schema;
+    private final String sql;
 
-    private List<SelectFunction> select;
-    private List<AggregateFunction> aggregateFunctions;
-    private Query from;
-    private Filter.ConditionNode where;
-    private List<String> groupBy;
-    private Filter.ConditionNode having;
+    private final Map<String, Schema> inputSchemas;
+    private final Schema outputSchema;
 
-    public static class Properties {
+    private transient Planner planner;
+    private transient PreparedStatement statement;
+    private transient Map<String,List<MElement>> elements;
 
-        private String name;
-        private JsonArray select;
-        private JsonObject from;
-        private JsonElement where;
-        private List<String> groupBy;
-        private JsonElement having;
-
+    public Schema getOutputSchema() {
+        return outputSchema;
     }
 
-    public enum QueryType {
-        table,
-        subquery,
-        with
+    Query(
+            final Map<String, Schema> inputSchemas,
+            final String sql) {
+
+        this.inputSchemas = inputSchemas;
+        this.outputSchema = createQueryResultSchema(inputSchemas, sql);
+        this.sql = sql;
     }
 
-    public static List<Map<String, Object>> applySingle(
-            final Query query,
-            final Map<String, Object> inputPrimitiveValues,
-            final Instant timestamp) {
+    public static Query of(
+            final String name,
+            final List<Schema.Field> inputFields,
+            final String sql) {
 
-        final Map<String, List<Map<String, Object>>> values = new HashMap<>();
-        final List<Map<String, Object>> list = new ArrayList<>();
-        list.add(inputPrimitiveValues);
-        values.put("INPUT", list);
+        final Map<String, Schema> inputSchemas = new HashMap<>();
+        inputSchemas.put(name, Schema.of(inputFields));
 
-        return _apply(query, values, timestamp);
+        return of(inputSchemas, sql);
     }
 
-    public static List<Map<String, Object>> applyMulti(
-            final Query query,
-            final List<Map<String, Object>> inputPrimitiveValues,
-            final Instant timestamp) {
+    public static Query of(
+            final String name,
+            final Schema inputSchema,
+            final String sql) {
 
-        final Map<String, List<Map<String, Object>>> values = new HashMap<>();
-        values.put("INPUT", inputPrimitiveValues);
-
-        return _apply(query, values, timestamp);
+        final Map<String, Schema> inputSchemas = new HashMap<>();
+        inputSchemas.put(name, inputSchema);
+        return of(inputSchemas, sql);
     }
 
-    private static List<Map<String, Object>> _apply(
-            final Query query,
-            final Map<String, List<Map<String, Object>>> values,
-            final Instant timestamp) {
+    public static Query of(
+            final Map<String, Schema> inputSchemas,
+            final String sql) {
 
-        if(query.from != null) {
-            final List<Map<String, Object>> fromValues = _apply(query.from, values, timestamp);
-            values.put(query.from.name, fromValues);
+        return new Query(inputSchemas, sql);
+    }
+
+
+    public void setup() {
+        final List<MemorySchema.MemoryTable> tables = new ArrayList<>();
+        this.elements = new HashMap<>();
+        for(final Map.Entry<String, Schema> entry : inputSchemas.entrySet()) {
+            this.elements.put(entry.getKey(), new ArrayList<>());
+            tables.add(MemorySchema.createTable(entry.getKey(), entry.getValue(), this.elements.get(entry.getKey())));
+        }
+        final MemorySchema memorySchema = MemorySchema.create("memorySchema", tables);
+        this.planner = createPlanner(memorySchema);
+        try {
+            this.statement = createStatement(this.planner, sql);
+        } catch (final Throwable e) {
+            throw new IllegalArgumentException("failed to init query for query: " + sql, e);
+        }
+    }
+
+    public void teardown() {
+        try {
+            if (this.statement != null && !this.statement.isClosed()) {
+                this.statement.close();
+            }
+        } catch (final SQLException e) {
+            LOG.error("failed to close statement: {}", statement);
+        } finally {
+            this.statement = null;
         }
 
-        if(query.where != null) {
-            if(!Filter.filter(query.where, query.from.schema, null)) {
-                return null;
+        try {
+            if(this.planner != null) {
+                this.planner.close();
+            }
+        } catch (final Throwable e) {
+            LOG.error("failed to close planner: {}", planner);
+        } finally {
+            this.planner = null;
+        }
+    }
+
+    public List<MElement> execute(final MElement input, final Instant timestamp) {
+        return execute(List.of(input), timestamp);
+    }
+
+    public List<MElement> execute(final List<MElement> inputs, final Instant timestamp) {
+        return execute(Map.of(DEFAULT_TABLE_NAME, inputs), timestamp);
+    }
+
+    public List<MElement> execute_(final Map<String, MElement> inputs, final Instant timestamp) {
+        final Map<String, List<MElement>> elements = new HashMap<>();
+        for(final Map.Entry<String, MElement> entry : inputs.entrySet()) {
+            elements.put(entry.getKey(), List.of(entry.getValue()));
+        }
+        return execute(elements, timestamp);
+    }
+
+    public List<MElement> execute(final Map<String, List<MElement>> inputs, final Instant timestamp) {
+        for(final Map.Entry<String, List<MElement>> entry : inputs.entrySet()) {
+            if(inputs.containsKey(entry.getKey())) {
+                elements.get(entry.getKey()).clear();
+                elements.get(entry.getKey()).addAll(entry.getValue());
             }
         }
-
-        final List<Map<String, Object>> inputPrimitiveValues = values.get(query.from.name);
-
-        if(query.groupBy != null) {
-            return null;
-        } else {
-            final List<Map<String, Object>> results = new ArrayList<>();
-            for(final Map<String, Object> map : inputPrimitiveValues) {
-                final Map<String, Object> result = SelectFunction.apply(query.select, map, timestamp);
-                results.add(result);
-            }
-            return results;
-        }
+        final List<Map<String, Object>> valuesList = execute(statement);
+        return MElement.ofList(valuesList, timestamp);
     }
 
     public static Planner createPlanner(final MemorySchema schema) {
+
         final SchemaPlus rootSchema = Frameworks.createRootSchema(true);
         final SchemaPlus defaultSchema = rootSchema.add("DefaultSchema", schema);
         final SqlParser.Config insensitiveParser = SqlParser.configBuilder()
                 .setCaseSensitive(false)
                 .setLex(Lex.BIG_QUERY)
                 .build();
+
+        /*
+        SqlOperatorTable customOpTable = new ListSqlOperatorTable(List.of(BigtableFunctions.create()));
+        SqlOperatorTable operatorTable = SqlOperatorTables.chain(
+                SqlStdOperatorTable.instance(),
+                customOpTable
+        );
+        SqlStdOperatorTable sqlStdOperatorTable = SqlStdOperatorTable.instance();
+        sqlStdOperatorTable.register(BigtableFunctions.create());
+         */
+
+
         final FrameworkConfig config = Frameworks.newConfigBuilder()
                 .parserConfig(insensitiveParser)
                 .defaultSchema(defaultSchema)
+                //.operatorTable(sqlStdOperatorTable)
                 .build();
         return Frameworks.getPlanner(config);
     }
 
-    public static Schema createQueryResultSchema(final List<String> inputNames, final List<Schema> inputSchemas, String sql) {
+    public static Schema createQueryResultSchema(
+            final String name,
+            final Schema inputSchema,
+            final String sql) {
+
+        return createQueryResultSchema(List.of(name), List.of(inputSchema), sql);
+    }
+
+    public static Schema createQueryResultSchema(
+            final List<String> inputNames,
+            final List<Schema> inputSchemas,
+            final String sql) {
+
         final List<MemorySchema.MemoryTable> tables = new ArrayList<>();
         for(int i=0; i<inputNames.size(); i++) {
             final MemorySchema.MemoryTable table = MemorySchema
@@ -151,7 +197,24 @@ public class Query {
         return createQueryResultSchema(memorySchema, sql);
     }
 
-    public static Schema createQueryResultSchema(final MemorySchema schema, String sql) {
+    public static Schema createQueryResultSchema(
+            final Map<String,Schema> inputSchemas,
+            final String sql) {
+
+        final List<MemorySchema.MemoryTable> tables = new ArrayList<>();
+        for(final Map.Entry<String,Schema> entry : inputSchemas.entrySet()) {
+            final MemorySchema.MemoryTable table = MemorySchema
+                    .createTable(entry.getKey(), entry.getValue(), new ArrayList<>());
+            tables.add(table);
+        }
+        final MemorySchema memorySchema = MemorySchema.create("memorySchema", tables);
+        return createQueryResultSchema(memorySchema, sql);
+    }
+
+    public static Schema createQueryResultSchema(
+            final MemorySchema schema,
+            final String sql) {
+
         try(final Planner planner = createPlanner(schema);
             final PreparedStatement run = createStatement(planner, sql)) {
 
@@ -162,7 +225,10 @@ public class Query {
         }
     }
 
-    public static List<Map<String, Object>> execute(final Planner planner, String sql) {
+    public static List<Map<String, Object>> execute(
+            final Planner planner,
+            final String sql) {
+
         try(final PreparedStatement statement = createStatement(planner, sql)) {
             return execute(statement);
         } catch (SqlParseException | ValidationException | RelConversionException | SQLException e) {
@@ -178,7 +244,10 @@ public class Query {
         }
     }
 
-    public static PreparedStatement createStatement(final Planner planner, String sql) throws SqlParseException, ValidationException, RelConversionException {
+    public static PreparedStatement createStatement(
+            final Planner planner,
+            final String sql) throws SqlParseException, ValidationException, RelConversionException {
+
         final SqlNode sqlNode = planner.parse(sql);
 
         // Validate the tree
@@ -186,204 +255,13 @@ public class Query {
         final RelRoot relRoot = planner.rel(sqlNodeValidated);
         final RelNode relNode = relRoot.project();
 
+        //final Pair<SqlNode, RelDataType> a = planner.validateAndGetType(sqlNodeValidated);
+        //final Schema s = CalciteSchemaUtil.convertSchema(relNode.getRowType());
+
         final RelWriter relWriter = new RelWriterImpl(new PrintWriter(System.out), SqlExplainLevel.EXPPLAN_ATTRIBUTES, false);
         relNode.explain(relWriter);
 
-        try {
-            Connection connection = DriverManager.getConnection("jdbc:beam-vendor-calcite:");
-            //Connection connection = DriverManager.getConnection("jdbc:calcite:");
-            CalciteConnection c = connection.unwrap(CalciteConnection.class);
-            RelRunner runner = c.unwrap(RelRunner.class);
-            return runner.prepareStatement(relNode);
-        } catch (Throwable e) {
-            //RelRunners.run(relNode)
-            throw new RuntimeException("Failed to parse sql: ", e);
-        }
-        //return RelRunners.run(relNode);
+        return RelRunners.run(relNode);
     }
 
-    public static Transform of(
-            final String jobName,
-            final String name,
-            final String sql,
-            final List<String> inputNames,
-            final List<Schema> inputSchemas,
-            final boolean flatten,
-            final boolean failFast) {
-
-        return new Transform(jobName, name, sql, inputNames, inputSchemas, flatten, failFast);
-    }
-
-
-    public static class Transform extends PTransform<PCollection<MElement>, PCollectionTuple> {
-
-        private final String jobName;
-        private final String moduleName;
-        private final String sql;
-        private final List<String> inputNames;
-        private final List<Schema> inputSchemas;
-        private final Boolean flatten;
-        private final Boolean failFast;
-
-        public final Schema outputSchema;
-        public final TupleTag<MElement> outputTag;
-        public final TupleTag<MElement> failuresTag;
-
-
-        Transform(
-                final String jobName,
-                final String moduleName,
-                final String sql,
-                final List<String> inputNames,
-                final List<Schema> inputSchemas,
-                final Boolean flatten,
-                final Boolean failFast) {
-
-            this.jobName = jobName;
-            this.moduleName = moduleName;
-
-            this.sql = sql;
-            this.inputNames = inputNames;
-            this.inputSchemas = inputSchemas;
-            this.flatten = flatten;
-            this.failFast = failFast;
-
-            final Schema queryResultSchema = createQueryResultSchema(inputNames, inputSchemas, sql);
-            final Schema.FieldType queryResultType = Schema.FieldType.element(queryResultSchema);
-
-            if(flatten) {
-                this.outputSchema = Schema.builder(queryResultSchema)
-                        .build();
-            } else {
-                this.outputSchema = Schema.builder()
-                        .withField("results", Schema.FieldType.array(queryResultType))
-                        .build();
-            }
-
-            this.outputTag = new TupleTag<>() {};
-            this.failuresTag = new TupleTag<>() {};
-        }
-
-        @Override
-        public PCollectionTuple expand(PCollection<MElement> input) {
-            final PCollection<MElement> output = input
-                    .apply("Query", ParDo.of(new QueryDoFn(
-                            jobName, moduleName, inputNames, inputSchemas, sql, failFast, flatten, failuresTag)))
-                    .setCoder(ElementCoder.of(outputSchema));
-            return PCollectionTuple
-                    .of(outputTag, output);
-        }
-
-        private static class QueryDoFn extends DoFn<MElement, MElement> {
-
-            private final String jobName;
-            private final String moduleName;
-
-            private final List<String> inputNames;
-            private final List<Schema> inputSchemas;
-            private final String sql;
-
-            private final Boolean flatten;
-            private final Boolean failFast;
-            private final TupleTag<MElement> failuresTag;
-
-            private transient List<List<MElement>> elementsList;
-
-            private transient Planner planner;
-            private transient PreparedStatement statement;
-
-            QueryDoFn(
-                    final String jobName,
-                    final String moduleName,
-                    final List<String> inputNames,
-                    final List<Schema> inputSchemas,
-                    final String sql,
-                    final Boolean flatten,
-                    final Boolean failFast,
-                    final TupleTag<MElement> failuresTag) {
-
-                this.jobName = jobName;
-                this.moduleName = moduleName;
-                this.inputNames = inputNames;
-                this.inputSchemas = inputSchemas;
-                this.sql = sql;
-                this.flatten = flatten;
-                this.failFast = failFast;
-                this.failuresTag = failuresTag;
-            }
-
-            @Setup
-            public void setup() throws Exception {
-                this.elementsList = new ArrayList<>();
-                final List<MemorySchema.MemoryTable> tables = new ArrayList<>();
-                for(int i=0; i<inputNames.size(); i++) {
-                    this.elementsList.add(new ArrayList<>());
-                    final MemorySchema.MemoryTable table = MemorySchema.createTable(inputNames.get(i), inputSchemas.get(i), elementsList.get(i));
-                    tables.add(table);
-                }
-
-                final MemorySchema memorySchema = MemorySchema.create("schema", tables);
-                this.planner = createPlanner(memorySchema);
-                this.statement = createStatement(planner, sql);
-            }
-
-            @ProcessElement
-            public void processElement(final ProcessContext c) {
-                final MElement element = c.element();
-                if(element == null) {
-                    return;
-                }
-                final int index = element.getIndex();
-                this.elementsList.get(index).clear();
-                this.elementsList.get(index).add(element);
-                final String source = inputNames.get(index);
-
-                try(final ResultSet resultSet = statement.executeQuery()) {
-                    final List<Map<String, Object>> results = CalciteSchemaUtil.convert(resultSet);
-                    if(flatten) {
-                        for(final Map<String, Object> result : results) {
-                            final MElement output = MElement.of(result, c.timestamp());
-                            c.output(output);
-                        }
-                    } else {
-                        final Map<String, Object> values = new HashMap<>();
-                        values.put("results", results);
-                        final MElement output = MElement.of(values, c.timestamp());
-                        c.output(output);
-                    }
-                } catch (final Throwable e) {
-                    /*
-                    String errorMessage = MFailure.convertThrowableMessage(e);
-                    LOG.error("SQL query error: {}, {} for input: {} from: {}", e, errorMessage, element, source);
-                    if(failFast) {
-                        throw new IllegalStateException(errorMessage, e);
-                    }
-                    final MFailure failure = MFailure.of(jobName, moduleName, element.toString(), errorMessage, c.timestamp());
-                    //if(outputFailure) {
-                    //    c.output(failuresTag, failureElement.toElement(c.timestamp()));
-                    //}
-                    c.output(failuresTag, failure.toElement(c.timestamp()));
-
-                     */
-                }
-
-            }
-
-
-            @Teardown
-            public void teardown() {
-                if(statement != null) {
-                    try {
-                        statement.close();
-                    } catch (SQLException e) {
-                        LOG.error("Failed teardown");
-                    }
-                }
-                if(planner != null) {
-                    planner.close();
-                }
-            }
-
-        }
-    }
 }

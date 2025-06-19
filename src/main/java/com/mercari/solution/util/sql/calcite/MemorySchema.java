@@ -55,13 +55,14 @@ public class MemorySchema extends AbstractSchema implements Serializable {
     protected Multimap<String, Function> getFunctionMultimap() {
         return ImmutableMultimap.<String, Function>builder()
                 .putAll(DateTimeFunctions.functions())
-                //.putAll(AggregateFunctions.functions())
                 // example define UDFs
                 //.put("ExampleStructFunction", ScalarFunctionImpl.create(Types.lookupMethod(ExampleStructFunction.class, "eval", String.class)))
                 //.put("ExampleAggregationFunction", AggregateFunctionImpl.create(ExampleAggregationFunction.class))
                 //.put("", SqlBasicAggFunction.create("ARG_MAX", SqlKind.valueOf("ARG_MAX"), ReturnTypes.ARG0_NULLABLE_IF_EMPTY, OperandTypes.ANY_NUMERIC).withGroupOrder(Optionality.FORBIDDEN).withFunctionType(SqlFunctionCategory.SYSTEM))
                 .build();
     }
+
+
 
     public static class MemoryTable extends AbstractTable implements ScannableTable, Serializable {
 

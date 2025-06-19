@@ -170,7 +170,7 @@ public class SelectTransformTest {
                           comparingField: field_long
                           range:
                             count: 3
-                        - name: field_long_array_agg_count3
+                        - name: field_long_string_array_agg_count3
                           func: array_agg
                           fields:
                             - field_long
@@ -187,6 +187,11 @@ public class SelectTransformTest {
                         - name: lag_long
                           func: lag
                           expression: "(field_long[2] - field_long[0]) / (2 * field_long[0])"
+                        - name: field_long_array_agg_count3
+                          func: array_agg
+                          field: field_long
+                          range:
+                            count: 3
                 """;
         final Config config = Config.load(configYaml);
         final Map<String, MCollection> outputs = MPipeline.apply(pipeline, config);

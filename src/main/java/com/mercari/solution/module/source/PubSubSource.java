@@ -455,17 +455,20 @@ public class PubSubSource extends Source {
 
                 boolean outputted = false;
                 for(final Partition partition : partitions) {
+                    if(!partition.match(deserialized)) {
+                        continue;
+                    }
                     final List<MElement> outputs = partition.execute(deserialized, c.timestamp());
                     for(final MElement output : outputs) {
                         final MElement output_ = output.convert(partition.getOutputSchema().withType(outputType));
                         c.output(partition.getOutputTag(), output_);
-                        outputted = true;
                         if(loggings.containsKey("output")) {
                             final String text = "partition: " + partition.getName() + ", output: " + output_.toString();
                             Logging.log(LOG, loggings, "output", text);
                         }
                     }
-                    if(exclusive && outputted) {
+                    outputted = true;
+                    if(exclusive) {
                         return;
                     }
                 }

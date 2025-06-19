@@ -1,5 +1,6 @@
 package com.mercari.solution.util.pipeline;
 
+import com.google.common.collect.Ordering;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -22,6 +23,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.*;
+
 
 public class Select implements Serializable {
 
@@ -91,6 +93,29 @@ public class Select implements Serializable {
             return primitiveValues;
         }
         return SelectFunction.apply(selectFunctions, primitiveValues, timestamp);
+    }
+
+    // Stateful select processing
+    public Map<String, Object> select(
+            final List<MElement> elements,
+            final Instant timestamp) {
+
+        if(elements == null || elements.isEmpty()) {
+            return new HashMap<>();
+        }
+
+        final List<MElement> sorted = elements.stream()
+                .sorted(Comparator.comparingLong(MElement::getEpochMillis))
+                .toList();
+
+        final MElement input = sorted.getLast();
+        final List<TimestampedValue<MElement>> buffer = sorted
+                .subList(0, sorted.size() - 1)
+                .stream()
+                .map(element -> TimestampedValue.of(element, element.getTimestamp()))
+                .toList();
+
+        return select(input, buffer, input.getTimestamp());
     }
 
     // Stateful select processing

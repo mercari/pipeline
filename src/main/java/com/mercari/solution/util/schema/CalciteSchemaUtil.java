@@ -5,6 +5,8 @@ import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.linq4j.function.Function1;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.rel.type.*;
+import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.SqlOperatorBinding;
+import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.type.SqlReturnTypeInference;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.type.SqlTypeName;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -41,6 +43,14 @@ public class CalciteSchemaUtil {
             throw new RuntimeException(e);
         }
     }
+
+    /*
+    public static Schema convertSchema(final RelDataType relDataType) {
+        for(final RelDataTypeField field : relDataType.getFieldList()) {
+        }
+        return Schema.builder().withField("", Schema.FieldType.FLOAT64).build();
+    }
+     */
 
     public static List<Map<String, Object>> convert(final ResultSet resultSet) {
         try {
@@ -312,6 +322,50 @@ public class CalciteSchemaUtil {
             }
 
             return fieldValues;
+        }
+    }
+
+    public static CustomReturnTypeInference createCustomReturnTypeInference(final Schema.FieldType fieldType) {
+        return new CustomReturnTypeInference(fieldType);
+    }
+
+    public static class CustomReturnTypeInference implements SqlReturnTypeInference {
+
+        private final Schema.FieldType fieldType;
+
+        private CustomReturnTypeInference(final Schema.FieldType fieldType) {
+            this.fieldType = fieldType;
+        }
+
+        @Override
+        public RelDataType inferReturnType(SqlOperatorBinding opBinding) {
+            final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
+            final RelDataType relDataType = switch (this.fieldType.getType()) {
+                case bool -> typeFactory.createSqlType(SqlTypeName.BOOLEAN);
+                case string, json -> typeFactory.createSqlType(SqlTypeName.VARCHAR);
+                case bytes ->  typeFactory.createSqlType(SqlTypeName.BINARY);
+                case int32 -> typeFactory.createSqlType(SqlTypeName.INTEGER);
+                case int64 -> typeFactory.createSqlType(SqlTypeName.BIGINT);
+                case float32 -> typeFactory.createSqlType(SqlTypeName.REAL);
+                case float64 -> typeFactory.createSqlType(SqlTypeName.FLOAT);
+                case date -> typeFactory.createSqlType(SqlTypeName.DATE);
+                case time -> typeFactory.createSqlType(SqlTypeName.TIME);
+                case timestamp -> typeFactory.createSqlType(SqlTypeName.TIMESTAMP);
+                case element -> {
+                    final List<String> fieldNames = new ArrayList<>();
+                    final List<RelDataType> fieldTypes = new ArrayList<>();
+                    for(final Schema.Field field : fieldType.getElementSchema().getFields()) {
+                        fieldNames.add(field.getName());
+                        fieldTypes.add(createRelDataType(field.getFieldType(), typeFactory));
+                    }
+                    yield typeFactory.createStructType(fieldTypes, fieldNames);
+                }
+                case array -> typeFactory.createArrayType(
+                        createRelDataType(fieldType.getArrayValueType(), typeFactory), -1L);
+                default -> throw new IllegalArgumentException();
+            };
+
+            return typeFactory.createTypeWithNullability(relDataType, true);
         }
     }
 

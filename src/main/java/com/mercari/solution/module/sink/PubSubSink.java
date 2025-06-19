@@ -7,6 +7,7 @@ import com.mercari.solution.module.*;
 import com.mercari.solution.util.TemplateUtil;
 import com.mercari.solution.util.gcp.PubSubUtil;
 import com.mercari.solution.util.gcp.StorageUtil;
+import com.mercari.solution.util.pipeline.Serialize;
 import com.mercari.solution.util.pipeline.Union;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.ProtoSchemaUtil;
@@ -48,7 +49,7 @@ public class PubSubSink extends Sink {
     private static class Parameters implements Serializable {
 
         private String topic;
-        private Format format;
+        private Serialize.Format format;
         private Map<String, String> attributes;
         private String idAttribute;
         private String timestampAttribute;
@@ -106,27 +107,6 @@ public class PubSubSink extends Sink {
         }
     }
 
-    private enum Format {
-        message,
-        avro,
-        json,
-        protobuf
-    }
-
-    /*
-    @Override
-    public MCollectionTuple expand(MCollectionTuple inputs) {
-        if(hasFailures()) {
-            try(final ErrorHandler.BadRecordErrorHandler<?> errorHandler = registerErrorHandler(inputs)) {
-                return expand(inputs, errorHandler);
-            }
-        } else {
-            return expand(inputs, null);
-        }
-    }
-
-     */
-
     public MCollectionTuple expand(
             final MCollectionTuple inputs,
             final MErrorHandler errorHandler) {
@@ -147,6 +127,8 @@ public class PubSubSink extends Sink {
         parameters.validate(outputSchema);
         parameters.setDefaults();
 
+        //final Serialize serialize = Serialize.of(parameters.format, outputSchema);
+
         if(getUnion().each) {
             for(final Map.Entry<String, PCollection<MElement>> entry : inputs.getAll().entrySet()) {
                 final String inputName = entry.getKey();
@@ -158,7 +140,7 @@ public class PubSubSink extends Sink {
 
                 final PCollectionTuple outputs = input
                         .apply("ToMessage_" + inputName, ParDo
-                                .of(new OutputDoFn(
+                                .of(new OutputDoFn_(
                                         parameters, inputSchema, outputSchema, inputNames, getFailFast(), failureTag))
                                 .withOutputTags(outputTag, TupleTagList.of(failureTag)));
                 final PubsubIO.Write<PubsubMessage> write = createWrite(parameters, errorHandler);
@@ -181,7 +163,7 @@ public class PubSubSink extends Sink {
 
             final PCollectionTuple outputs = input
                     .apply("ToMessage", ParDo
-                            .of(new OutputDoFn(parameters, inputSchema, outputSchema, inputNames, getFailFast(), failureTag))
+                            .of(new OutputDoFn_(parameters, inputSchema, outputSchema, inputNames, getFailFast(), failureTag))
                             .withOutputTags(outputTag, TupleTagList.of(failureTag)));
 
             final PDone done = outputs.get(outputTag)
@@ -195,6 +177,195 @@ public class PubSubSink extends Sink {
     }
 
     private static class OutputDoFn extends DoFn<MElement, PubsubMessage> {
+
+        // for protobuf
+        private final Parameters parameters;
+        private final List<String> inputNames;
+
+        private final boolean isDynamicTopic;
+        private final List<String> topicTemplateArgs;
+        private final List<String> attributeTemplateArgs;
+
+        private final Serialize serialize;
+
+        private final boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
+
+        private transient Template topicTemplate;
+        private transient Map<String, Template> attributeTemplates;
+
+        OutputDoFn(
+                final Parameters parameters,
+                final Schema inputSchema,
+                final Schema outputSchema,
+                final List<String> inputNames,
+                final Serialize serialize,
+                final boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
+
+            this.parameters = parameters;
+            this.inputNames = inputNames;
+
+            this.isDynamicTopic = TemplateUtil.isTemplateText(parameters.topic);
+            this.topicTemplateArgs = TemplateUtil.extractTemplateArgs(parameters.topic, inputSchema);
+            this.attributeTemplateArgs = new ArrayList<>();
+            for(final Map.Entry<String, String> entry : parameters.attributes.entrySet()) {
+                this.attributeTemplateArgs.addAll(
+                        TemplateUtil.extractTemplateArgs(entry.getValue(), inputSchema));
+            }
+
+            this.serialize = serialize;
+
+            this.failFast = failFast;
+            this.failureTag = failureTag;
+        }
+
+        @Setup
+        public void setup() {
+            serialize.setupSerialize();
+            if(isDynamicTopic) {
+                this.topicTemplate = TemplateUtil.createStrictTemplate("topicTemplate", parameters.topic);
+            }
+            this.attributeTemplates = new HashMap<>();
+            for(Map.Entry<String, String> entry : parameters.attributes.entrySet()) {
+                final String templateName = "pubsubSinkAttributeTemplate" + entry.getKey();
+                final Template template = TemplateUtil.createStrictTemplate(templateName, entry.getValue());
+                this.attributeTemplates.put(entry.getKey(), template);
+            }
+        }
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final MElement input = c.element();
+            if (input == null) {
+                return;
+            }
+
+            try {
+                final Map<String, String> attributeMap = getAttributes(input);
+                if(DataType.MESSAGE.equals(input.getType()) && input.getValue() instanceof PubsubMessage) {
+                    final PubsubMessage original = (PubsubMessage) input.getValue();
+                    if(parameters.attributes.isEmpty()) {
+                        c.output(original);
+                    } else {
+                        final PubsubMessage message = new PubsubMessage(
+                                original.getPayload(), attributeMap, original.getMessageId(), original.getOrderingKey());
+                        c.output(message);
+                    }
+                    return;
+                }
+
+                final byte[] payload = serialize.serialize(input);
+                final String messageId = getMessageId(input);
+                final String orderingKey = getOrderingKey(input);
+                if (parameters.idAttribute != null) {
+                    attributeMap.put(parameters.idAttribute, messageId);
+                }
+                final PubsubMessage message = new PubsubMessage(payload, attributeMap, messageId, orderingKey);
+                c.output(message);
+            } catch (final Throwable e) {
+                final String source = inputNames.get(input.getIndex());
+                switch (input.getType()) {
+                    case MESSAGE -> {
+                        final PubsubMessage original = (PubsubMessage) input.getValue();
+                        final Map<String, Object> json = new HashMap<>();
+                        if(original != null) {
+                            json.put("id", original.getMessageId());
+                            json.put("source", source);
+                            if(original.getAttributeMap() != null) {
+                                json.put("attributes", original.getAttributeMap());
+                            }
+                        }
+                        final BadRecord badRecord = processError("Failed to create pubsub message from input: " + source, json, e, failFast);
+                        c.output(failureTag, badRecord);
+                    }
+                    default -> {
+                        final BadRecord badRecord = processError("Failed to create pubsub message from input: " + source, input, e, failFast);
+                        c.output(failureTag, badRecord);
+                    }
+                }
+
+            }
+        }
+
+        private Map<String, String> getAttributes(MElement element) {
+            final Map<String, String> attributeMap = new HashMap<>();
+            if(element == null) {
+                return attributeMap;
+            }
+            if(isDynamicTopic) {
+                // When using dynamicTopic, insert the dynamically generated topic name of the destination into the attribute and refer to it when publishing.
+                final String topic = TemplateUtil.executeStrictTemplate(topicTemplate, element.asPrimitiveMap(topicTemplateArgs));
+                attributeMap.put(ATTRIBUTE_NAME_TOPIC, topic);
+            }
+            if(parameters.attributes == null || parameters.attributes.isEmpty()) {
+                return attributeMap;
+            }
+
+            final Map<String, Object> values = element.asPrimitiveMap(attributeTemplateArgs);
+            if(DataType.MESSAGE.equals(element.getType())) {
+                final PubsubMessage message = (PubsubMessage) element.getValue();
+                if(message.getAttributeMap() != null) {
+                    attributeMap.putAll(message.getAttributeMap());
+                }
+                values.put(ATTRIBUTE_NAME_ID, Optional.ofNullable(message.getMessageId()).orElse(""));
+            } else {
+                values.put(ATTRIBUTE_NAME_ID, "");
+            }
+            values.put(ATTRIBUTE_NAME_EVENT_TIME, element.getEpochMillis());
+            values.put(ATTRIBUTE_NAME_SOURCE, inputNames.get(element.getIndex()));
+            for(final Map.Entry<String, Template> entry : attributeTemplates.entrySet()) {
+                try {
+                    final String value = TemplateUtil.executeStrictTemplate(entry.getValue(), values);
+                    if (value == null) {
+                        continue;
+                    }
+                    attributeMap.put(entry.getKey(), value);
+                } catch (final Throwable e) {
+                    LOG.error("template: {}, error: {}", entry.getKey(), MFailure.convertThrowableMessage(e));
+                }
+            }
+            return attributeMap;
+        }
+
+        private String getMessageId(MElement element) {
+            if(DataType.MESSAGE.equals(element.getType())) {
+                final PubsubMessage message = (PubsubMessage) element.getValue();
+                return message.getMessageId();
+            }
+            if(parameters.idAttributeFields == null || parameters.idAttributeFields.isEmpty()) {
+                return null;
+            }
+            return getAttributesAsString(element, parameters.idAttributeFields);
+        }
+
+        private String getOrderingKey(MElement element) {
+            if(DataType.MESSAGE.equals(element.getType())) {
+                final PubsubMessage message = (PubsubMessage) element.getValue();
+                return message.getOrderingKey();
+            }
+            if(parameters.orderingKeyFields == null || parameters.orderingKeyFields.isEmpty()) {
+                return null;
+            }
+            return getAttributesAsString(element, parameters.orderingKeyFields);
+        }
+
+        private String getAttributesAsString(final MElement value, final List<String> fields) {
+            final StringBuilder sb = new StringBuilder();
+            for(final String fieldName : fields) {
+                final String fieldValue = value.getAsString(fieldName);
+                sb.append(fieldValue == null ? "" : fieldValue);
+                sb.append("#");
+            }
+            if(!sb.isEmpty()) {
+                sb.deleteCharAt(sb.length() - 1);
+            }
+            return sb.toString();
+        }
+
+    }
+
+    private static class OutputDoFn_ extends DoFn<MElement, PubsubMessage> {
 
         // for protobuf
         private static final Map<String, Descriptors.Descriptor> descriptors = new HashMap<>();// Collections.synchronizedMap(new HashMap<>());
@@ -219,7 +390,7 @@ public class PubSubSink extends Sink {
         private transient Template topicTemplate;
         private transient Map<String, Template> attributeTemplates;
 
-        OutputDoFn(
+        OutputDoFn_(
                 final Parameters parameters,
                 final Schema inputSchema,
                 final Schema outputSchema,
@@ -262,13 +433,6 @@ public class PubSubSink extends Sink {
                     }
                     LOG.warn("outputSchema: " + this.outputSchema.getAvroSchema().toString());
                     this.writer = new GenericDatumWriter<>(this.outputSchema.getAvroSchema());
-                    /*
-                    long start = java.time.Instant.now().toEpochMilli();
-                    final org.apache.avro.Schema avroSchema = getOrLoadAvroSchema(avroSchemas, writers, outputSchema.getAvro());
-                    long end = java.time.Instant.now().toEpochMilli();
-                    LOG.info("Finished setup PubSub sink Output DoFn took {} ms with avro schema: {}", (end - start), avroSchema);
-
-                     */
                 }
                 case protobuf -> {
                     if(this.outputSchema.getProtobuf() == null) {
@@ -303,8 +467,6 @@ public class PubSubSink extends Sink {
                     return;
                 }
 
-                final String messageId = getMessageId(input);
-                final String orderingKey = getOrderingKey(input);
                 final byte[] payload = switch (parameters.format) {
                     case json -> {
                         final JsonObject json = ElementToJsonConverter.convert(outputSchema, input.asPrimitiveMap());
@@ -337,6 +499,9 @@ public class PubSubSink extends Sink {
                     case message -> input.getAsBytes(parameters.payloadField).array();
                     default -> throw new IllegalArgumentException("Not supported pubsub sink format: " + parameters.format);
                 };
+
+                final String messageId = getMessageId(input);
+                final String orderingKey = getOrderingKey(input);
                 if (parameters.idAttribute != null) {
                     attributeMap.put(parameters.idAttribute, messageId);
                 }

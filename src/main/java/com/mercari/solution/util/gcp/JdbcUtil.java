@@ -1,9 +1,13 @@
 package com.mercari.solution.util.gcp;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.converter.ResultSetToRecordConverter;
 import com.mercari.solution.util.sql.stmt.PreparedStatementTemplate;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -82,11 +86,23 @@ public class JdbcUtil {
             final String password,
             final boolean readOnly) {
 
+        final HikariConfig config = new HikariConfig();
+        config.setDriverClassName(driverClassName);
+        config.setJdbcUrl(url);
+        config.setUsername(username);
+        config.setPassword(password);
+        config.setReadOnly(readOnly);
+        config.setMaximumPoolSize(1);
+        config.setAutoCommit(false);
+        final DataSource dataSource = new HikariDataSource(config);
+
+        /*
         final BasicDataSource basicDataSource = new BasicDataSource();
         basicDataSource.setDriverClassName(driverClassName);
         basicDataSource.setUrl(url);
         basicDataSource.setUsername(username);
         basicDataSource.setPassword(password);
+
 
         // Wrapping the datasource as a pooling datasource
         final DataSourceConnectionFactory connectionFactory = new DataSourceConnectionFactory(basicDataSource);
@@ -102,6 +118,9 @@ public class JdbcUtil {
         poolableConnectionFactory.setDefaultAutoCommit(false);
         poolableConnectionFactory.setDefaultReadOnly(readOnly);
         return new CloseableDataSource(new PoolingDataSource(connectionPool));
+
+         */
+        return new CloseableDataSource(dataSource);
     }
 
     public static Schema createAvroSchemaFromTable(
@@ -652,48 +671,67 @@ public class JdbcUtil {
         return term;
     }
 
+    public static List<IndexOffset> splitOffset(
+            final IndexOffset fromOffset,
+            final IndexOffset firstToOffset,
+            final int splitNum) {
+
+        return switch (fromOffset.getFieldType()) {
+            case BOOLEAN -> splitBoolean(fromOffset.getFieldName(), firstToOffset.getAscending());
+            case INT -> splitInteger(fromOffset.getFieldName(),
+                    fromOffset.getIntValue(), firstToOffset.getIntValue(),
+                    fromOffset.getAscending(), splitNum);
+            case LONG -> splitLong(fromOffset.getFieldName(),
+                    fromOffset.getLongValue(), firstToOffset.getLongValue(),
+                    fromOffset.getAscending(), splitNum);
+            case FLOAT -> splitFloat(fromOffset.getFieldName(),
+                    fromOffset.getFloatValue(), firstToOffset.getFloatValue(),
+                    fromOffset.getAscending(), splitNum);
+            case DOUBLE -> splitDouble(fromOffset.getFieldName(),
+                    fromOffset.getDoubleValue(), firstToOffset.getDoubleValue(),
+                    fromOffset.getAscending(), splitNum);
+            case ENUM, STRING -> splitString(fromOffset.getFieldName(),
+                    fromOffset.getStringValue(), firstToOffset.getStringValue(),
+                    fromOffset.getAscending(), splitNum,
+                    fromOffset.getIsCaseSensitive());
+            case FIXED, BYTES -> splitBytes(fromOffset.getFieldName(),
+                    fromOffset.getBytesValue(), firstToOffset.getBytesValue(),
+                    fromOffset.getAscending(), splitNum);
+            default -> throw new IllegalArgumentException("Not supported range type: " + fromOffset.getFieldType());
+        };
+    }
+
     public static List<IndexRange> splitIndexRange(
             final List<IndexOffset> parents,
             final List<IndexOffset> from,
             final List<IndexOffset> to,
             final int splitNum) {
 
-        final IndexOffset firstFromOffset = from.get(0);
-        final IndexOffset firstToOffset = to.get(0);
-
-        final List<IndexOffset> splitOffsets = switch (firstFromOffset.getFieldType()) {
-            case BOOLEAN -> splitBoolean(firstFromOffset.getFieldName(), firstToOffset.getAscending());
-            case INT -> splitInteger(firstFromOffset.getFieldName(),
-                        firstFromOffset.getIntValue(), firstToOffset.getIntValue(),
-                        firstFromOffset.getAscending(), splitNum);
-            case LONG -> splitLong(firstFromOffset.getFieldName(),
-                        firstFromOffset.getLongValue(), firstToOffset.getLongValue(),
-                        firstFromOffset.getAscending(), splitNum);
-            case FLOAT -> splitFloat(firstFromOffset.getFieldName(),
-                        firstFromOffset.getFloatValue(), firstToOffset.getFloatValue(),
-                        firstFromOffset.getAscending(), splitNum);
-            case DOUBLE -> splitDouble(firstFromOffset.getFieldName(),
-                        firstFromOffset.getDoubleValue(), firstToOffset.getDoubleValue(),
-                        firstFromOffset.getAscending(), splitNum);
-            case ENUM, STRING -> splitString(firstFromOffset.getFieldName(),
-                        firstFromOffset.getStringValue(), firstToOffset.getStringValue(),
-                        firstFromOffset.getAscending(), splitNum,
-                        firstFromOffset.getIsCaseSensitive());
-            case FIXED, BYTES -> splitBytes(firstFromOffset.getFieldName(),
-                        firstFromOffset.getBytesValue(), firstToOffset.getBytesValue(),
-                        firstFromOffset.getAscending(), splitNum);
-            default -> throw new IllegalArgumentException("Not supported range type: " + firstFromOffset.getFieldType());
-        };
-
-        List<IndexOffset> parentOffsets = new ArrayList<>();
+        final List<IndexOffset> parentOffsets = new ArrayList<>();
         if(parents != null && !parents.isEmpty()) {
             parentOffsets.addAll(parents);
         }
 
+        final IndexOffset firstFromOffset = from.getFirst();
+        final IndexOffset firstToOffset = to.isEmpty() ? IndexOffset.of(firstFromOffset) : to.getFirst();
+        final List<IndexOffset> splitOffsets = splitOffset(firstFromOffset, firstToOffset, splitNum);
+        System.out.println(firstFromOffset);
+        System.out.println(splitOffsets);
+
         if(splitOffsets.isEmpty()) {
-            if(from.size() > 1 && to.size() > 1 && false) {
+            if(from.size() > 1) {
                 // TODO recursive splitting
-                return splitIndexRange(parentOffsets, from.subList(1, from.size()), to.subList(1, to.size()), splitNum);
+                final List<IndexOffset> f = from.subList(1, from.size());
+                final List<IndexOffset> t = to.size() > 1 ? to.subList(1, to.size()) : List.of();
+                parentOffsets.add(from.getFirst());
+                return splitIndexRange(parentOffsets, f, t, splitNum);
+                /*
+                return Arrays.asList(IndexRange.of(
+                        IndexPosition.of(from, true),
+                        IndexPosition.of(to, false)));
+
+                 */
+
             } else {
                 return Arrays.asList(IndexRange.of(
                         IndexPosition.of(from, true),
@@ -866,7 +904,14 @@ public class JdbcUtil {
         return results;
     }
 
-    public static List<IndexOffset> splitString(final String name, String min, String max, final boolean ascending, final int splitNum, final boolean isCaseSensitive) {
+    public static List<IndexOffset> splitString(
+            final String name,
+            String min,
+            String max,
+            final boolean ascending,
+            final int splitNum,
+            final boolean isCaseSensitive) {
+
         if(min == null || min.isEmpty()) {
             final StringBuilder sb = new StringBuilder();
             sb.append(String.valueOf((char) 33).repeat(32));
@@ -917,7 +962,13 @@ public class JdbcUtil {
                 .collect(Collectors.toList());
     }
 
-    static List<String> splitChar(char[] min, char[] max, int index, int splitNum, final boolean isCaseSensitive) {
+    static List<String> splitChar(
+            final char[] min,
+            final char[] max,
+            final int index,
+            final int splitNum,
+            final boolean isCaseSensitive) {
+
         if(index >= min.length || index >= max.length) {
             return new ArrayList<>();
         }
@@ -983,6 +1034,7 @@ public class JdbcUtil {
                 strs.add(String.valueOf(prefix));
             }
             strs.add(String.valueOf(max));
+            System.out.println(results);
             return strs;
         }
     }
@@ -1118,7 +1170,7 @@ public class JdbcUtil {
                 paramIndex = paramIndex + 1;
             }
         }
-        if(offsets.size() > 0) {
+        if(!offsets.isEmpty()) {
             paramIndex = setStatementParameters(
                     statement,
                     offsets.subList(0, offsets.size() - 1),
@@ -1348,9 +1400,11 @@ public class JdbcUtil {
 
         @Override
         public String toString() {
-            return String.format("IndexOffset: %s = %s",
-                    this.getFieldName() + (this.getAscending() ? "" : "(DESC)"),
-                    this.valueToString());
+            final JsonObject jsonObject = new JsonObject();
+            jsonObject.addProperty(fieldName, valueToString());
+            jsonObject.addProperty("type", fieldType.name());
+            jsonObject.addProperty("order", ascending ? "ASC" : "DESC");
+            return jsonObject.toString();
         }
 
         private String valueToString() {
@@ -1387,6 +1441,20 @@ public class JdbcUtil {
                 case NULL -> null;
                 default -> throw new IllegalArgumentException("Not supported range type: " + fieldType);
             };
+        }
+
+        public static IndexOffset of(final IndexOffset base) {
+            final Object value = switch (base.fieldType) {
+                case BOOLEAN -> base.ascending;
+                case INT -> base.ascending ? Integer.MAX_VALUE : Integer.MIN_VALUE;
+                case LONG -> base.ascending ? Long.MAX_VALUE : Long.MIN_VALUE;
+                case FLOAT -> base.ascending ? Float.MAX_VALUE : Float.MIN_VALUE;
+                case DOUBLE -> base.ascending ? Double.MAX_VALUE : Double.MIN_VALUE;
+                case STRING, ENUM -> base.ascending ? "~~~~~~~~~~" : "";
+                case BYTES -> base.ascending;
+                default -> null;
+            };
+            return of(base.fieldName, base.fieldType, base.ascending, value, base.logicalType, base.isCaseSensitive);
         }
 
         public static IndexOffset of(final String fieldName, final Schema.Type fieldType, final Boolean ascending, final Object value) {
@@ -1512,17 +1580,21 @@ public class JdbcUtil {
 
         @Override
         public String toString() {
-            final String o = this.offsets.stream()
-                    .map(offset -> String.format("%s = %s",
-                            offset.getFieldName() + (offset.getAscending() ? "" : "(DESC)"),
-                            offset.valueToString()))
-                    .collect(Collectors.joining(", "));
-
-            return o + " [open=" + isOpen + "]";
+            final JsonArray array = new JsonArray();
+            for(final IndexOffset offset : this.offsets) {
+                final JsonObject offsetObject = new JsonObject();
+                offsetObject.addProperty(offset.fieldName, offset.valueToString());
+                offsetObject.addProperty("order", offset.ascending ? "ASC" : "DESC");
+                array.add(offsetObject);
+            }
+            final JsonObject result = new JsonObject();
+            result.add("offsets", array);
+            result.addProperty("open", this.isOpen);
+            return result.toString();
         }
 
         public static IndexPosition of(final List<IndexOffset> offsets, final boolean isOpen) {
-            if(offsets == null || offsets.size() == 0) {
+            if(offsets == null || offsets.isEmpty()) {
                 throw new IllegalArgumentException("offsets must not be null or zero size for IndexPosition");
             }
             final IndexPosition indexPosition = new IndexPosition();
@@ -1578,11 +1650,12 @@ public class JdbcUtil {
 
         @Override
         public String toString() {
-            return String.format("IndexRange(%f) From: %s -> To: %s%s",
-                    this.ratio,
+            final JsonObject jsonObject = new JsonObject();
+            jsonObject.addProperty("ratio", ratio);
+            return String.format("{\"from\":%s,\"to\":%s,\"rate\":%f}",
                     from.toString(),
                     to.toString(),
-                    from.getCompleted() ? "  completed count: " + from.getCount() : "");
+                    this.ratio);
         }
 
         public static IndexRange of(IndexPosition from, IndexPosition to) {

@@ -14,14 +14,21 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+
 public class Partition implements Serializable {
 
     private final String name;
 
+    // filter
     private final Filter filter;
+
+    // processing (select and unnest) or sql
     private final Select select;
     private final Unnest unnest;
 
+    private final Query query;
+
+    // output
     private final Schema outputSchema;
     private final TupleTag<MElement> outputTag;
 
@@ -49,7 +56,22 @@ public class Partition implements Serializable {
         this.filter = filter;
         this.select = select;
         this.unnest = unnest;
+        this.query = null;
         this.outputSchema = createOutputSchema(inputSchema, select, unnest);
+        this.outputTag = new TupleTag<>() {};
+    }
+
+    private Partition(
+            final String name,
+            final Filter filter,
+            final Query query) {
+
+        this.name = name;
+        this.filter = filter;
+        this.select = null;
+        this.unnest = null;
+        this.query = query;
+        this.outputSchema = query.getOutputSchema();
         this.outputTag = new TupleTag<>() {};
     }
 
@@ -90,6 +112,12 @@ public class Partition implements Serializable {
             filterJson = null;
         }
         final Filter filter = Filter.of(filterJson);
+
+        if(jsonObject.has("sql")) {
+            final String sql  = jsonObject.get("sql").getAsString();
+            final Query query = Query.of(name, inputSchema, sql);
+            return new Partition(name, filter, query);
+        }
 
         final JsonArray selectJson;
         if(jsonObject.has("select")) {
@@ -140,6 +168,15 @@ public class Partition implements Serializable {
         if(unnest != null && unnest.useUnnest()) {
             unnest.setup();
         }
+        if(query != null) {
+            query.setup();
+        }
+    }
+
+    public void teardown() {
+        if(query != null) {
+            query.teardown();
+        }
     }
 
     public static Schema createOutputSchema(
@@ -159,15 +196,19 @@ public class Partition implements Serializable {
         }
     }
 
+    public boolean match(final MElement input) {
+        return filter.filter(input);
+    }
+
     public List<MElement> execute(
             final MElement input,
             final Instant timestamp) {
 
-        final List<MElement> outputs = new ArrayList<>();
-        if (!filter.filter(input)) {
-            return outputs;
+        if(query != null) {
+            return query.execute(input, timestamp);
         }
 
+        final List<MElement> outputs = new ArrayList<>();
         if (!select.useSelect() && !unnest.useUnnest()) {
             outputs.add(input);
         } else if(select.useSelect()) {
@@ -182,6 +223,56 @@ public class Partition implements Serializable {
         } else {
             final List<Map<String, Object>> list = unnest.unnest(input);
             outputs.addAll(MElement.ofList(list, timestamp));
+        }
+
+        return outputs;
+    }
+
+    public List<MElement> executeStateful(
+            final List<MElement> inputs,
+            final Instant timestamp) {
+
+        if(query != null) {
+            return query.execute(inputs, timestamp);
+        }
+
+        final List<MElement> outputs = new ArrayList<>();
+        if(select.useSelect()) {
+            final Map<String, Object> primitiveValues = select.select(inputs, timestamp);
+            if(unnest.useUnnest()) {
+                final List<Map<String, Object>> list = unnest.unnest(primitiveValues);
+                outputs.addAll(MElement.ofList(list, timestamp));
+            } else {
+                final MElement output = MElement.of(primitiveValues, timestamp);
+                outputs.add(output);
+            }
+        }
+
+        return outputs;
+    }
+
+    public List<MElement> executeStateful(
+            final Map<String, List<MElement>> inputs,
+            final Instant timestamp) {
+
+        if(query != null) {
+            return query.execute(inputs, timestamp);
+        }
+
+        final List<MElement> outputs = new ArrayList<>();
+        if(select.useSelect()) {
+            final List<MElement> buffer = new ArrayList<>();
+            if(inputs.size() == 1) {
+                buffer.addAll(inputs.values().stream().findFirst().get());
+            }
+            final Map<String, Object> primitiveValues = select.select(buffer, timestamp);
+            if(unnest.useUnnest()) {
+                final List<Map<String, Object>> list = unnest.unnest(primitiveValues);
+                outputs.addAll(MElement.ofList(list, timestamp));
+            } else {
+                final MElement output = MElement.of(primitiveValues, timestamp);
+                outputs.add(output);
+            }
         }
 
         return outputs;
