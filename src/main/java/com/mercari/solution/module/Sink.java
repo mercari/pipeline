@@ -77,12 +77,12 @@ public abstract class Sink extends Module<MCollectionTuple> {
             try {
                 module = clazz.getDeclaredConstructor().newInstance();
             } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
-                throw new RuntimeException("Failed to instantiate sinks module: " + config.getModule() + ", class: " + clazz, e);
+                throw new RuntimeException("Failed to instantiate sink module: " + config.getModule() + ", class: " + clazz, e);
             }
             final Module properties = module.getClass().getAnnotation(Module.class);
             module.setup(config, properties, options, waits, errorHandler);
             return module;
-        }).orElseThrow(() -> new IllegalArgumentException("Not supported sinks module: " + config.getModule()));
+        }).orElseThrow(() -> new IllegalModuleException("", "pipeline", "Not supported sink module: " + config.getModule()));
     }
 
     private static Map<String, Class<Sink>> findSinksInPackage(String packageName) {

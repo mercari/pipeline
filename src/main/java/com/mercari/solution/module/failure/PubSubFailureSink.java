@@ -2,6 +2,7 @@ package com.mercari.solution.module.failure;
 
 import com.google.gson.JsonObject;
 import com.mercari.solution.module.*;
+import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.gcp.PubSubUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import com.mercari.solution.util.schema.converter.ElementToJsonConverter;
@@ -14,8 +15,6 @@ import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 import org.joda.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -28,13 +27,10 @@ import java.util.Map;
 @FailureSink.Module(name="pubsub")
 public class PubSubFailureSink extends FailureSink {
 
-    private static final Logger LOG = LoggerFactory.getLogger(PubSubFailureSink.class);
-
     private static class Parameters implements Serializable {
 
         private String topic;
         private Format format;
-        private Map<String, String> attributes;
         private String idAttribute;
         private String timestampAttribute;
 
@@ -58,9 +54,6 @@ public class PubSubFailureSink extends FailureSink {
             if(this.format == null) {
                 this.format = Format.json;
             }
-            if(this.attributes == null) {
-                this.attributes = new HashMap<>();
-            }
         }
     }
 
@@ -74,9 +67,12 @@ public class PubSubFailureSink extends FailureSink {
         final Parameters parameters = getParameters(Parameters.class);
         parameters.validate(getName());
         parameters.setDefaults();
+
+        final org.apache.avro.Schema badRecordAvroSchema = FailureUtil.createBadRecordSchema();
+
         return input
                 .apply("ToMessage", ParDo
-                        .of(new OutputDoFn(jobName, moduleName, parameters)))
+                        .of(new OutputDoFn(jobName, moduleName, parameters, badRecordAvroSchema)))
                 .apply("Write", createWrite(parameters));
     }
 
@@ -85,24 +81,27 @@ public class PubSubFailureSink extends FailureSink {
         private final String jobName;
         private final String moduleName;
         private final Format format;
+        private final String badRecordAvroSchemaString;
 
         private transient List<Schema.Field> fields;
-        private transient org.apache.avro.Schema avroSchema;
+        private transient org.apache.avro.Schema badRecordAvroSchema;
 
         OutputDoFn(
                 final String jobName,
                 final String moduleName,
-                final Parameters parameters) {
+                final Parameters parameters,
+                final org.apache.avro.Schema badRecordAvroSchema) {
 
             this.jobName = jobName;
             this.moduleName = moduleName;
             this.format = parameters.format;
+            this.badRecordAvroSchemaString = badRecordAvroSchema.toString();
         }
 
         @Setup
         public void setup() {
             this.fields = createBadRecordSchema().getFields();
-            this.avroSchema = createBadRecordAvroSchema();
+            this.badRecordAvroSchema = AvroSchemaUtil.convertSchema(badRecordAvroSchemaString);
         }
 
         @ProcessElement
@@ -126,6 +125,7 @@ public class PubSubFailureSink extends FailureSink {
                 final PubsubMessage pubsubMessage = new PubsubMessage(bytes, attributes, null, null);
                 c.output(pubsubMessage);
             } catch (final Throwable e) {
+                FAILURE_ERROR_COUNTER.inc();
                 LOG.error("Failed to send bad record: {} to pubsub cause: {}", badRecord, e.getMessage());
             }
         }
@@ -137,7 +137,7 @@ public class PubSubFailureSink extends FailureSink {
         }
 
         private byte[] toAvro(final BadRecord badRecord, final Instant timestamp) throws IOException {
-            final GenericRecord element = convertToAvro(avroSchema, badRecord, jobName, moduleName, timestamp);
+            final GenericRecord element = convertToAvro(badRecordAvroSchema, badRecord, jobName, moduleName, timestamp);
             return AvroSchemaUtil.encode(element);
         }
     }

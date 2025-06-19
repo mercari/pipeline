@@ -94,18 +94,14 @@ public abstract class Source extends Module<PBegin> {
             final Source module;
             try {
                 module = clazz.getDeclaredConstructor().newInstance();
-            } catch (InstantiationException
-                     | IllegalAccessException
-                     | NoSuchMethodException
-                     | InvocationTargetException e) {
-
+            } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
                 final String errorMessage = "Failed to instantiate source module: " + config.getModule() + ", class: " + clazz;
                 throw new IllegalModuleException(errorMessage, e);
             }
             final Module properties = module.getClass().getAnnotation(Module.class);
             module.setup(config, properties, options, waits, errorHandler);
             return module;
-        }).orElseThrow(() -> new IllegalModuleException("Not supported source module: " + config.getModule()));
+        }).orElseThrow(() -> new IllegalModuleException("", "pipeline", "Not supported source module: " + config.getModule()));
     }
 
     private static Map<String, Class<Source>> findSourcesInPackage(String packageName) {

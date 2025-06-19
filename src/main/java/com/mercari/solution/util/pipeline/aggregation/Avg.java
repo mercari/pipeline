@@ -7,6 +7,8 @@ import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
 import com.mercari.solution.util.ExpressionUtil;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.ElementSchemaUtil;
 import net.objecthunter.exp4j.Expression;
 import org.joda.time.Instant;
 
@@ -24,7 +26,7 @@ public class Avg implements AggregateFunction {
     private String weightExpression;
     private String condition;
 
-    private List<Range> ranges;
+    private Range range;
 
     private Boolean ignore;
 
@@ -46,7 +48,7 @@ public class Avg implements AggregateFunction {
             final String field,
             final String expression,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore,
             final JsonObject params) {
 
@@ -55,27 +57,29 @@ public class Avg implements AggregateFunction {
         avg.field = field;
         avg.expression = expression;
         avg.condition = condition;
-        avg.ranges = ranges;
+        avg.range = range;
         avg.ignore = ignore;
 
         avg.inputFields = new ArrayList<>();
         if (field != null) {
-            final Schema.Field inputField = Schema.getField(inputFields, field);
-            avg.inputFields.add(Schema.Field.of(field, inputField.getFieldType()));
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(field, inputFields);
+            avg.inputFields.add(Schema.Field.of(field, inputFieldType));
         } else {
             for(final String variable : ExpressionUtil.estimateVariables(expression)) {
-                avg.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                avg.inputFields.add(Schema.Field.of(variable, inputFieldType));
             }
         }
 
         if(params.has("weightField")) {
             avg.weightField = params.get("weightField").getAsString();
-            final Schema.Field inputField = Schema.getField(inputFields, avg.weightField);
-            avg.inputFields.add(Schema.Field.of(avg.weightField, inputField.getFieldType()));
+            final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(avg.weightField, inputFields);
+            avg.inputFields.add(Schema.Field.of(avg.weightField, inputFieldType));
         } else if(params.has("weightExpression")) {
             avg.weightExpression = params.get("weightExpression").getAsString();
             for(final String variable : ExpressionUtil.estimateVariables(avg.weightExpression)) {
-                avg.inputFields.add(Schema.Field.of(variable, Schema.getField(inputFields, variable).getFieldType()));
+                final Schema.FieldType inputFieldType = ElementSchemaUtil.getInputFieldType(variable, inputFields);
+                avg.inputFields.add(Schema.Field.of(variable, inputFieldType));
             }
         }
 
@@ -98,12 +102,12 @@ public class Avg implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
     @Override
@@ -152,13 +156,13 @@ public class Avg implements AggregateFunction {
         if(field != null) {
             inputValue = input.getAsDouble(field);
         } else {
-            inputValue = AggregateFunction.eval(this.exp, variables, input);
+            inputValue = ExpressionUtil.eval(this.exp, variables, input);
         }
         final Double inputWeight;
         if(weightField != null) {
             inputWeight = input.getAsDouble(weightField);
         } else if(weightExpression != null) {
-            inputWeight = AggregateFunction.eval(this.weightExp, weightVariables, input);
+            inputWeight = ExpressionUtil.eval(this.weightExp, weightVariables, input);
         } else {
             inputWeight = 1D;
         }

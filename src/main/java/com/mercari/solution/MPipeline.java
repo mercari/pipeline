@@ -95,7 +95,7 @@ public class MPipeline {
         } catch (final Throwable e) {
             LOG.error("Failed to apply pipeline config: {}", config);
             if(config.getSystem().getFailure().getAlterConfig() == null) {
-                throw new IllegalArgumentException("Failed to apply pipeline config: " + config, e);
+                throw e;
             }
             final Config alterConfig = Config.load(
                     config.getSystem().getFailure().getAlterConfig(),
@@ -123,7 +123,7 @@ public class MPipeline {
                 if(preOutputSize == executedModuleNames.size()) {
                     moduleNames.removeAll(executedModuleNames);
                     final String message = String.format("No input for modules: %s", String.join(",", moduleNames));
-                    throw new IllegalModuleException("", "pipeline", List.of(message));
+                    throw new IllegalModuleException("", "pipeline", message);
                 }
                 preOutputSize = executedModuleNames.size();
             }

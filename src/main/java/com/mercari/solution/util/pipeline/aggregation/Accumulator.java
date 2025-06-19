@@ -48,6 +48,13 @@ public class Accumulator {
         };
     }
 
+    public Map<String,Object> getMap(String name) {
+        return switch (map.get(name)) {
+            case Map m -> m;
+            case null, default -> new HashMap<>();
+        };
+    }
+
     public Number getAsNumber(String name) {
         return switch (map.get(name)) {
             case Number n -> n;

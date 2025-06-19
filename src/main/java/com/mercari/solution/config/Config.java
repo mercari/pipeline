@@ -37,7 +37,9 @@ public class Config implements Serializable {
 
     // system
     private Systems system;
+    //// deprecated. use system.args
     private Map<String, String> args;
+    //// deprecated. use system.imports
     private List<Import> imports;
 
     // pipeline config
@@ -139,6 +141,7 @@ public class Config implements Serializable {
         }
         this.args.putAll(args);
 
+        // deprecated
         if(this.imports == null) {
             this.imports = new ArrayList<>();
         } else {
@@ -146,6 +149,10 @@ public class Config implements Serializable {
                 i.setDefaults(this.args);
             }
         }
+        if(!this.imports.isEmpty()) {
+            this.system.imports = this.imports;
+        }
+
         if(this.empty == null) {
             this.empty = false;
         }
@@ -398,7 +405,7 @@ public class Config implements Serializable {
                     .peek(c -> c.addFailures(failures))
                     .collect(Collectors.toList());
 
-            for(final Import i : config.getImports()) {
+            for(final Import i : config.getSystem().getImports()) {
                 for(final String path : i.getFiles()) {
                     final String configPath = (i.getBase() == null ? "" : i.getBase()) + path;
                     final Config importConfig = load(configPath, config.system.context, format, i.args);
@@ -509,18 +516,28 @@ public class Config implements Serializable {
     }
 
     private static JsonObject processArgs(final JsonObject configJson, final Map<String, String> args) {
+        final JsonObject argsJsonObject;
         if(configJson.has("args") && configJson.get("args").isJsonObject()) {
-            for(final Map.Entry<String, JsonElement> entry : configJson.getAsJsonObject("args").entrySet()) {
-                if(entry.getValue().isJsonPrimitive()) {
-                    final JsonPrimitive primitive = entry.getValue().getAsJsonPrimitive();
-                    if(primitive.isString()) {
-                        args.put(entry.getKey(), entry.getValue().getAsString());
-                    } else {
-                        args.put(entry.getKey(), entry.getValue().toString());
-                    }
+            argsJsonObject = configJson.getAsJsonObject("args");
+        } else if(configJson.has("system") && configJson.get("system").isJsonObject()
+                && configJson.getAsJsonObject("system").has("args")
+                && configJson.getAsJsonObject("system").get("args").isJsonObject()) {
+
+            argsJsonObject = configJson.getAsJsonObject("system").getAsJsonObject("args");
+        } else {
+            argsJsonObject = new JsonObject();
+        }
+
+        for(final Map.Entry<String, JsonElement> entry : argsJsonObject.entrySet()) {
+            if(entry.getValue().isJsonPrimitive()) {
+                final JsonPrimitive primitive = entry.getValue().getAsJsonPrimitive();
+                if(primitive.isString()) {
+                    args.put(entry.getKey(), entry.getValue().getAsString());
                 } else {
                     args.put(entry.getKey(), entry.getValue().toString());
                 }
+            } else {
+                args.put(entry.getKey(), entry.getValue().toString());
             }
         }
 

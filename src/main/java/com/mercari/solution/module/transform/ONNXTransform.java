@@ -298,13 +298,13 @@ public class ONNXTransform extends Transform {
             inputNames.add(inputName);
             outputTags.add(outputTag);
             outputSchemas.add(outputSchema);
-            LOG.info("outputSchema::: " + outputSchema.getAvroSchema());
             inferenceSettings.add(inference.toSetting(outputMediumSchema.getFields()));
         }
 
         final TupleTag<MElement> dummyTag = new TupleTag<>() {};
         final TupleTag<BadRecord> failureTag = new TupleTag<>() {};
-        final TupleTagList tupleTagList = TupleTagList.of(new ArrayList<>(outputTags));
+
+        //outputTags.add(failureTag);
 
         final PCollectionTuple outputs = inputs
                 .apply("Union", Union.flatten()
@@ -314,7 +314,7 @@ public class ONNXTransform extends Transform {
                                 getJobName(), getName(), model, inferenceSettings, parameters.bufferSize,
                                 inputs.getAllInputs(), outputSchemas,
                                 outputTags, failureTag, getFailFast()))
-                        .withOutputTags(dummyTag, tupleTagList));
+                        .withOutputTags(dummyTag, TupleTagList.of(new ArrayList<>(outputTags))));
 
         MCollectionTuple outputTuple = MCollectionTuple.empty(inputs.getPipeline());
         for(int i=0; i<inputNames.size(); i++) {
@@ -322,7 +322,7 @@ public class ONNXTransform extends Transform {
                     .and(inputNames.get(i), outputs.get(outputTags.get(i)), outputSchemas.get(i));
         }
 
-        errorHandler.addError(outputs.get(failureTag));
+        //errorHandler.addError(outputs.get(failureTag));
 
         return outputTuple;
     }
@@ -507,6 +507,8 @@ public class ONNXTransform extends Transform {
                             updatesList.get(unionValueIndex).putAll(renamedValues);
                         }
                     }
+                } catch (final Throwable e) {
+                    LOG.error(e.getMessage());
                 }
             }
 

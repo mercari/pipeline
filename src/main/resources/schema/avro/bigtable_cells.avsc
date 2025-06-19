@@ -1,0 +1,22 @@
+{
+    "name": "BigtableRow",
+    "type": "record",
+    "fields": [
+      { "name": "key", "type" : "bytes"},
+      { "name": "cells",
+        "type": {
+          "type": "array",
+          "items": {
+            "name": "BigtableCell",
+            "type": "record",
+            "fields": [
+              { "name": "family", "type": "string"},
+              { "name": "qualifier", "type": "bytes"},
+              { "name": "timestamp", "type": "long", "logicalType": "timestamp-micros"},
+              { "name": "value", "type": "bytes"}
+            ]
+          }
+        }
+      }
+   ]
+}

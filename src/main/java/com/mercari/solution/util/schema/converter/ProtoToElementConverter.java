@@ -22,7 +22,7 @@ public class ProtoToElementConverter {
     private static final Logger LOG = LoggerFactory.getLogger(ProtoToElementConverter.class);
 
     public static Schema convertSchema(final Descriptors.Descriptor messageType) {
-        return Schema.of(convertFields(messageType));
+        return Schema.of(messageType);
     }
 
     public static List<Schema.Field> convertFields(final Descriptors.Descriptor messageType) {

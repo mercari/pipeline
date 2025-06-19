@@ -3,10 +3,13 @@ package com.mercari.solution.util.schema.converter;
 import com.google.cloud.spanner.Struct;
 import com.google.datastore.v1.Entity;
 import com.google.firestore.v1.Document;
+import com.google.gson.JsonArray;
+import com.google.protobuf.DynamicMessage;
 import com.mercari.solution.config.SourceConfig;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
+import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericRecord;
@@ -85,6 +88,7 @@ public class ElementToAvroConverter {
         return switch (element.getType()) {
             case ELEMENT -> convert(schema, (Map<String,Object>) value);
             case AVRO -> (GenericRecord) element.getValue();
+            case PROTO -> ProtoToAvroConverter.convert(schema, (DynamicMessage) element.getValue(), null);
             case ROW -> RowToAvroConverter.convert(schema, (Row) value);
             case STRUCT -> StructToAvroConverter.convert(schema, (Struct) value);
             case DOCUMENT -> DocumentToAvroConverter.convert(schema, (Document) value);
@@ -134,6 +138,10 @@ public class ElementToAvroConverter {
             }
             case enumeration -> org.apache.avro.Schema.createEnum(fieldName, null, parentNamespace, fieldType.getSymbols());
             case element -> convertSchema(fieldName, fieldType.getElementSchema().getFields());
+            case map -> {
+                org.apache.avro.Schema mapValueSchema = convertFieldSchema(fieldType.getMapValueType(), fieldName, parentNamespace);
+                yield org.apache.avro.Schema.createMap(mapValueSchema);
+            }
             case array -> {
                 org.apache.avro.Schema arrayElementSchema = convertFieldSchema(fieldType.getArrayValueType(), fieldName, parentNamespace);
                 if(AvroSchemaUtil.isNullable(arrayElementSchema)) {
@@ -141,9 +149,24 @@ public class ElementToAvroConverter {
                 }
                 yield org.apache.avro.Schema.createArray(arrayElementSchema);
             }
-            case map -> {
-                org.apache.avro.Schema mapValueSchema = convertFieldSchema(fieldType.getMapValueType(), fieldName, parentNamespace);
-                yield org.apache.avro.Schema.createMap(mapValueSchema);
+            case matrix -> {
+                final Schema.FieldType elementType = switch (fieldType.getType()) {
+                    case array -> fieldType.getArrayValueType();
+                    case matrix -> fieldType.getMatrixValueType();
+                    default -> fieldType;
+                };
+                org.apache.avro.Schema arrayElementSchema = convertFieldSchema(elementType, fieldName, parentNamespace);
+                if(AvroSchemaUtil.isNullable(arrayElementSchema)) {
+                    arrayElementSchema = AvroSchemaUtil.unnestUnion(arrayElementSchema);
+                }
+                final org.apache.avro.Schema matrixSchema = org.apache.avro.Schema.createArray(arrayElementSchema);
+                matrixSchema.addProp(LogicalType.LOGICAL_TYPE_PROP, "matrix");
+                final JsonArray shapeArray = new JsonArray();
+                for(final Integer s : fieldType.getShape()) {
+                    shapeArray.add(s);
+                }
+                matrixSchema.addProp("shape", shapeArray.toString());
+                yield matrixSchema;
             }
             default -> throw new IllegalArgumentException(fieldType.getType() + " type is not supported for avro.");
         };
@@ -181,7 +204,7 @@ public class ElementToAvroConverter {
                 case Boolean b -> b;
                 case String s -> Boolean.parseBoolean(s);
                 case Number n -> n.doubleValue() > 0;
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported boolean value: " + value + ", class: " + value.getClass().getName());
             };
             case STRING -> switch (value) {
                 case String s -> s;
@@ -192,27 +215,27 @@ public class ElementToAvroConverter {
                 case byte[] b -> b;
                 case ByteBuffer b -> b;
                 case String s -> Base64.getDecoder().decode(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported bytes value: " + value + ", class: " + value.getClass().getName());
             };
             case INT -> switch (value) {
                 case Number n -> n.intValue();
                 case String s -> Integer.parseInt(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported int value: " + value + ", class: " + value.getClass().getName());
             };
             case LONG -> switch (value) {
                 case Number n -> n.longValue();
                 case String s -> Long.parseLong(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported long value: " + value + ", class: " + value.getClass().getName());
             };
             case FLOAT -> switch (value) {
                 case Number n -> n.floatValue();
                 case String s -> Float.parseFloat(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported float value: " + value + ", class: " + value.getClass().getName());
             };
             case DOUBLE -> switch (value) {
                 case Number n -> n.doubleValue();
                 case String s -> Double.parseDouble(s);
-                default -> throw new IllegalArgumentException();
+                default -> throw new IllegalArgumentException("Not supported double value: " + value + ", class: " + value.getClass().getName());
             };
             case ENUM -> {
                 final int index = (Integer) value;
@@ -230,7 +253,7 @@ public class ElementToAvroConverter {
             case ARRAY -> ((List<Object>) value).stream()
                     .map(v -> convertValue(name, fieldSchema.getElementType(), v))
                     .toList();
-            default -> throw new IllegalArgumentException();
+            default -> throw new IllegalArgumentException("Not supported schema: " + fieldSchema + " for value: " + value + ", class: " + value.getClass().getName());
         };
     }
 

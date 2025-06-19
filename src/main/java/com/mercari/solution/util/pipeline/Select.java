@@ -1,6 +1,8 @@
 package com.mercari.solution.util.pipeline;
 
+import com.google.common.collect.Ordering;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.*;
 import com.mercari.solution.util.coder.ElementCoder;
@@ -8,6 +10,7 @@ import com.mercari.solution.util.pipeline.aggregation.Accumulator;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.pipeline.select.navigation.NavigationFunction;
 import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.AvroSchemaUtil;
 import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -21,11 +24,16 @@ import org.slf4j.LoggerFactory;
 import java.io.Serializable;
 import java.util.*;
 
+
 public class Select implements Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Select.class);
 
     private final List<SelectFunction> selectFunctions;
+
+    public List<SelectFunction> getSelectFunctions() {
+        return selectFunctions;
+    }
 
     public Select(final List<SelectFunction> selectFunctions) {
         this.selectFunctions = Optional
@@ -33,8 +41,17 @@ public class Select implements Serializable {
                 .orElseGet(ArrayList::new);
     }
 
+    public static Select of(final JsonArray select, final List<Schema.Field> inputFields) {
+        final List<SelectFunction > selectFunctions = SelectFunction.of(select, inputFields);
+        return new Select(selectFunctions);
+    }
+
     public static Select of(final List<SelectFunction> selectFunctions) {
         return new Select(selectFunctions);
+    }
+
+    public static Schema createOutputSchema(final Select select) {
+        return SelectFunction.createSchema(select.selectFunctions);
     }
 
     public static Map<String, Object> apply(
@@ -80,26 +97,54 @@ public class Select implements Serializable {
 
     // Stateful select processing
     public Map<String, Object> select(
-            final MElement input,
-            final Iterable<TimestampedValue<MElement>> buffer,
-            final Integer count,
+            final List<MElement> elements,
             final Instant timestamp) {
 
-        int index = count;
+        if(elements == null || elements.isEmpty()) {
+            return new HashMap<>();
+        }
+
+        final List<MElement> sorted = elements.stream()
+                .sorted(Comparator.comparingLong(MElement::getEpochMillis))
+                .toList();
+
+        final MElement input = sorted.getLast();
+        final List<TimestampedValue<MElement>> buffer = sorted
+                .subList(0, sorted.size() - 1)
+                .stream()
+                .map(element -> TimestampedValue.of(element, element.getTimestamp()))
+                .toList();
+
+        return select(input, buffer, input.getTimestamp());
+    }
+
+    // Stateful select processing
+    public Map<String, Object> select(
+            final MElement input,
+            final Collection<TimestampedValue<MElement>> buffer,
+            final Instant timestamp) {
+
+        // process state buffer
+        int index = buffer.size();
         Accumulator accumulator = Accumulator.of();
         for(final TimestampedValue<MElement> bufferTimestampedValue : buffer) {
+            final Instant bufferTimestamp = bufferTimestampedValue.getTimestamp();
             final MElement bufferValue = bufferTimestampedValue.getValue();
             for(final SelectFunction selectFunction : selectFunctions) {
                 if(selectFunction.ignore()) {
                     continue;
                 }
                 if(selectFunction instanceof StatefulFunction statefulFunction) {
+                    if(!statefulFunction.getRange().filter(timestamp, bufferTimestamp, index)) {
+                        continue;
+                    }
                     accumulator = statefulFunction.addInput(accumulator, bufferValue, index, timestamp);
                 }
             }
             index = index - 1;
         }
 
+        // process input
         final Map<String, Object> outputs = new HashMap<>();
         if(selectFunctions.isEmpty()) {
             return outputs;
@@ -112,7 +157,9 @@ public class Select implements Serializable {
             }
             final Object output = switch (selectFunction) {
                 case StatefulFunction statefulFunction -> {
-                    accumulator = statefulFunction.addInput(accumulator, input, index, timestamp);
+                    if(statefulFunction.getRange().filter(timestamp, input.getTimestamp(), index)) {
+                        accumulator = statefulFunction.addInput(accumulator, input, 0, timestamp);
+                    }
                     yield statefulFunction.extractOutput(accumulator, outputs);
                 }
                 case NavigationFunction navigationFunction -> null; //TODO
@@ -125,6 +172,31 @@ public class Select implements Serializable {
 
     public boolean useSelect() {
         return !selectFunctions.isEmpty();
+    }
+
+    public static List<String> getInputFieldNames(final List<SelectFunction> selectFunctions) {
+        final List<String> fieldNameList = new ArrayList<>();
+        final Set<String> fieldNameDuplicateCheckSet = new HashSet<>();
+        for(final SelectFunction selectFunction : selectFunctions) {
+            for(final Schema.Field selectInputField : selectFunction.getInputFields()) {
+                if(!fieldNameDuplicateCheckSet.contains(selectInputField.getName())) {
+                    fieldNameList.add(selectInputField.getName());
+                    fieldNameDuplicateCheckSet.add(selectInputField.getName());
+                }
+            }
+        }
+        return fieldNameList;
+    }
+
+    public static org.apache.avro.Schema createStateAvroSchema(
+            final Schema inputSchema,
+            final List<SelectFunction> selectFunctions) {
+
+        final Schema outputSchema = SelectFunction.createSchema(selectFunctions);
+        final Schema unionSchema = Union.createUnionSchema(List.of(outputSchema, inputSchema));
+        final org.apache.avro.Schema unionAvroSchema = unionSchema.getAvroSchema();
+        final List<String> fieldNameList = getInputFieldNames(selectFunctions);
+        return AvroSchemaUtil.selectFields(unionAvroSchema, fieldNameList);
     }
 
     public static Transform of(

@@ -18,6 +18,7 @@ import org.apache.beam.sdk.io.gcp.spanner.MutationGroup;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerIO;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerWriteResult;
 import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.values.*;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
@@ -53,8 +54,9 @@ public class SpannerSink extends Sink {
         private Long batchSizeBytes;
         private Integer groupingFactor;
         private Options.RpcPriority priority;
+        private Integer maxCommitDelay;
 
-        public void validate(final MPipeline.Runner runner, final DataType dataType, final Boolean isTuple) {
+        public void validate(final MPipeline.Runner runner) {
             // check required parameters filled
             final List<String> errorMessages = new ArrayList<>();
             if(this.projectId == null) {
@@ -67,9 +69,12 @@ public class SpannerSink extends Sink {
                 errorMessages.add("Parameter must contain databaseId");
             }
             if(this.table == null) {
-                switch (dataType) {
-                    case MUTATION, MUTATIONGROUP, UNIFIEDMUTATION -> {}
-                    default -> errorMessages.add("Parameter must contain table");
+                errorMessages.add("Parameter must contain table");
+            }
+
+            if(this.maxCommitDelay != null) {
+                if(maxCommitDelay < 0 || maxCommitDelay > 500) {
+                    errorMessages.add("Parameter maxCommitDelay must be between 0 to 500. but: " + maxCommitDelay);
                 }
             }
 
@@ -83,6 +88,7 @@ public class SpannerSink extends Sink {
                 throw new IllegalModuleException(errorMessages);
             }
         }
+
         public void setDefaults() {
             //
             if(this.mutationOp == null) {
@@ -142,7 +148,7 @@ public class SpannerSink extends Sink {
 
         final Parameters parameters = getParameters(Parameters.class);
         parameters.setDefaults();
-        //parameters.validate(, sample.getDataType(), sample.getIsTuple());
+        parameters.validate(getRunner());
 
         switch (parameters.mode) {
             case normal -> {
@@ -151,54 +157,101 @@ public class SpannerSink extends Sink {
                         .apply("Union", Union.flatten()
                                 .withWaits(getWaits())
                                 .withStrategy(getStrategy()));
-                final PCollection<Void> output = input
-                        .apply("Write", new SpannerWriteSingle(parameters, inputSchema));
-            }
-            case changeCapture -> {
-                // TODO
+
+                final TupleTag<MElement> outputTag = new TupleTag<>() {};
+                final TupleTag<BadRecord> failureTag = new TupleTag<>() {};
+
+                final PCollectionTuple outputs = input
+                        .apply("Write", new SpannerWriteSingle(
+                                parameters, inputSchema, getFailFast(), outputTag, failureTag));
+
+                errorHandler.addError(outputs.get(failureTag));
+
+                return MCollectionTuple
+                        .of(outputs.get(outputTag), createVoidSchema());
             }
             case restore -> {
+                /*
                 final PCollection<Void> output = inputs
                         .apply("Write", new SpannerWriteMulti(parameters, getWaits()));
-            }
-        }
 
-        return null;
+                 */
+                throw new IllegalArgumentException();
+            }
+            default -> throw new IllegalArgumentException();
+        }
     }
 
-    public static class SpannerWriteSingle extends PTransform<PCollection<MElement>, PCollection<Void>> {
+    private static Schema createVoidSchema() {
+        return Schema.builder()
+                .withField("value", Schema.FieldType.STRING)
+                .build();
+    }
 
-        private static final Logger LOG = LoggerFactory.getLogger(SpannerWriteSingle.class);
+    public static class SpannerWriteSingle extends PTransform<PCollection<MElement>, PCollectionTuple> {
 
         private final Parameters parameters;
         private final Schema inputSchema;
 
+        private final boolean failFast;
+        private final TupleTag<MElement> outputTag;
+        private final TupleTag<BadRecord> failureTag;
+
         private SpannerWriteSingle(
                 final Parameters parameters,
-                final Schema inputSchema) {
+                final Schema inputSchema,
+                final boolean failFast,
+                final TupleTag<MElement> outputTag,
+                final TupleTag<BadRecord> failureTag) {
 
             this.parameters = parameters;
             this.inputSchema = inputSchema;
+
+            this.failFast = failFast;
+            this.outputTag = outputTag;
+            this.failureTag = failureTag;
         }
 
-        public PCollection<Void> expand(final PCollection<MElement> input) {
+        public PCollectionTuple expand(final PCollection<MElement> input) {
             // SpannerWrite
-            final SpannerIO.Write write = createWrite(parameters, true);
+            final SpannerIO.Write write = createWrite(parameters, failFast);
 
             final PCollection<Mutation> mutations = input
                     .apply("ToMutation", ParDo.of(new SpannerMutationDoFn(
                             parameters.table, parameters.mutationOp, parameters.keyFields, parameters.commitTimestampFields, inputSchema)))
                     .setCoder(SerializableCoder.of(Mutation.class));
 
-            // Custom SpannerWrite for DirectRunner
+            final PCollection<Void> result;
+            PCollection<MutationGroup> failure = null;
             if(OptionUtil.isDirectRunner(input)) {
-                return mutations
+                // Custom SpannerWrite for DirectRunner
+                result = mutations
                         .apply("WriteSpanner", ParDo
-                                .of(new WriteMutationDoFn(parameters.projectId, parameters.instanceId, parameters.databaseId, 500, parameters.emulator)));
+                                .of(new WriteMutationDoFn(
+                                        parameters.projectId, parameters.instanceId, parameters.databaseId, 500, parameters.emulator)));
+            } else {
+                final SpannerWriteResult writeResult = mutations
+                        .apply("WriteSpanner", write);
+                result = writeResult.getOutput();
+                if(!failFast) {
+                    failure = writeResult.getFailedMutations();
+                }
             }
-            final SpannerWriteResult writeResult = mutations
-                    .apply("WriteSpanner", write);
-            return writeResult.getOutput();
+
+            if(failure == null) {
+                failure = input.getPipeline()
+                        .apply("Empty", Create.empty(SerializableCoder.of(MutationGroup.class)));
+            }
+
+            final PCollection<BadRecord> badRecords = failure
+                    .apply("ToBadRecord", ParDo.of(new BadRecordDoFn()));
+
+            final PCollection<MElement> output = result
+                    .apply("ToElement", ParDo.of(new VoidDoFn()));
+
+            return PCollectionTuple
+                    .of(outputTag, output)
+                    .and(failureTag, badRecords);
         }
 
     }
@@ -701,6 +754,10 @@ public class SpannerSink extends Sink {
             default -> write;
         };
 
+        if(parameters.maxCommitDelay != null) {
+            write = write.withMaxCommitDelay(parameters.maxCommitDelay);
+        }
+
         return write;
     }
 
@@ -734,7 +791,8 @@ public class SpannerSink extends Sink {
 
         @ProcessElement
         public void processElement(final @Element MElement input, final OutputReceiver<Mutation> receiver) {
-            final Mutation mutation = ElementToSpannerMutationConverter.convert(schema, input, table, mutationOp, keyFields, allowCommitTimestampFields);
+            final Mutation mutation = ElementToSpannerMutationConverter
+                    .convert(schema, input, table, mutationOp, keyFields, allowCommitTimestampFields);
             receiver.output(mutation);
         }
 
@@ -969,6 +1027,38 @@ public class SpannerSink extends Sink {
             if(this.spanner != null) {
                 this.spanner.close();
             }
+        }
+
+    }
+
+    private static class BadRecordDoFn extends DoFn<MutationGroup,BadRecord> {
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            final MutationGroup mutationGroup = c.element();
+            if(mutationGroup == null) {
+                return;
+            }
+
+            final BadRecord badRecord = BadRecord.builder()
+                    .setFailure(BadRecord.Failure.builder()
+                            .build())
+                    .setRecord(BadRecord.Record.builder()
+                            .setCoder("SerializableCoder")
+                            .setEncodedRecord(new byte[0])
+                            .setHumanReadableJsonRecord(mutationGroup.toString())
+                            .build())
+                    .build();
+            c.output(badRecord);
+        }
+
+    }
+
+    private static class VoidDoFn extends DoFn<Void,MElement> {
+
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+
         }
 
     }

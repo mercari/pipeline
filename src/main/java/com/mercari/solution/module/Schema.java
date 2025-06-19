@@ -105,6 +105,13 @@ public class Schema implements Serializable {
                 .orElseGet(() -> ElementToAvroConverter.convertSchema(fields));
     }
 
+    public Descriptors.Descriptor getProtobufDescriptor() {
+        return Optional
+                .ofNullable(getProtobuf())
+                .map(ProtobufSchema::getDescriptor)
+                .orElse(null);
+    }
+
     public Boolean getUseDestinationSchema() {
         return useDestinationSchema;
     }
@@ -143,6 +150,11 @@ public class Schema implements Serializable {
                 }
                 avro.setup();
             }
+            case PROTO -> {
+                if(protobuf != null) {
+                    protobuf.setup();
+                }
+            }
             case ROW -> {
                 if(row == null) {
                     if(fields != null && !fields.isEmpty()) {
@@ -152,9 +164,6 @@ public class Schema implements Serializable {
                     }
                 }
             }
-        }
-        if(protobuf != null) {
-            protobuf.setup();
         }
         if(fields == null || fields.isEmpty()) {
             if(avro != null) {
@@ -172,13 +181,14 @@ public class Schema implements Serializable {
             DataType type,
             List<Field> fields,
             org.apache.beam.sdk.schemas.Schema rowSchema,
-            org.apache.avro.Schema avroSchema) {
+            org.apache.avro.Schema avroSchema,
+            Descriptors.Descriptor descriptor) {
 
         this.type = type;
         this.fields = fields;
         this.row = new RowSchema(rowSchema);
         this.avro = new AvroSchema(avroSchema);
-        this.protobuf = new ProtobufSchema();
+        this.protobuf = new ProtobufSchema(descriptor);
     }
 
     public static Schema parse(final String jsonText) {
@@ -310,26 +320,27 @@ public class Schema implements Serializable {
         if(fields.isEmpty()) {
             throw new IllegalArgumentException("schema fields must not be empty");
         }
-        return new Schema(DataType.ELEMENT, fields, null, null);
+        return new Schema(DataType.ELEMENT, fields, null, null, null);
     }
 
     public static Schema of(org.apache.beam.sdk.schemas.Schema rowSchema) {
         final List<Field> fields = RowToElementConverter.convertFields(rowSchema.getFields());
-        return new Schema(DataType.ROW, fields, rowSchema, null);
+        return new Schema(DataType.ROW, fields, rowSchema, null, null);
     }
 
     public static Schema of(org.apache.avro.Schema avroSchema) {
         final List<Field> fields = AvroToElementConverter.convertFields(avroSchema.getFields());
-        return new Schema(DataType.AVRO, fields, null, avroSchema);
+        return new Schema(DataType.AVRO, fields, null, avroSchema, null);
     }
 
     public static Schema of(com.google.cloud.spanner.Type type) {
         final List<Field> fields = StructToElementConverter.convertFields(type.getStructFields());
-        return new Schema(DataType.STRUCT, fields, null, null);
+        return new Schema(DataType.STRUCT, fields, null, null, null);
     }
 
     public static Schema of(Descriptors.Descriptor descriptor) {
-        return ProtoToElementConverter.convertSchema(descriptor);
+        final List<Field> fields = ProtoToElementConverter.convertFields(descriptor);
+        return new Schema(DataType.PROTO, fields, null, null, descriptor);
     }
 
     public static Schema of(TableSchema tableSchema) {
@@ -456,13 +467,17 @@ public class Schema implements Serializable {
 
         @Override
         public String toString() {
-            return String.format("name: " + name + ", type: " + type);
+            return toJsonObject().toString();
         }
 
         public JsonObject toJsonObject() {
             final JsonObject jsonObject = new JsonObject();
             jsonObject.addProperty("name", name);
             jsonObject.add("type", type.toJsonObject());
+            if(alterName != null) {
+                jsonObject.addProperty("alterName", alterName);
+
+            }
             return jsonObject;
         }
 
@@ -491,7 +506,7 @@ public class Schema implements Serializable {
         private List<String> symbols; // for enumerate type
         private Integer scale; // for decimal type
         private Integer precision; // for decimal type
-        private List<Long> shape; // for matrix type
+        private List<Integer> shape; // for matrix type
         private FieldType matrixValueType; // for matrix type
         private Boolean nullable;
         private String defaultValue;
@@ -512,6 +527,10 @@ public class Schema implements Serializable {
             return mapValueType;
         }
 
+        public FieldType getMatrixValueType() {
+            return matrixValueType;
+        }
+
         public List<String> getSymbols() {
             return symbols;
         }
@@ -522,6 +541,10 @@ public class Schema implements Serializable {
 
         public Integer getPrecision() {
             return precision;
+        }
+
+        public List<Integer> getShape() {
+            return shape;
         }
 
         public Boolean getNullable() {
@@ -707,7 +730,7 @@ public class Schema implements Serializable {
             return fieldType;
         }
 
-        public static FieldType matrix(FieldType matrixValueType, List<Long> shape) {
+        public static FieldType matrix(FieldType matrixValueType, List<Integer> shape) {
             final FieldType fieldType = new FieldType();
             fieldType.type = Type.matrix;
             fieldType.matrixValueType = matrixValueType;
@@ -787,7 +810,7 @@ public class Schema implements Serializable {
                     jsonObject.add("matrixValueType", matrixValueType.toJsonObject());
                     final JsonArray shapeArray = new JsonArray();
                     if(symbols != null) {
-                        for(final Long s : shape) {
+                        for(final Integer s : shape) {
                             shapeArray.add(s);
                         }
                     }
@@ -839,10 +862,15 @@ public class Schema implements Serializable {
 
         AvroSchema(org.apache.avro.Schema schema) {
             this.schema = schema;
-            this.json = Optional
-                    .ofNullable(schema)
-                    .map(org.apache.avro.Schema::toString)
-                    .orElse(null);
+            try {
+                this.json = Optional
+                        .ofNullable(schema)
+                        .map(org.apache.avro.Schema::toString)
+                        .orElse(null);
+            } catch (Throwable e) {
+                this.json = null;
+                LOG.error("failed to toString avro");
+            }
         }
 
         private void setup() {
@@ -915,6 +943,18 @@ public class Schema implements Serializable {
 
         public Descriptors.Descriptor getDescriptor() {
             return descriptors.get(messageName);
+        }
+
+        public ProtobufSchema() {
+            this.descriptors = new HashMap<>();
+        }
+
+        public ProtobufSchema(final Descriptors.Descriptor descriptor) {
+            this.descriptors = new HashMap<>();
+            if(descriptor != null) {
+                this.messageName = descriptor.getFullName();
+                this.descriptors.put(descriptor.getFullName(), descriptor);
+            }
         }
 
         private void setup() {

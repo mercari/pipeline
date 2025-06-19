@@ -39,12 +39,14 @@ sinks:
       table: mytable
 ```
 
-Assuming you have deployed the Mercari Dataflow Template to gs://example/template, run the following command.
+Assuming you have deployed the Mercari Pipeline to gs://example/template, run the following command.
 
 ```sh
 gcloud dataflow flex-template run bigquery-to-spanner \
+  --project={gcp_project} \
+  --region={region} \
   --template-file-gcs-location=gs://example/template \
-  --parameters=config=gs://example/config.yaml
+  --parameters=config="$(cat path/to/config.yaml)"
 ```
 
 The Dataflow job will be started, and you can check the execution status of the job in the console screen.
@@ -54,8 +56,8 @@ The Dataflow job will be started, and you can check the execution status of the 
 
 ## Deploy Template
 
-Mercari Dataflow Template is used as FlexTemplate.
-Therefore, the Mercari Dataflow Template should be deployed according to the FlexTemplate creation steps.
+Mercari Pipeline is used as FlexTemplate.
+Therefore, the Mercari Pipeline should be deployed according to the FlexTemplate creation steps.
 
 ### Requirements
 
@@ -70,13 +72,13 @@ The first step is to build the source code and register it as a container image 
 To upload container images to the Artifact registry via Docker commands, you will first need to execute the following commands, depending on the repository region.
 
 ```sh
-gcloud auth configure-docker us-central1-docker.pkg.dev, asia-northeast1-docker.pkg.dev
+gcloud auth configure-docker {region}-docker.pkg.dev
 ```
 
 The following command will generate a container for FlexTemplate from the source code and upload it to Artifact Registry.
 
 ```sh
-mvn clean package -DskipTests -Dimage={region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/cloud:latest
+mvn clean package -DskipTests -Dimage={region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/dataflow:latest
 ```
 
 ### Upload template file.
@@ -97,14 +99,14 @@ Run Dataflow Job from the template file.
 
 * gcloud command
 
-You can run template specifying gcs path that uploaded config file.
+You can run template specifying config content text or gcs path that uploaded config file.
 
 ```sh
-gsutil cp config.yaml gs://{path/to/config.yaml}
-
 gcloud dataflow flex-template run {job_name} \
+  --project={gcp_project} \
+  --region={region} \
   --template-file-gcs-location=gs://{path/to/template_file} \
-  --parameters=config=gs://{path/to/config.yaml}
+  --parameters=config="$(cat path/to/config.yaml)"
 ```
 
 * REST API
@@ -139,29 +141,27 @@ To run Template in streaming mode, specify `streaming=true` in the parameter.
 
 ```sh
 gcloud dataflow flex-template run {job_name} \
+  --project={gcp_project} \
+  --region={region} \
   --template-file-gcs-location=gs://{path/to/template_file} \
   --parameters=config=gs://{path/to/config.yaml} \
   --parameters=streaming=true
 ```
 
-## Deploy Docker image for local pipeline
+## Build Docker image for local pipeline execution
 
 You can run pipeline locally. This is useful when you want to process small data quickly.
 
-At first, you should register the container for local execution.
-
-
 ```sh
-# Generate MDT jar file.
-mvn clean package -DskipTests -Dimage="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/dataflow"
-
-# Create Docker image for local run
-docker build --tag="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct" .
-
-# If you need to push the image to the GAR,
+# To push the image to the GAR,
 # you may do so by using the following commands
-gcloud auth configure-docker
-docker push {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct
+gcloud auth configure-docker {region}-docker.pkg.dev
+
+# Create and Upload Docker image to GAR for local run
+mvn clean package -DskipTests -Pdirect -Dimage="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct"
+
+# Pull direct container image
+docker pull {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct
 ```
 
 ## Run Pipeline locally
@@ -183,10 +183,8 @@ If you want to run in streaming mode, specify streaming=true in the argument as 
 ```sh
 docker run \
   -v ~/.config/gcloud:/mnt/gcloud:ro \
-  -v /{your_work_dir}:/mnt/config:ro \
   --rm {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct \
-  --project={project} \
-  --config=/mnt/config/{my_config}.yaml
+  --config="$(cat path/to/config.yaml)"
 ```
 
 ### Windows OS
@@ -196,13 +194,37 @@ docker run ^
   -v C:\Users\{YourUserName}\AppData\Roaming\gcloud:/mnt/gcloud:ro ^
   -v C:\Users\{YourWorkingDirPath}\:/mnt/config:ro ^
   --rm {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct ^
-  --project={project} ^
   --config=/mnt/config/{MyConfig}.yaml
 ```
 
 * Note:
   * If you use BigQuery module locally, you will need to specify the `tempLocation` argument.
   * If the pipeline is to access an emulator running on a local machine, such as Cloud Spanner, the `--net=host` option is required.
+
+## Build Docker image for Pipeline API server
+
+You can build pipeline api server. This is useful when you want to check config content quickly.
+
+```sh
+# Create and Upload Docker image to GAR for pipeline api server
+mvn clean package -DskipTests -Pserver -Dimage="{region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/server"
+
+# Pull direct container image
+docker pull {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/server
+```
+
+## Run Pipeline API server locally
+
+Execute the following command to open the `http://localhost:8080/` in your browser.
+
+### Mac OS
+
+```sh
+docker run \
+  -p "8080:8080" \
+  -v ~/.config/gcloud:/mnt/gcloud:ro \
+  --rm {region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/server
+```
 
 ## Committers
 

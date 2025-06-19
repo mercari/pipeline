@@ -5,11 +5,12 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.mercari.solution.config.Config;
 import com.mercari.solution.config.FailureConfig;
-import com.mercari.solution.config.ModuleConfig;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.AvroSchemaUtil;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.metrics.Counter;
+import org.apache.beam.sdk.metrics.Metrics;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
@@ -17,6 +18,8 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.joda.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.annotation.ElementType;
@@ -30,6 +33,9 @@ import java.util.stream.Collectors;
 
 public abstract class FailureSink extends PTransform<PCollection<BadRecord>, PDone> {
 
+    protected static final Logger LOG = LoggerFactory.getLogger(FailureSink.class);
+    protected static final Counter FAILURE_ERROR_COUNTER = Metrics.counter("pipeline", "failure_error");;
+
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.TYPE)
     public @interface Module {
@@ -37,93 +43,6 @@ public abstract class FailureSink extends PTransform<PCollection<BadRecord>, PDo
     }
 
     private static final Map<String, Class<FailureSink>> failures = findFailuresInPackage("com.mercari.solution.module.failure");
-
-    private static final String AVRO_SCHEMA_BAD_RECORD = """
-            {
-              "type" : "record",
-              "name" : "BadRecord",
-              "fields" : [
-                {
-                  "name" : "job",
-                  "type" : "string",
-                  "order" : "ignore"
-                },
-                {
-                  "name" : "module",
-                  "type" : "string",
-                  "order" : "ignore"
-                },
-                {
-                  "name" : "record",
-                  "type" : [
-                    {
-                      "type" : "record",
-                      "name" : "Record",
-                      "fields" : [
-                        {
-                          "name" : "coder",
-                          "type" : [ "string", "null" ],
-                          "order" : "ignore"
-                        },
-                        {
-                          "name" : "json",
-                          "type" : [ "string", "null" ],
-                          "order" : "ignore"
-                        },
-                        {
-                          "name" : "bytes",
-                          "type" : [ "bytes", "null" ],
-                          "order" : "ignore"
-                        }
-                      ]
-                    }, "null" ],
-                  "order" : "ignore"
-                },
-                {
-                  "name" : "failure",
-                  "type" : [
-                    {
-                      "type" : "record",
-                      "name" : "failure",
-                      "fields" : [
-                        {
-                          "name" : "description",
-                          "type" : [ "string", "null" ],
-                          "order" : "ignore"
-                        },
-                        {
-                          "name" : "exception",
-                          "type" : [ "string", "null" ],
-                          "order" : "ignore"
-                        },
-                        {
-                          "name" : "stacktrace",
-                          "type" : [ "string", "null" ],
-                          "order" : "ignore"
-                        }
-                      ]
-                    }, "null" ],
-                  "order" : "ignore"
-                },
-                {
-                  "name" : "timestamp",
-                  "type" : {
-                    "type" : "long",
-                    "logicalType" : "timestamp-micros"
-                  },
-                  "order" : "ignore"
-                },
-                {
-                  "name" : "eventtime",
-                  "type" : {
-                    "type" : "long",
-                    "logicalType" : "timestamp-micros"
-                  },
-                  "order" : "ignore"
-                }
-              ]
-            }
-            """;
 
     protected String name;
     protected String module;
@@ -243,10 +162,6 @@ public abstract class FailureSink extends PTransform<PCollection<BadRecord>, PDo
                 .build();
     }
 
-    public static org.apache.avro.Schema createBadRecordAvroSchema() {
-        return AvroSchemaUtil.convertSchema(AVRO_SCHEMA_BAD_RECORD);
-    }
-
     public static Map<String, Object> convertToMap(
             final BadRecord badRecord,
             final String jobName,
@@ -290,7 +205,7 @@ public abstract class FailureSink extends PTransform<PCollection<BadRecord>, PDo
             final Instant eventTime) {
 
         final Map<String, Object> values = convertToMap(badRecord, jobName, moduleName, eventTime);
-        return AvroSchemaUtil.create(schema,values);
+        return AvroSchemaUtil.create(schema, values);
     }
 
     public static FailureSinks merge(final List<FailureSink> sinks) {

@@ -2,7 +2,10 @@ package com.mercari.solution.util.schema;
 
 import com.google.gson.JsonObject;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
+import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessageWithAttributesAndMessageIdAndOrderingKeyCoder;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -94,6 +97,14 @@ public class MessageSchemaUtil {
             jsonObject.add("attributes", attributes);
         }
         return jsonObject.toString();
+    }
+
+    public static byte[] encode(final PubsubMessage message) throws IOException {
+        final PubsubMessageWithAttributesAndMessageIdAndOrderingKeyCoder coder = PubsubMessageWithAttributesAndMessageIdAndOrderingKeyCoder.of();
+        try(final ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
+            coder.encode(message, byteArrayOutputStream);
+            return byteArrayOutputStream.toByteArray();
+        }
     }
 
 }

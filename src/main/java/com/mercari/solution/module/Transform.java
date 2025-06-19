@@ -71,13 +71,12 @@ public abstract class Transform extends Module<MCollectionTuple> {
             try {
                 module = clazz.getDeclaredConstructor().newInstance();
             } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
-
                 throw new RuntimeException("Failed to instantiate transform module: " + config.getModule() + ", class: " + clazz, e);
             }
             final Module properties = module.getClass().getAnnotation(Module.class);
             module.setup(config, properties, options, waits, sideInputs, errorHandler);
             return module;
-        }).orElseThrow(() -> new IllegalArgumentException("Not supported transform module: " + config.getModule()));
+        }).orElseThrow(() -> new IllegalModuleException("", "pipeline", "Not supported transform module: " + config.getModule()));
     }
 
     private static Map<String, Class<Transform>> findTransformsInPackage(String packageName) {

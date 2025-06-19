@@ -7,6 +7,8 @@ import com.mercari.solution.module.*;
 import com.mercari.solution.util.pipeline.*;
 import com.mercari.solution.util.pipeline.select.SelectFunction;
 import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
+import com.mercari.solution.util.schema.AvroSchemaUtil;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.InstantCoder;
 import org.apache.beam.sdk.coders.KvCoder;
@@ -104,12 +106,12 @@ public class SelectTransform extends Transform {
                 if(OptionUtil.isStreaming(inputs)) {
                     statefulSelectDoFn = new StatefulStreamingSelectDoFn(
                             getJobName(), getName(),
-                            outputSchema, parameters.filter, selectFunctions, parameters.flattenField,
+                            inputSchema, outputSchema, parameters.filter, selectFunctions, parameters.flattenField,
                             getLoggings(), getFailFast(), failuresTag, inputCoder.getValueCoder());
                 } else {
                     statefulSelectDoFn = new StatefulBatchSelectDoFn(
                             getJobName(), getName(),
-                            outputSchema, parameters.filter, selectFunctions, parameters.flattenField,
+                            inputSchema, outputSchema, parameters.filter, selectFunctions, parameters.flattenField,
                             getLoggings(), getFailFast(), failuresTag, inputCoder.getValueCoder());
                 }
                 outputs = input
@@ -166,9 +168,11 @@ public class SelectTransform extends Transform {
 
         final DataType outputType = Optional
                 .ofNullable(getOutputType())
-                .orElse(DataType.ELEMENT);
+                .orElse(DataType.AVRO);
         return outputSchema.withType(outputType);
     }
+
+
 
     private static class SelectDoFn<InputT> extends DoFn<InputT, MElement> {
 
@@ -290,12 +294,16 @@ public class SelectTransform extends Transform {
         protected static final String STATE_ID_MAX_COUNT_TIME = "statefulSelectMaxCountTime";
         protected static final String TIMER_ID = "statefulSelectBufferTimer";
 
+        private final Schema inputSchema;
         private final StatefulFunction.RangeBound maxRange;
+
+        private transient org.apache.avro.Schema stateAvroSchema;
 
         public StatefulSelectDoFn(
                 final String jobName,
                 final String moduleName,
                 //
+                final Schema inputSchema,
                 final Schema outputSchema,
                 final JsonElement filterJson,
                 final List<SelectFunction> selectFunctions,
@@ -306,29 +314,74 @@ public class SelectTransform extends Transform {
                 final TupleTag<BadRecord> failuresTag) {
 
             super(jobName, moduleName, outputSchema, filterJson, selectFunctions, flattenField, logging, failFast, failuresTag);
+            this.inputSchema = inputSchema;
             this.maxRange = StatefulFunction.calcMaxRange(selectFunctions);
         }
 
-        public Map<String, Object> process(
+        public void setup() {
+            filter.setup();
+            select.setup();
+            unnest.setup();
+            stateAvroSchema = Select.createStateAvroSchema(inputSchema, select.getSelectFunctions());
+        }
+
+        public List<MElement> process(
                 final MElement input,
                 final OrderedListState<MElement> bufferState,
                 final ValueState<Instant> maxCountState,
                 final Instant eventTime) {
 
-            final Instant durationMinTimestamp = maxRange.firstTimestamp(eventTime);
+            if (!filter.filter(input)) {
+                Logging.log(LOG, logging, "not_matched", input);
+                return new ArrayList<>();
+            }
+
+            final Map<String, Object> primitiveValues = processStateful(input, bufferState, maxCountState, eventTime);
+
+            final List<MElement> outputs = new ArrayList<>();
+            if(unnest.useUnnest()) {
+                final List<Map<String, Object>> list = unnest.unnest(primitiveValues);
+                for(final Map<String, Object> values : list) {
+                    final MElement output = MElement.of(values, eventTime);
+                    final MElement output_ = output.convert(outputSchema);
+                    outputs.add(output_);
+                }
+            } else {
+                final MElement output = MElement.of(primitiveValues, eventTime);
+                final MElement output_ = output.convert(outputSchema);
+                outputs.add(output_);
+            }
+            return outputs;
+        }
+
+        public Map<String, Object> processStateful(
+                final MElement input,
+                final OrderedListState<MElement> bufferState,
+                final ValueState<Instant> maxCountState,
+                final Instant eventTime) {
+
             final Instant countMinTimestamp = Optional
                     .ofNullable(maxCountState.read())
-                    .orElse(Instant.ofEpochMilli(0L));
-            final Integer maxCount = maxRange.maxCount;
-            final Instant minTimestamp = durationMinTimestamp.compareTo(countMinTimestamp) > 0 ? countMinTimestamp : durationMinTimestamp;
+                    .orElseGet(() -> Instant.ofEpochMilli(0L));
+            final Instant durationMinTimestamp = maxRange.firstTimestamp(eventTime);
 
-            //final Iterable<TimestampedValue<MElement>> buffer = bufferState.readRange(minTimestamp, eventTime);
-            final List<TimestampedValue<MElement>> buffer = Lists.newArrayList(bufferState.readRange(minTimestamp, eventTime));
+            // read state
+            final Instant maxMinTimestamp = durationMinTimestamp.compareTo(countMinTimestamp) > 0 ? countMinTimestamp : durationMinTimestamp;
+            final List<TimestampedValue<MElement>> buffer = Lists.newArrayList(bufferState.readRange(maxMinTimestamp, eventTime));
 
-            final Map<String, Object> output = select.select(input, buffer, maxCount, eventTime);
+            // process
+            final Map<String, Object> output = select.select(input, buffer, eventTime);
 
-            //bufferState.clearRange();
-            bufferState.add(TimestampedValue.of(input, eventTime));
+            // update state
+            if(buffer.size() >= maxRange.maxCount) {
+                maxCountState.write(buffer.get(buffer.size() - maxRange.maxCount).getTimestamp());
+            }
+
+            final GenericRecord record = AvroSchemaUtil.create(stateAvroSchema, output);
+            final MElement stateElement = MElement.of(record, eventTime);
+
+            bufferState.clearRange(Instant.ofEpochMilli(0L), maxMinTimestamp);
+            bufferState.add(TimestampedValue.of(stateElement, eventTime));
 
             return output;
         }
@@ -346,6 +399,7 @@ public class SelectTransform extends Transform {
                 final String jobName,
                 final String moduleName,
                 //
+                final Schema inputSchema,
                 final Schema outputSchema,
                 final JsonElement filterJson,
                 final List<SelectFunction> selectFunctions,
@@ -356,7 +410,7 @@ public class SelectTransform extends Transform {
                 final TupleTag<BadRecord> failuresTag,
                 final Coder<MElement> inputCoder) {
 
-            super(jobName, moduleName, outputSchema, filterJson, selectFunctions, flattenField, logging, failFast, failuresTag);
+            super(jobName, moduleName, inputSchema, outputSchema, filterJson, selectFunctions, flattenField, logging, failFast, failuresTag);
 
             this.bufferStateSpec = StateSpecs.orderedList(inputCoder);
             this.maxCountTimeStateSpec = StateSpecs.value(InstantCoder.of());
@@ -364,9 +418,7 @@ public class SelectTransform extends Transform {
 
         @Setup
         public void setup() {
-            filter.setup();
-            select.setup();
-            unnest.setup();
+            super.setup();
         }
 
         @ProcessElement
@@ -386,9 +438,14 @@ public class SelectTransform extends Transform {
             }
 
             try {
-                final Map<String, Object> result = process(input, bufferState, maxCountState, c.timestamp());
-                final MElement output = MElement.of(result, c.timestamp());
-                c.output(output);
+                Logging.log(LOG, logging, "input", input);
+
+                final List<MElement> outputs = process(input, bufferState, maxCountState, c.timestamp());
+
+                for(final MElement output : outputs) {
+                    c.output(output);
+                    Logging.log(LOG, logging, "output", output);
+                }
             } catch (final Throwable e) {
                 final BadRecord badRecord = processError("Failed to process stateful batch select", input, e, failFast);
                 c.output(failuresTag, badRecord);
@@ -423,6 +480,7 @@ public class SelectTransform extends Transform {
                 final String jobName,
                 final String moduleName,
                 //
+                final Schema inputSchema,
                 final Schema outputSchema,
                 final JsonElement filterJson,
                 final List<SelectFunction> selectFunctions,
@@ -433,7 +491,7 @@ public class SelectTransform extends Transform {
                 final TupleTag<BadRecord> failuresTag,
                 final Coder<MElement> inputCoder) {
 
-            super(jobName, moduleName, outputSchema, filterJson, selectFunctions, flattenField, logging, failFast, failuresTag);
+            super(jobName, moduleName, inputSchema, outputSchema, filterJson, selectFunctions, flattenField, logging, failFast, failuresTag);
 
             this.bufferStateSpec = StateSpecs.orderedList(inputCoder);
             this.maxCountTimeStateSpec = StateSpecs.value(InstantCoder.of());
@@ -441,9 +499,7 @@ public class SelectTransform extends Transform {
 
         @Setup
         public void setup() {
-            filter.setup();
-            select.setup();
-            unnest.setup();
+            super.setup();
         }
 
         @ProcessElement
@@ -463,9 +519,14 @@ public class SelectTransform extends Transform {
             }
 
             try {
-                final Map<String, Object> result = process(input, bufferState, maxCountState, c.timestamp());
-                final MElement output = MElement.of(result, c.timestamp());
-                c.output(output);
+                Logging.log(LOG, logging, "input", input);
+
+                final List<MElement> outputs = process(input, bufferState, maxCountState, c.timestamp());
+
+                for(final MElement output : outputs) {
+                    c.output(output);
+                    Logging.log(LOG, logging, "output", output);
+                }
             } catch (final Throwable e) {
                 final BadRecord badRecord = processError("Failed to process stateful streaming select", input, e, failFast);
                 c.output(failuresTag, badRecord);

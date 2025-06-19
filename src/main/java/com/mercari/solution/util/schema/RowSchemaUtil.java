@@ -7,6 +7,7 @@ import com.google.protobuf.ByteString;
 import com.mercari.solution.util.DateTimeUtil;
 import com.mercari.solution.util.schema.converter.JsonToRowConverter;
 import com.mercari.solution.util.schema.converter.RowToJsonConverter;
+import org.apache.beam.sdk.coders.RowCoder;
 import org.apache.beam.sdk.extensions.sql.impl.utils.CalciteUtils;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.schemas.logicaltypes.EnumerationType;
@@ -17,6 +18,8 @@ import org.joda.time.DateTimeZone;
 import org.joda.time.Instant;
 import org.joda.time.ReadableDateTime;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -630,40 +633,24 @@ public class RowSchemaUtil {
             return null;
         }
         final Schema.Field field = row.getSchema().getField(fieldName);
-        switch (field.getType().getTypeName()) {
-            case BOOLEAN:
-                return BigDecimal.valueOf(row.getBoolean(fieldName) ? 1D : 0D);
-            case STRING: {
+        return switch (field.getType().getTypeName()) {
+            case BOOLEAN -> BigDecimal.valueOf(row.getBoolean(fieldName) ? 1D : 0D);
+            case STRING -> {
                 try {
-                    return BigDecimal.valueOf(Double.valueOf(row.getString(fieldName)));
+                    yield BigDecimal.valueOf(Double.valueOf(row.getString(fieldName)));
                 } catch (Exception e) {
-                    return null;
+                    yield null;
                 }
             }
-            case BYTE:
-                return BigDecimal.valueOf(row.getByte(fieldName).longValue());
-            case INT16:
-                return BigDecimal.valueOf(row.getInt16(fieldName).longValue());
-            case INT32:
-                return BigDecimal.valueOf(row.getInt32(fieldName).longValue());
-            case INT64:
-                return BigDecimal.valueOf(row.getInt64(fieldName));
-            case FLOAT:
-                return BigDecimal.valueOf(row.getFloat(fieldName).doubleValue());
-            case DOUBLE:
-                return BigDecimal.valueOf(row.getDouble(fieldName));
-            case DECIMAL:
-                return row.getDecimal(fieldName);
-            case LOGICAL_TYPE:
-            case DATETIME:
-            case BYTES:
-            case ARRAY:
-            case ITERABLE:
-            case ROW:
-            case MAP:
-            default:
-                return null;
-        }
+            case BYTE -> BigDecimal.valueOf(row.getByte(fieldName).longValue());
+            case INT16 -> BigDecimal.valueOf(row.getInt16(fieldName).longValue());
+            case INT32 -> BigDecimal.valueOf(row.getInt32(fieldName).longValue());
+            case INT64 -> BigDecimal.valueOf(row.getInt64(fieldName));
+            case FLOAT -> BigDecimal.valueOf(row.getFloat(fieldName).doubleValue());
+            case DOUBLE -> BigDecimal.valueOf(row.getDouble(fieldName));
+            case DECIMAL -> row.getDecimal(fieldName);
+            default -> null;
+        };
     }
 
     // for bigtable
@@ -682,14 +669,11 @@ public class RowSchemaUtil {
         if(row.getValue(fieldName) == null) {
             return null;
         }
-        switch (row.getSchema().getField(fieldName).getType().getTypeName()) {
-            case STRING:
-                return Base64.getDecoder().decode(row.getString(fieldName));
-            case BYTES:
-                return row.getBytes(fieldName);
-            default:
-                return null;
-        }
+        return switch (row.getSchema().getField(fieldName).getType().getTypeName()) {
+            case STRING -> Base64.getDecoder().decode(row.getString(fieldName));
+            case BYTES -> row.getBytes(fieldName);
+            default -> null;
+        };
     }
 
     public static ByteBuffer getAsBytes(final Row row, final String fieldName) {
@@ -731,54 +715,35 @@ public class RowSchemaUtil {
         if(value == null) {
             return defaultTimestamp;
         }
-        switch (field.getType().getTypeName()) {
-            case DATETIME: {
-                return (Instant) value;
-            }
-            case LOGICAL_TYPE: {
+        return switch (field.getType().getTypeName()) {
+            case DATETIME -> (Instant) value;
+            case LOGICAL_TYPE -> {
                 if(RowSchemaUtil.isLogicalTypeDate(field.getType())) {
-                    return (Instant) value;
+                    yield (Instant) value;
                 } else if(RowSchemaUtil.isLogicalTypeTimestamp(field.getType())) {
-                    return (Instant) value;
+                    yield (Instant) value;
                 }
-                return defaultTimestamp;
+                yield defaultTimestamp;
             }
-            case STRING: {
+            case STRING -> {
                 final String stringValue = value.toString();
                 try {
-                    return Instant.parse(stringValue);
+                    yield Instant.parse(stringValue);
                 } catch (Exception e) {
-                    return defaultTimestamp;
+                    yield defaultTimestamp;
                 }
             }
-            case INT16: {
-                return Instant.ofEpochMilli((short) value);
-            }
-            case INT32: {
+            case INT16 -> Instant.ofEpochMilli((short) value);
+            case INT32 -> {
                 final LocalDate localDate = LocalDate.ofEpochDay((int) value);
-                return new DateTime(localDate.getYear(), localDate.getMonthValue(), localDate.getDayOfMonth(),
+                yield new DateTime(localDate.getYear(), localDate.getMonthValue(), localDate.getDayOfMonth(),
                         0, 0, DateTimeZone.UTC).toInstant();
             }
-            case INT64: {
-                return Instant.ofEpochMilli((long) value);
-            }
-            case FLOAT: {
-                return Instant.ofEpochMilli(((Float) value).longValue());
-            }
-            case DOUBLE: {
-                return Instant.ofEpochMilli(((Double) value).longValue());
-            }
-            case BYTES:
-            case BOOLEAN:
-            case MAP:
-            case DECIMAL:
-            case BYTE:
-            case ARRAY:
-            case ITERABLE:
-            case ROW:
-            default:
-                return defaultTimestamp;
-        }
+            case INT64 -> Instant.ofEpochMilli((long) value);
+            case FLOAT -> Instant.ofEpochMilli(((Float) value).longValue());
+            case DOUBLE -> Instant.ofEpochMilli(((Double) value).longValue());
+            default -> defaultTimestamp;
+        };
     }
 
     public static Object getAsPrimitive(final Row row, final String fieldName) {
@@ -1318,6 +1283,14 @@ public class RowSchemaUtil {
         }
         final String defaultValue = fieldOptions.getValue(OPTION_NAME_DEFAULT_VALUE, String.class);
         return convertDefaultValue(fieldType, defaultValue);
+    }
+
+    public static byte[] encode(final Row row) throws IOException {
+        final RowCoder coder = RowCoder.of(row.getSchema());
+        try(final ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
+            coder.encode(row, byteArrayOutputStream);
+            return byteArrayOutputStream.toByteArray();
+        }
     }
 
     private static Object convertDefaultValue(final Schema.FieldType fieldType, final String defaultValue) {

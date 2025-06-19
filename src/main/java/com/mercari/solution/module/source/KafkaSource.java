@@ -311,7 +311,7 @@ public class KafkaSource extends Source {
                 //if(!filter.filter(attributes)) {
                 //    return;
                 //}
-                final MElement output = serialize.deserialize(message.getKV().getValue(), c.timestamp(), DataType.ELEMENT);
+                final MElement output = serialize.deserialize(message.getKV().getValue(), c.timestamp());
 
                 Logging.log(LOG, loggings, "output", output);
                 c.output(output);

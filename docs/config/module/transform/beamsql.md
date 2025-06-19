@@ -7,7 +7,7 @@ In additional to that, `beamsql` module provides a variety of original [built-in
 
 If you want to set a trigger for the stream execution, specify the [strategy](../common/strategy.md) parameter.
 
-Note that `zetasql` planner does not support INT32 and FLOAT32 data types as input in `beamsql` module.
+Note that `beamsql` module does not support INT32 and FLOAT32 data types as input in `beamsql` module.
 
 ## Transform module common parameters
 
@@ -23,10 +23,6 @@ Note that `zetasql` planner does not support INT32 and FLOAT32 data types as inp
 | parameter | optional | type   | description                                                                                                                                                                                                                                |
 |-----------|----------|--------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | sql       | required | String | sql text to process inputs data. You can also specify the path of the GCS where you put the SQL file.                                                                                                                                      |
-| planner   | optional | Enum   | (Deprecated) Specify beamsql query planner name, [`zetasql`](https://beam.apache.org/documentation/dsls/sql/zetasql/overview/) or [`calcite`](https://beam.apache.org/documentation/dsls/sql/calcite/overview/). The default is `calcite`. |
-
-The zetasql planner in BeamSQL is no longer developed and will be removed in the near future.
-To use it, please activate the dependency part commented out in pom.xml.
 
 ## Related example config files
 

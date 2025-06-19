@@ -39,6 +39,7 @@ public class BigtableSource extends Source {
         private List<BigtableSchemaUtil.ColumnFamilyProperties> columns;
         private BigtableSchemaUtil.Format format;
         private BigtableSchemaUtil.CellType cellType;
+        private AdditionalFieldsParameters additionalFields;
 
         // additional fields
         private Boolean withRowKey;
@@ -130,6 +131,23 @@ public class BigtableSource extends Source {
             }
         }
 
+        private static class AdditionalFieldsParameters implements Serializable {
+
+            private String rowKey;
+            private String firstTimestamp;
+            private String lastTimestamp;
+
+            private List<String> validate() {
+                final List<String> errorMessages = new ArrayList<>();
+                return errorMessages;
+            }
+
+            private void setDefaults() {
+
+            }
+
+        }
+
         private static class ChangeStreamParameter implements Serializable {
 
             private String changeStreamName;
@@ -137,6 +155,9 @@ public class BigtableSource extends Source {
             private String metadataInstanceId;
             private String metadataTableId;
             private String startTime;
+            private Boolean createOrUpdateMetadataTable;
+            private BigtableIO.ExistingPipelineOptions existingPipelineOptions;
+            private String metadataTableAppProfileId;
 
             public List<String> validate(Parameters parentParameters) {
                 final List<String> errorMessages = new ArrayList<>();
@@ -179,7 +200,7 @@ public class BigtableSource extends Source {
 
         return switch (getMode()) {
             case batch -> expandBatch(begin, parameters, errorHandler);
-            case changeDataCapture -> expandChangeStream(begin, parameters);
+            case changeDataCapture -> expandChangeStream(begin, parameters, errorHandler);
             default -> throw new IllegalModuleException("bigtable source does not support mode: " + getMode());
         };
     }
@@ -240,15 +261,23 @@ public class BigtableSource extends Source {
 
     private MCollectionTuple expandChangeStream(
             final PBegin begin,
-            final Parameters parameters) {
+            final Parameters parameters,
+            final MErrorHandler errorHandler) {
 
-        final BigtableIO.ReadChangeStream read = createReadChangeStreams(parameters);
-        final PCollection<MElement> output = begin
-                .apply("ReadChangeStream", read)
-                .apply("Convert", ParDo
-                        .of(new ChangeStreamToElementDoFn()));
+        final Schema outputSchema = BigtableSchemaUtil.createChangeRecordMutationSchema();
 
-        return MCollectionTuple.of(output, getSchema());
+        final TupleTag<MElement> outputTag = new TupleTag<>() {};
+        final TupleTag<BadRecord> failuresTag = new TupleTag<>() {};
+
+        final PCollectionTuple outputs = begin
+                .apply("ReadChangeStream", createReadChangeStreams(parameters))
+                .apply("ConvertToElement", ParDo
+                        .of(new ChangeStreamToElementDoFn(outputSchema, getFailFast(), failuresTag))
+                        .withOutputTags(outputTag, TupleTagList.of(failuresTag)));
+
+        errorHandler.addError(outputs.get(failuresTag));
+
+        return MCollectionTuple.of(outputs.get(outputTag), getSchema());
     }
 
     private static BigtableIO.Read createRead(final Parameters parameters) {
@@ -292,9 +321,17 @@ public class BigtableSource extends Source {
         if(parameters.changeStream.startTime != null) {
             readChangeStream = readChangeStream.withStartTime(DateTimeUtil.toJodaInstant(parameters.changeStream.startTime));
         }
-
         if(parameters.appProfileId != null) {
             readChangeStream = readChangeStream.withAppProfileId(parameters.appProfileId);
+        }
+        if(parameters.changeStream.createOrUpdateMetadataTable != null) {
+            readChangeStream = readChangeStream.withCreateOrUpdateMetadataTable(parameters.changeStream.createOrUpdateMetadataTable);
+        }
+        if(parameters.changeStream.metadataTableAppProfileId != null) {
+            readChangeStream = readChangeStream.withMetadataTableAppProfileId(parameters.changeStream.metadataTableAppProfileId);
+        }
+        if(parameters.changeStream.existingPipelineOptions != null) {
+            readChangeStream = readChangeStream.withExistingPipelineOptions(parameters.changeStream.existingPipelineOptions);
         }
 
         return readChangeStream;
@@ -425,20 +462,52 @@ public class BigtableSource extends Source {
 
     private static class ChangeStreamToElementDoFn extends DoFn<KV<ByteString, ChangeStreamMutation>, MElement> {
 
+        private final Schema outputSchema;
+        private final Boolean failFast;
+        private final TupleTag<BadRecord> failureTag;
+
+        ChangeStreamToElementDoFn(
+                final Schema outputSchema,
+                final Boolean failFast,
+                final TupleTag<BadRecord> failureTag) {
+
+            this.outputSchema = outputSchema;
+            this.failFast = failFast;
+            this.failureTag = failureTag;
+        }
+
+        @Setup
+        public void setup() {
+            outputSchema.setup(DataType.AVRO);
+        }
+
         @ProcessElement
         public void processElement(ProcessContext c) {
             final KV<ByteString, ChangeStreamMutation> kv = c.element();
             if(kv == null) {
                 return;
             }
-            final ByteString rowKey = kv.getKey();
-            final ChangeStreamMutation mutation = kv.getValue();
-            if(rowKey == null || mutation == null) {
-                return;
-            }
 
-            final MElement output = MElement.of(mutation, c.timestamp());
-            c.output(output);
+            try {
+                final ByteString rowKey = kv.getKey();
+                final ChangeStreamMutation mutation = kv.getValue();
+                if (rowKey == null || mutation == null) {
+                    return;
+                }
+
+                final MElement output = BigtableSchemaUtil.convert(mutation, c.timestamp());
+                final MElement output_ = output.convert(outputSchema, DataType.AVRO);
+                c.output(output_);
+            } catch (final Throwable e) {
+                final Map<String, Object> values = new HashMap<>();
+                if(kv.getKey() != null) {
+                    values.put("rowKey", kv.getKey().toStringUtf8());
+                } else {
+                    values.put("rowKey", "");
+                }
+                final BadRecord badRecord = processError("Failed to convert from bigtable change record to element", values, e, failFast);
+                c.output(failureTag, badRecord);
+            }
         }
     }
 

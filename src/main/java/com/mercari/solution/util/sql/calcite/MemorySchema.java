@@ -3,6 +3,7 @@ package com.mercari.solution.util.sql.calcite;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.schema.CalciteSchemaUtil;
+import com.mercari.solution.util.sql.calcite.udf.DateTimeFunctions;
 import org.apache.beam.vendor.calcite.v1_28_0.com.google.common.collect.ImmutableMultimap;
 import org.apache.beam.vendor.calcite.v1_28_0.com.google.common.collect.Multimap;
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.DataContext;
@@ -19,8 +20,6 @@ import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.type.Return
 import org.apache.beam.vendor.calcite.v1_28_0.org.apache.calcite.sql.validate.SqlValidator;
 
 import java.io.Serializable;
-import java.sql.Date;
-import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,14 +54,15 @@ public class MemorySchema extends AbstractSchema implements Serializable {
     @Override
     protected Multimap<String, Function> getFunctionMultimap() {
         return ImmutableMultimap.<String, Function>builder()
+                .putAll(DateTimeFunctions.functions())
                 // example define UDFs
-                //.put("ExampleStringLengthFunctionEval", ScalarFunctionImpl.create(Types.lookupMethod(ExampleStringLengthFunction.class, "eval", String.class)))
-                //.put("ExampleStringLengthFunctionCurrentDate", ScalarFunctionImpl.create(Types.lookupMethod(ExampleStringLengthFunction.class, "currentDate")))
                 //.put("ExampleStructFunction", ScalarFunctionImpl.create(Types.lookupMethod(ExampleStructFunction.class, "eval", String.class)))
                 //.put("ExampleAggregationFunction", AggregateFunctionImpl.create(ExampleAggregationFunction.class))
                 //.put("", SqlBasicAggFunction.create("ARG_MAX", SqlKind.valueOf("ARG_MAX"), ReturnTypes.ARG0_NULLABLE_IF_EMPTY, OperandTypes.ANY_NUMERIC).withGroupOrder(Optionality.FORBIDDEN).withFunctionType(SqlFunctionCategory.SYSTEM))
                 .build();
     }
+
+
 
     public static class MemoryTable extends AbstractTable implements ScannableTable, Serializable {
 
@@ -128,18 +128,6 @@ public class MemorySchema extends AbstractSchema implements Serializable {
 
     }
 
-    public static class ExampleStringLengthFunction {
-
-        public static Integer eval(String ok) {
-            return ok.length();
-        }
-
-        public static Date currentDate() {
-            return Date.valueOf(LocalDate.now());
-        }
-
-    }
-
     public static class ExampleStructFunction {
 
         public static Object eval(Object names) {
@@ -156,26 +144,6 @@ public class MemorySchema extends AbstractSchema implements Serializable {
                 }
                 default -> throw new IllegalArgumentException();
             };
-        }
-
-    }
-
-    public static class ExampleAggregationFunction {
-
-        public double init() {
-            return 0L;
-        }
-
-        public double add(double accumulator, int v) {
-            return accumulator + v;
-        }
-
-        public double merge(double accumulator0, double accumulator1) {
-            return accumulator0 + accumulator1;
-        }
-
-        public double result(double accumulator) {
-            return accumulator;
         }
 
     }

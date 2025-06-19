@@ -1,5 +1,6 @@
 package com.mercari.solution.util.coder;
 
+import com.google.cloud.bigtable.data.v2.models.ChangeStreamMutation;
 import com.google.cloud.spanner.Struct;
 import com.google.datastore.v1.Entity;
 import com.google.firestore.v1.Document;
@@ -8,7 +9,9 @@ import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import org.apache.beam.sdk.coders.*;
 import org.apache.beam.sdk.extensions.avro.coders.AvroGenericCoder;
+import org.apache.beam.sdk.extensions.protobuf.DynamicProtoCoder;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessageWithAttributesAndMessageIdAndOrderingKeyCoder;
+import org.apache.beam.sdk.io.gcp.spanner.changestreams.model.DataChangeRecord;
 import org.apache.beam.sdk.util.VarInt;
 import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
 
@@ -50,10 +53,13 @@ public class ElementCoder extends StructuredCoder<MElement> {
             case ELEMENT -> UnionMapCoder.mapCoder();
             case ROW -> RowCoder.of(schema.getRow().getSchema());
             case AVRO -> AvroGenericCoder.of(schema.getAvro().getSchema());
+            case PROTO -> DynamicProtoCoder.of(schema.getProtobuf().getDescriptor());
             case STRUCT -> SerializableCoder.of(Struct.class);
             case DOCUMENT -> SerializableCoder.of(Document.class);
             case ENTITY -> SerializableCoder.of(Entity.class);
             case MESSAGE -> PubsubMessageWithAttributesAndMessageIdAndOrderingKeyCoder.of();
+            case SPANNER_DATACHANGERECORD -> AvroGenericCoder.of(DataChangeRecord.class);
+            case BIGTABLE_DATACHANGERECORD -> SerializableCoder.of(ChangeStreamMutation.class);
             default -> throw new IllegalStateException("Not supported schema: " + schema.getType());
         };
     }
@@ -137,6 +143,7 @@ public class ElementCoder extends StructuredCoder<MElement> {
             case MapCoder<?,?> c when !dataType.equals(DataType.ELEMENT) -> throw new IllegalStateException("Illegal data type: " + dataType + " for MapCoder");
             case RowCoder c when !dataType.equals(DataType.ROW) -> throw new IllegalStateException("Illegal data type: " + dataType + " for RowCoder");
             case AvroGenericCoder c when !dataType.equals(DataType.AVRO) -> throw new IllegalStateException("Illegal data type: " + dataType + " for AvroCoder");
+            case DynamicProtoCoder c when !dataType.equals(DataType.PROTO) -> throw new IllegalStateException("Illegal data type: " + dataType + " for ProtoCoder");
             case PubsubMessageWithAttributesAndMessageIdAndOrderingKeyCoder c when !dataType.equals(DataType.MESSAGE) -> throw  new IllegalStateException("Illegal data type: " + dataType + " for PubSubMessageCoder");
             default -> true;
         };

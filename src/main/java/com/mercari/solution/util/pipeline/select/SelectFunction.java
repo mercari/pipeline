@@ -40,12 +40,15 @@ public interface SelectFunction extends Serializable {
         struct,
         map,
         json,
-        jsonpath,
+        json_path,
         http,
         scrape,
         generate,
+        bytes_encode,
+        bytes_decode,
         base64_encode,
         base64_decode,
+        reshape,
         panic;
 
         public static Func is(String value) {
@@ -145,12 +148,15 @@ public interface SelectFunction extends Serializable {
             case current_timestamp -> CurrentTimestamp.of(name, ignore);
             case struct -> Struct.of(name, jsonObject, inputFields, ignore);
             case json -> Jsons.of(name, jsonObject, inputFields, ignore);
-            case jsonpath ->  JsonPath.of(name, jsonObject, inputFields, ignore);
+            case json_path ->  JsonPath.of(name, jsonObject, inputFields, ignore);
             case http -> Http.of(name, jsonObject, inputFields, ignore);
             case scrape -> Scrape.of(name, jsonObject, inputFields, ignore);
             case generate -> Generate.of(name, jsonObject, inputFields, ignore);
+            case bytes_encode -> Bytes.of(name, jsonObject, inputFields, true, ignore);
+            case bytes_decode -> Bytes.of(name, jsonObject, inputFields, false, ignore);
             case base64_encode -> Base64Coder.of(name, jsonObject, inputFields, true, ignore);
             case base64_decode -> Base64Coder.of(name, jsonObject, inputFields, false, ignore);
+            case reshape -> Reshape.of(name, jsonObject, inputFields, ignore);
             case panic -> Panic.of(name, jsonObject, inputFields, ignore);
             case null, default -> StatefulFunction.of(jsonObject, inputFields);
         };

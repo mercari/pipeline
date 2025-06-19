@@ -1,11 +1,11 @@
 package com.mercari.solution.util.pipeline.aggregation;
 
-
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.pipeline.Filter;
+import com.mercari.solution.util.pipeline.select.stateful.StatefulFunction;
 import org.joda.time.Instant;
 
 import java.util.*;
@@ -20,7 +20,7 @@ public class Count implements AggregateFunction {
 
     private Boolean ignore;
 
-    private List<Range> ranges;
+    private Range range;
 
     private transient Filter.ConditionNode conditionNode;
 
@@ -37,24 +37,24 @@ public class Count implements AggregateFunction {
 
     @Override
     public Boolean filter(final MElement element) {
-        return AggregateFunction.filter(conditionNode, element);
+        return StatefulFunction.filter(conditionNode, element);
     }
 
     @Override
-    public List<Range> getRanges() {
-        return ranges;
+    public Range getRange() {
+        return range;
     }
 
     public static Count of(
             final String name,
             final String condition,
-            final List<Range> ranges,
+            final Range range,
             final Boolean ignore) {
 
         final Count count = new Count();
         count.name = name;
         count.condition = condition;
-        count.ranges = ranges;
+        count.range = range;
         count.ignore = ignore;
 
         count.inputFields = new ArrayList<>();

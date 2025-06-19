@@ -2,33 +2,39 @@
 
 ## Config file contents
 
-In the Config file, four modules, `options`, `sources`, `transforms`, and `sinks`, are combined to define the processing contents.
+In the Config file, six modules, `system`, `options`, `sources`, `transforms`, `sinks` and `failures`, are combined to define the processing contents.
 `sources` is for input data acquisition, `transforms` is for data processing, and `sinks` is for data output.
 `options` defines pipeline options.
 
+| parameter  | type                         | description                            |
+|------------|------------------------------|----------------------------------------|
+| system     | [System](system.md)          | System configuration.                  |
+| options    | [Options](options/README.md) | Pipeline option definitions.           |
+| sources    | Array<Source\>               | Pipeline data source definitions.      |
+| transforms | Array<Transform\>            | Pipeline data processing definitions.  |
+| sinks      | Array<Sink\>                 | Pipeline data sink definitions.        |
+| failures   | Array<Failure\>              | Pipeline dead-letter sink definitions. |
+
+
 ```JSON:config
 {
-  "args": {
-    "xxx": "yyy"
-  },
-  "system": {
-    "context": "xxx",
-    "failures": {...}
-  },
-  "options": [
-    {...}
-  ],
+  "system": {...},
+  "options": {...},
   "sources": [
-    {...}
+    {...},
+    ...
   ],
   "transforms": [
-    {...}
+    {...},
+    ...
   ],
   "sinks": [
-    {...}
+    {...},
+    ...
   ],
   "failures": [
-    {...}
+    {...},
+    ...
   ]
 }
 ```
@@ -52,7 +58,7 @@ The common settings of the three types of modules are as follows.
 | module     | String               | required | Set [module](module/README.md) name                                                                                                                                                                                                                                                                 |
 | parameters | Map<String, Object\> | required | Specify the parameters defined in each module.                                                                                                                                                                                                                                                      |
 | strategy   | Strategy             | optional | Specify beam windowing strategy([Window](https://beam.apache.org/documentation/programming-guide/#windowing), [Trigger](https://beam.apache.org/documentation/programming-guide/#triggers), [AccumulationMode](https://beam.apache.org/documentation/programming-guide/#window-accumulation-modes)) |
-| wait       | Array<String\>       | optional | If you want to wait for the completion of other steps and then start this step, assign a step Name to wait for completion.                                                                                                                                                                          |
+| waits      | Array<String\>       | optional | If you want to wait for the completion of other steps and then start this step, assign a step Name to wait for completion.                                                                                                                                                                          |
 | failFast   | Boolean              | optional | Specify true if you want the job to fail immediately when an error occurs. The default is true for batch and false for streaming.                                                                                                                                                                   |
 | ignore     | Boolean              | optional | Specify true if you want to ignore this module.                                                                                                                                                                                                                                                     |
 
@@ -106,21 +112,6 @@ The common settings of the sink module are as follows
 | inputs     | Array<String\> | required | Specify the name of the module from which you want to output data. source or transform name.                                |
 | sideInputs | Array<String\> | optional | Specify the name of the input when additional information is needed for writing.                                            |
 
-## Options
-
-The options defines pipeline options.
-The following items can be defined.
-
-See the [Options page](options/README.md) for details.
-
-| parameter | description                                                      |
-|-----------|------------------------------------------------------------------|
-| streaming | Specify whether the dataflow job starts in streaming mode or not |
-| dataflow  | Specify Dataflow runner job options                              |
-| direct    | Specify Direct runner job options                                |
-| beamsql   | Specify Beam SQL options                                         |
-
-
 ## Rewriting the configuration file at runtime
 
 In the configuration file, you can use the Template Engine, [Apache FreeMarker](https://freemarker.apache.org/), to assign variables at runtime, or you can even rewrite the file itself.
@@ -164,8 +155,8 @@ You can assign variables to the Config file at runtime by prefixing it with the 
 gcloud dataflow flex-template run {job_name} \
   --template-file-gcs-location=gs://{path/to/template_file} \
   --parameters=config=gs://{path/to/config.json} \
-  --parameters=template.current_datetime=2020-12-01T00:00:00Z \
-  --parameters=template.output_path=gs://mybucket/output
+  --parameters=args.current_datetime=2020-12-01T00:00:00Z \
+  --parameters=args.output_path=gs://mybucket/output
 ```
 
 REST API version
@@ -176,8 +167,8 @@ curl -X POST -H "Content-Type: application/json"  -H "Authorization: Bearer $(gc
   `"?dynamicTemplate.gcsPath=gs://{path/to/legacy_template_file}" -d "{
     'parameters': {
       'config': '$(echo "$CONFIG")',
-      'template.current_datetime': '2020-12-01T00:00:00Z',
-      'template.output_path': 'gs://mybucket/output',
+      'args.current_datetime': '2020-12-01T00:00:00Z',
+      'args.output_path': 'gs://mybucket/output',
     },
     'jobName':'myJobName',
   }"

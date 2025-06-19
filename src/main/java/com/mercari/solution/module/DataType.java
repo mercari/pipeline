@@ -11,6 +11,7 @@ public enum DataType implements Serializable {
     // format
     ROW(2), // Apache Beam row
     AVRO(3), // Apache Avro record
+    PROTO(4), // Protobuf dynamic message
     // datastore format
     STRUCT(11), // GCP Spanner struct
     DOCUMENT(12), // GCP Firestore document

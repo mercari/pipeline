@@ -1,15 +1,25 @@
 package com.mercari.solution.util.schema;
 
 import com.google.bigtable.v2.*;
+import com.google.bigtable.v2.Mutation;
+import com.google.bigtable.v2.Row;
+import com.google.bigtable.v2.Value;
 import com.google.cloud.ByteArray;
-import com.google.cloud.bigtable.data.v2.models.RowCell;
+import com.google.cloud.bigtable.data.v2.BigtableDataClient;
+import com.google.cloud.bigtable.data.v2.models.*;
+import com.google.cloud.bigtable.data.v2.models.sql.*;
+import com.google.cloud.bigtable.data.v2.models.sql.ColumnMetadata;
+import com.google.cloud.bigtable.data.v2.models.sql.ResultSetMetadata;
 import com.google.protobuf.ByteString;
+import com.mercari.solution.module.MElement;
 import com.mercari.solution.module.Schema;
 import com.mercari.solution.util.DateTimeUtil;
+import com.mercari.solution.util.FailureUtil;
 import com.mercari.solution.util.TemplateUtil;
 import freemarker.template.Template;
 import org.apache.avro.util.Utf8;
 import org.apache.beam.sdk.values.KV;
+import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.io.*;
 import org.joda.time.Instant;
@@ -18,10 +28,16 @@ import java.io.*;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.stream.Collectors;
 
 public class BigtableSchemaUtil {
+
+    private static final String RESOURCE_CDC_AVRO_SCHEMA_PATH = "/schema/avro/bigtable_cdc.avsc";
+    private static final String RESOURCE_RUNTIME_CDC_AVRO_SCHEMA_PATH = "/template/MPipeline/resources/schema/avro/bigtable_cdc.avsc";
 
     public enum Format {
         bytes,
@@ -53,6 +69,24 @@ public class BigtableSchemaUtil {
         all,
         first,
         last
+    }
+
+    public enum ModType {
+
+        SET_CELL(0),
+        DELETE_FAMILY(1),
+        DELETE_CELLS(2),
+        UNKNOWN(3);
+
+        private final int id;
+
+        ModType(int id) {
+            this.id = id;
+        }
+
+        public int getId() {
+            return id;
+        }
     }
 
     public static class ColumnFamilyProperties implements Serializable {
@@ -505,6 +539,164 @@ public class BigtableSchemaUtil {
                 .withField("value", Schema.FieldType.BYTES)
                 .withField("timestamp", Schema.FieldType.TIMESTAMP)
                 .build();
+    }
+
+    public static Schema convertSchema(final ResultSetMetadata meta)  throws SQLException {
+        final Schema.Builder builder = Schema.builder();
+        for (final ColumnMetadata columnMetadata : meta.getColumns()) {
+            builder.withField(columnMetadata.name(), convertFieldType(columnMetadata.type()));
+        }
+        return builder.build();
+    }
+
+    public static Schema convertSchema(final String projectId, final String instanceId, final String sql) {
+        try(final BigtableDataClient client = BigtableDataClient.create(projectId, instanceId);
+            final ResultSet resultSet = client.executeQuery(Statement.newBuilder(sql).build())) {
+            return BigtableSchemaUtil.convertSchema(resultSet.getMetadata());
+        } catch (final IOException | SQLException e) {
+            throw new RuntimeException("", e);
+        }
+    }
+
+    public static MElement convert(
+            final ResultSet resultSet,
+            final Instant timestamp) {
+
+        final Map<String, Object> primitiveValues = new HashMap<>();
+        final ResultSetMetadata meta = resultSet.getMetadata();
+        for (final ColumnMetadata columnMetadata : meta.getColumns()) {
+            final Object primitiveValue = convertFieldValue(resultSet, columnMetadata);
+            primitiveValues.put(columnMetadata.name(), primitiveValue);
+        }
+        return MElement.of(primitiveValues, timestamp);
+    }
+
+    public static MElement convert(
+            final com.google.cloud.bigtable.data.v2.models.Row row,
+            final Map<String, ColumnFamilyProperties> families,
+            final Instant timestamp) {
+
+        final Map<String, Object> primitiveValues = BigtableSchemaUtil.toPrimitiveValues(row, families);
+        return MElement.of(primitiveValues, timestamp);
+    }
+
+    private static Schema.FieldType convertFieldType(final SqlType<?> type) {
+        return switch (type.getCode()) {
+            case BOOL -> Schema.FieldType.BOOLEAN;
+            case STRING -> Schema.FieldType.STRING;
+            case BYTES -> Schema.FieldType.BYTES;
+            case INT64 -> Schema.FieldType.INT64;
+            case FLOAT32 -> Schema.FieldType.FLOAT32;
+            case FLOAT64 -> Schema.FieldType.FLOAT64;
+            case DATE -> Schema.FieldType.DATE;
+            case TIMESTAMP -> Schema.FieldType.TIMESTAMP;
+            default -> Schema.FieldType.STRING;
+        };
+    }
+
+    private static Object convertFieldValue(
+            final ResultSet resultSet,
+            final ColumnMetadata columnMetadata) {
+
+        if(resultSet.isNull(columnMetadata.name())) {
+            return null;
+        }
+
+        return switch (columnMetadata.type().getCode()) {
+            case BOOL -> resultSet.getBoolean(columnMetadata.name());
+            case STRING -> resultSet.getString(columnMetadata.name());
+            case BYTES -> resultSet.getBytes(columnMetadata.name());
+            case INT64 -> resultSet.getLong(columnMetadata.name());
+            case FLOAT32 -> resultSet.getFloat(columnMetadata.name());
+            case FLOAT64 -> resultSet.getDouble(columnMetadata.name());
+            case DATE -> DateTimeUtil.toEpochDay(resultSet.getDate(columnMetadata.name()));
+            case TIMESTAMP -> resultSet.getTimestamp(columnMetadata.name()).toEpochMilli() * 1000L;
+            default -> null;
+        };
+    }
+
+    public static ModType getModType(final Entry entry) {
+        return switch (entry) {
+            case SetCell setCell -> ModType.SET_CELL;
+            case DeleteFamily deleteFamily -> ModType.DELETE_FAMILY;
+            case DeleteCells deleteCells -> ModType.DELETE_CELLS;
+            default -> ModType.UNKNOWN;
+        };
+    }
+
+    public static Schema createChangeRecordMutationSchemaA() {
+        return Schema.builder()
+                .withField("rowKey", Schema.FieldType.STRING)
+                .withField("family", Schema.FieldType.STRING)
+                .withField("qualifier", Schema.FieldType.STRING)
+                .withField("value", Schema.FieldType.BYTES)
+                .withField("timestamp", Schema.FieldType.TIMESTAMP)
+                .build();
+    }
+
+    public static Schema createChangeRecordMutationSchema() {
+        try (final InputStream is = FailureUtil.class.getResourceAsStream(RESOURCE_CDC_AVRO_SCHEMA_PATH)) {
+            if(is == null) {
+                //LOG.info("BadRecord avro file is not found: " + RESOURCE_CDC_AVRO_SCHEMA_PATH);
+                try(final InputStream iss = Files.newInputStream(Path.of(RESOURCE_RUNTIME_CDC_AVRO_SCHEMA_PATH))) {
+                    final String schemaJson = org.apache.commons.io.IOUtils.toString(iss,  StandardCharsets.UTF_8);
+                    final org.apache.avro.Schema avroSchema = AvroSchemaUtil.convertSchema(schemaJson);
+                    return Schema.of(avroSchema);
+                } catch (Throwable e) {
+                    throw new IllegalArgumentException("BadRecord avro file is not found", e);
+                }
+            }
+            final String schemaJson = IOUtils.toString(is,  StandardCharsets.UTF_8);
+            final org.apache.avro.Schema avroSchema = AvroSchemaUtil.convertSchema(schemaJson);
+            return Schema.of(avroSchema);
+        } catch (final IOException e) {
+            throw new IllegalArgumentException("Not found event descriptor file", e);
+        }
+    }
+
+    public static MElement convert(
+            final ChangeStreamMutation mutation,
+            final Instant timestamp) {
+
+        ChangeStreamMutation.MutationType a = mutation.getType();
+
+        final Map<String, Object> primitiveValues = new HashMap<>();
+        primitiveValues.put("rowKey", mutation.getRowKey().asReadOnlyByteBuffer());
+        primitiveValues.put("commitTimestamp", DateTimeUtil.toEpochMicroSecond(mutation.getCommitTime()));
+        primitiveValues.put("tieBreaker", mutation.getTieBreaker());
+        primitiveValues.put("sourceCluster", mutation.getSourceClusterId());
+        primitiveValues.put("estimatedLowWatermarkTime", DateTimeUtil.toEpochMicroSecond(mutation.getEstimatedLowWatermarkTime()));
+
+        final List<Map<String,Object>> entriesPrimitiveValues = new ArrayList<>();
+        for(final Entry entry : mutation.getEntries()) {
+            final Map<String, Object> entryPrimitiveValues = new HashMap<>();
+            switch (entry) {
+                case SetCell setCell -> {
+                    entryPrimitiveValues.put("familyName", setCell.getFamilyName());
+                    entryPrimitiveValues.put("qualifier", setCell.getQualifier().asReadOnlyByteBuffer());
+                    entryPrimitiveValues.put("value", setCell.getValue().asReadOnlyByteBuffer());
+                    entryPrimitiveValues.put("timestamp", setCell.getTimestamp());
+                    entryPrimitiveValues.put("modType", ModType.SET_CELL.id);
+                    entriesPrimitiveValues.add(entryPrimitiveValues);
+                }
+                case DeleteFamily deleteFamily -> {
+                    entryPrimitiveValues.put("familyName", deleteFamily.getFamilyName());
+                    entryPrimitiveValues.put("modType", ModType.DELETE_FAMILY.id);
+                    entriesPrimitiveValues.add(entryPrimitiveValues);
+                }
+                case DeleteCells deleteCells -> {
+                    entryPrimitiveValues.put("familyName", deleteCells.getFamilyName());
+                    entryPrimitiveValues.put("qualifier", deleteCells.getQualifier().asReadOnlyByteBuffer());
+                    entryPrimitiveValues.put("modType", ModType.DELETE_CELLS.id);
+                    entriesPrimitiveValues.add(entryPrimitiveValues);
+                }
+                default -> {}
+            }
+        }
+
+        primitiveValues.put("entries", entriesPrimitiveValues);
+
+        return MElement.of(primitiveValues, timestamp);
     }
 
     public static Map<String, ColumnFamilyProperties> toMap(List<ColumnFamilyProperties> families) {

@@ -24,6 +24,10 @@ public class IllegalModuleException extends RuntimeException {
         this(name, module, List.of(convertThrowableMessage(e)));
     }
 
+    public IllegalModuleException(final String name, final String module, final String errorMessage) {
+        this(name, module, List.of(errorMessage));
+    }
+
     public IllegalModuleException(final String name, final String module, final List<String> errorMessages) {
         super("name: " + name + ", module:" + module + ", cause: " + String.join(",", errorMessages));
         this.name = name;

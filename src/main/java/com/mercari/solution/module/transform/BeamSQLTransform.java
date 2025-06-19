@@ -11,7 +11,6 @@ import com.mercari.solution.util.sql.udf.ArrayFunctions;
 import com.mercari.solution.util.sql.udf.MathFunctions;
 import org.apache.beam.sdk.coders.RowCoder;
 import org.apache.beam.sdk.extensions.sql.SqlTransform;
-import org.apache.beam.sdk.extensions.sql.impl.QueryPlanner;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
@@ -34,7 +33,6 @@ public class BeamSQLTransform extends Transform {
         private Map<String, String> namedParameters;
         private List<String> positionalParameters;
         private Boolean autoLoading;
-        private Planner planner;
 
         private void validate() {
             if(this.sql == null) {
@@ -86,11 +84,6 @@ public class BeamSQLTransform extends Transform {
             }
             return query;
         }
-    }
-
-    public enum Planner {
-        zetasql,
-        calcite
     }
 
     @Override
@@ -157,19 +150,9 @@ public class BeamSQLTransform extends Transform {
             final Parameters parameters,
             final MErrorHandler errorHandler) {
 
-        SqlTransform transform = SqlTransform.query(parameters.sql);
-        transform = switch (parameters.planner) {
-            case zetasql -> {
-                try {
-                    final Class<QueryPlanner> clazz = (Class<QueryPlanner>)Class.forName("org.apache.beam.sdk.extensions.sql.zetasql.ZetaSQLQueryPlanner");
-                    yield transform.withQueryPlannerClass(clazz);
-                } catch (final ClassNotFoundException e) {
-                    throw new IllegalStateException("remove comment out zetasql part in pom.xml");
-                }
-            }
-            case null, default -> transform.withQueryPlannerClass(org.apache.beam.sdk.extensions.sql.impl.CalciteQueryPlanner.class);
-        };
-
+        SqlTransform transform = SqlTransform
+                .query(parameters.sql)
+                .withQueryPlannerClass(org.apache.beam.sdk.extensions.sql.impl.CalciteQueryPlanner.class);
         if(parameters.ddl != null) {
             transform = transform.withDdlString(parameters.ddl);
         }
