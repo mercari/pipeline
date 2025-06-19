@@ -150,7 +150,10 @@ public class CalciteSchemaUtil {
                     default -> throw new IllegalStateException("Not supported ArrayElementType: " + typeName);
                 };
             }
-            case Types.OTHER -> sqlValue;
+            case Types.OTHER -> switch (sqlValue) {
+                case Object[] ds -> Arrays.asList(ds);
+                default -> sqlValue.toString();
+            };
             case Types.STRUCT, Types.JAVA_OBJECT -> {
                 yield sqlValue;
             }
@@ -176,15 +179,21 @@ public class CalciteSchemaUtil {
     private static RelDataType createRelDataType(
             final Schema.FieldType fieldType,
             final RelDataTypeFactory relDataTypeFactory) {
-        return switch (fieldType.getType()) {
+        final RelDataType relDataType = switch (fieldType.getType()) {
             case map -> relDataTypeFactory.createMapType(
                         relDataTypeFactory.createSqlType(SqlTypeName.VARCHAR),
                         relDataTypeFactory.createSqlType(convertSqlTypeName(fieldType.getMapValueType())));
-            case array -> relDataTypeFactory.createArrayType(
+            case array, matrix -> relDataTypeFactory.createArrayType(
                         createRelDataType(fieldType.getArrayValueType(), relDataTypeFactory), -1L);
             case element -> convertSchema(fieldType.getElementSchema(), relDataTypeFactory);
             default -> relDataTypeFactory.createSqlType(convertSqlTypeName(fieldType));
         };
+        if(fieldType.getNullable()) {
+            return relDataTypeFactory.createTypeWithNullability(relDataType, true);
+        } else {
+            // TODO
+            return relDataTypeFactory.createTypeWithNullability(relDataType, true);
+        }
     }
 
     private static SqlTypeName convertSqlTypeName(final Schema.FieldType fieldType) {
@@ -201,10 +210,10 @@ public class CalciteSchemaUtil {
             case date -> SqlTypeName.DATE;
             case time -> SqlTypeName.TIME;
             case timestamp, datetime -> SqlTypeName.TIMESTAMP;
-            case array -> SqlTypeName.ARRAY;
+            case array, matrix -> SqlTypeName.ARRAY;
             case map -> SqlTypeName.MAP;
             case element -> SqlTypeName.ROW;
-            default -> throw new IllegalArgumentException();
+            default -> throw new IllegalArgumentException("Not supported calcite data type: " + fieldType.getType());
         };
     }
 
@@ -252,7 +261,9 @@ public class CalciteSchemaUtil {
                 yield Schema.FieldType.STRING;
             }
             case Types.REF, Types.SQLXML, Types.OTHER,
-                 Types.REF_CURSOR, Types.DISTINCT, Types.DATALINK, Types.NULL -> Schema.FieldType.STRING;
+                 Types.REF_CURSOR, Types.DISTINCT, Types.DATALINK, Types.NULL -> {
+                yield Schema.FieldType.STRING;
+            }
             default -> Schema.FieldType.STRING;
         };
     }
