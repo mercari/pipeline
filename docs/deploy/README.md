@@ -48,7 +48,7 @@ gcloud dataflow flex-template build gs://{path/to/template_file} \
 mvn clean package -DskipTests -Pdirect -Dimage={region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/direct:latest
 ```
 
-## Deploy Direct Runner API Server (for deploy API server)
+## Deploy Pipeline API Server (for pipeline API server)
 
 ### Push Docker Image to GAR
 
@@ -61,22 +61,10 @@ mvn clean package -DskipTests -Pserver -Dimage={region}-docker.pkg.dev/{deploy_p
 ```sh
 gcloud run deploy {service_name} \
   --project={project} \
-  --image={region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/server \
+  --image={region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/server:latest \
   --platform=managed \
   --region={project} \
   --execution-environment=gen2 \
   --port=8080 \
   --no-allow-unauthenticated
-```
-
-## Deploy Portable Runner Pipeline (for Flink, Spark, ..etc)
-
-```sh
-mvn clean package -DskipTests -Pportable -Dimage={region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/portable:latest
-```
-
-## Deploy Flink Runner Pipeline
-
-```sh
-mvn clean package -DskipTests -Pflink -Dimage={region}-docker.pkg.dev/{deploy_project}/{template_repo_name}/flink:latest
 ```

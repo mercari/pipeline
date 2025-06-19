@@ -46,3 +46,9 @@
 | [pubsub](sink/pubsub.md)                 | ○     | ○         | Publish data to specified PubSub topic                     |
 | [copyfile](sink/copyfile.md)             | ○     | ○(TODO)   | Copy files between storage services                        |
 | [debug](sink/debug.md)                   | ○     | ○         | Outputting data to the log                                 |
+
+## Failure Modules
+
+| module                      | batch | streaming | description                                                      |
+|-----------------------------|-------|-----------|------------------------------------------------------------------|
+| [pubsub](failure/pubsub.md) | ○     | ○         | Publish Failure record messages to specified Cloud Pub/Sub topic |

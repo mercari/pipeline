@@ -5,13 +5,11 @@ The following items can be defined as options.
 
 | parameter | type                            | description                                                                                                |
 |-----------|---------------------------------|------------------------------------------------------------------------------------------------------------|
+| jobName   | String                          | jobName.                                                                                                   |
 | streaming | Boolean                         | Specify whether the dataflow job starts in streaming mode or not.                                          |
 | dataflow  | [Dataflow Options](dataflow.md) | Specify [Cloud Dataflow runner](https://beam.apache.org/documentation/runners/dataflow/) specific options. |
 | direct    | [Direct Options](direct.md)     | Specify [Direct runner](https://beam.apache.org/documentation/runners/direct/) specific options.           |
-| portable  | [Portable Options](portable.md) | Specify Portable runner specific options.                                                                  |
-| flink     | [Flink Options](flink.md)       | Specify [Flink runner](https://beam.apache.org/documentation/runners/flink/) specific options.             |
 | gcp       | [GCP Options](gcp.md)           | Specify Google Cloud options.                                                                              |
-| beamsql   | [BeamSQL Options](beamsql.md)   | Specify Beam SQL common settings.                                                                          |
 
 
 #### Example
