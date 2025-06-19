@@ -105,6 +105,13 @@ public class Schema implements Serializable {
                 .orElseGet(() -> ElementToAvroConverter.convertSchema(fields));
     }
 
+    public Descriptors.Descriptor getProtobufDescriptor() {
+        return Optional
+                .ofNullable(getProtobuf())
+                .map(ProtobufSchema::getDescriptor)
+                .orElse(null);
+    }
+
     public Boolean getUseDestinationSchema() {
         return useDestinationSchema;
     }

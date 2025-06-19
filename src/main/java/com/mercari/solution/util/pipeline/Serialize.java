@@ -92,8 +92,8 @@ public class Serialize implements Serializable {
                 this.descriptorFile = null;
                 this.messageName = null;
                 this.avroSchemaJson = null;
-                if(inputSchema.getProtobuf().getDescriptor() != null) {
-                    final Descriptors.Descriptor descriptor = inputSchema.getProtobuf().getDescriptor();
+                if(inputSchema.getProtobufDescriptor() != null) {
+                    final Descriptors.Descriptor descriptor = inputSchema.getProtobufDescriptor();
                     descriptors.put(descriptor.getFullName(), descriptor);
                 }
                 this.charset = StandardCharsets.UTF_8.name();
