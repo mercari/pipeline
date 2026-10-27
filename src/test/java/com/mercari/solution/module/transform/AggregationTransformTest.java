@@ -2,12 +2,24 @@ package com.mercari.solution.module.transform;
 
 import com.mercari.solution.MPipeline;
 import com.mercari.solution.config.Config;
+import com.mercari.solution.config.TransformConfig;
 import com.mercari.solution.module.*;
+import com.mercari.solution.util.coder.ElementCoder;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
+import org.apache.beam.sdk.testing.TestStream;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.TimestampedValue;
+import org.joda.time.Duration;
+import org.joda.time.Instant;
+import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 
 public class AggregationTransformTest {
@@ -172,6 +184,124 @@ public class AggregationTransformTest {
         });
 
         pipeline.run();
+    }
+
+    @Test
+    public void testLateElementsInGlobalWindowSelectLatestInputTimestamp() throws Exception {
+        final Instant base = Instant.parse("2026-10-22T11:00:00Z");
+        final List<Instant> times = List.of(base, base.plus(Duration.standardSeconds(30)), base.minus(Duration.standardSeconds(30)));
+        final TestStream<MElement> events = TestStream.create(ElementCoder.of(EVENT_SCHEMA))
+                .advanceWatermarkTo(base.plus(Duration.standardMinutes(10)))
+                .addElements(event(times.get(0)), event(times.get(1)), event(times.get(2)))
+                .advanceWatermarkToInfinity();
+
+        assertSelectedEventTimestamps(applyAggregation(events, "LATEST"), times, false, true);
+        pipeline.run();
+    }
+
+    @Test
+    public void testLateElementsInGlobalWindowSelectEarliestInputTimestamp() throws Exception {
+        final Instant base = Instant.parse("2026-10-22T11:00:00Z");
+        final List<Instant> times = List.of(base, base.minus(Duration.standardSeconds(30)), base.plus(Duration.standardSeconds(30)));
+        final TestStream<MElement> events = TestStream.create(ElementCoder.of(EVENT_SCHEMA))
+                .advanceWatermarkTo(base.plus(Duration.standardMinutes(10)))
+                .addElements(event(times.get(0)), event(times.get(1)), event(times.get(2)))
+                .advanceWatermarkToInfinity();
+
+        assertSelectedEventTimestamps(applyAggregation(events, "EARLIEST"), times, true, true);
+        pipeline.run();
+    }
+
+    @Test
+    public void testOnTimeElementInGlobalWindowKeepsPaneTimestamp() throws Exception {
+        final Instant base = Instant.parse("2026-10-22T11:00:00Z");
+        final List<Instant> times = List.of(base);
+        final TestStream<MElement> events = TestStream.create(ElementCoder.of(EVENT_SCHEMA))
+                .addElements(event(times.get(0)))
+                .advanceWatermarkToInfinity();
+
+        assertSelectedEventTimestamps(applyAggregation(events, "LATEST"), times, false, false);
+        pipeline.run();
+    }
+
+    private static final Schema EVENT_SCHEMA = Schema.of(List.of(
+            Schema.Field.of("user", Schema.FieldType.STRING)));
+
+    private static TimestampedValue<MElement> event(final Instant timestamp) {
+        return TimestampedValue.of(MElement.of(EVENT_SCHEMA, Map.of("user", "a"), timestamp.getMillis()), timestamp);
+    }
+
+    private PCollection<MElement> applyAggregation(final TestStream<MElement> events, final String timestampCombiner) throws Exception {
+        final String configJson = """
+                {
+                  "transforms": [
+                    {
+                      "name": "aggregation",
+                      "module": "aggregation",
+                      "inputs": ["events"],
+                      "parameters": {
+                        "groupFields": ["user"],
+                        "window": { "type": "global", "timestampCombiner": "%s" },
+                        "trigger": { "type": "repeatedly", "foreverTrigger": { "type": "afterPane", "elementCountAtLeast": 1 } },
+                        "accumulationMode": "accumulating",
+                        "aggregations": [
+                          { "input": "events", "fields": [ { "name": "count", "op": "count" } ] }
+                        ],
+                        "select": [
+                          { "name": "count", "field": "count" },
+                          { "name": "eventTimestamp", "func": "event_timestamp" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+                """.formatted(timestampCombiner);
+
+        final TransformConfig transformConfig = Config.load(configJson).getTransforms().getFirst();
+        final Transform transform = Transform.create(
+                transformConfig, pipeline.getOptions(), List.of(), List.of(), MErrorHandler.empty());
+        return MCollectionTuple
+                .of("events", pipeline.apply(events), EVENT_SCHEMA)
+                .apply("aggregation", transform)
+                .getSinglePCollection();
+    }
+
+    // A pane holding the first n elements must select the max (or min) of their timestamps if it was emitted
+    // at the end of the global window, and its own pane timestamp otherwise.
+    private static void assertSelectedEventTimestamps(
+            final PCollection<MElement> outputs,
+            final List<Instant> times,
+            final boolean earliest,
+            final boolean late) {
+
+        PAssert.that(outputs).satisfies(elements -> {
+            int paneTimestampCount = 0;
+            int endOfWindowCount = 0;
+            for(final MElement element : elements) {
+                final int n = ((Long) element.getPrimitiveValue("count")).intValue();
+                final long selectedMicros = (Long) element.getPrimitiveValue("eventTimestamp");
+                final Instant paneTimestamp = element.getTimestamp();
+                final Instant expected;
+                if(paneTimestamp.isBefore(GlobalWindow.INSTANCE.maxTimestamp())) {
+                    expected = paneTimestamp;
+                    paneTimestampCount++;
+                } else {
+                    endOfWindowCount++;
+                    final Comparator<Instant> order = Comparator.naturalOrder();
+                    expected = earliest
+                            ? Collections.min(times.subList(0, n), order)
+                            : Collections.max(times.subList(0, n), order);
+                }
+                Assert.assertEquals(expected.getMillis() * 1000L, selectedMicros);
+            }
+            if(late) {
+                Assert.assertEquals(0, paneTimestampCount);
+                Assert.assertTrue(endOfWindowCount > 0);
+            } else {
+                Assert.assertTrue(paneTimestampCount > 0);
+            }
+            return null;
+        });
     }
 
 }

@@ -11,6 +11,7 @@ import com.mercari.solution.util.pipeline.aggregation.AggregateFunction;
 import com.mercari.solution.util.pipeline.aggregation.Aggregators;
 import org.apache.beam.sdk.coders.*;
 import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.windowing.TimestampCombiner;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.slf4j.Logger;
@@ -22,6 +23,9 @@ import java.util.stream.Collectors;
 public class Aggregation {
 
     private static final Logger LOG = LoggerFactory.getLogger(Aggregation.class);
+
+    // '$' is not valid in Avro or BigQuery field names, so the key does not collide with group or aggregation fields.
+    public static final String INPUT_EPOCH_MILLIS_KEY = "$inputEpochMillis";
 
     public static Aggregate aggregate(
             final List<String> inputNames,
@@ -89,17 +93,18 @@ public class Aggregation {
                             .withKeys(groupFields)
                             .withStrategy(strategy));
 
+            final boolean earliest = TimestampCombiner.EARLIEST.equals(strategy.getTimestampCombiner());
             final PCollection<KV<String,Map<String, Object>>> aggregated;
             if(fanout != null) {
                 aggregated = withKey
                         .apply("CombineWithFanOut", Combine
                                 .<String,MElement,Map<String,Object>>perKey(
-                                        AggregationCombineFn.combine(inputNames, groupFields, aggregatorsList))
+                                        AggregationCombineFn.combine(inputNames, groupFields, aggregatorsList, earliest))
                                 .withHotKeyFanout(fanout));
             } else {
                 aggregated = withKey
                         .apply("Combine", Combine
-                                .perKey(AggregationCombineFn.combine(inputNames, groupFields, aggregatorsList)));
+                                .perKey(AggregationCombineFn.combine(inputNames, groupFields, aggregatorsList, earliest)));
             }
 
             return aggregated
@@ -117,25 +122,29 @@ public class Aggregation {
         private final List<String> inputNames;
         private final List<String> groupFields;
         private final List<Aggregators> aggregatorsList;
+        private final boolean earliest;
 
         private transient Map<String, Aggregators> aggregatorsMap;
 
         public static AggregationCombineFn combine(
                 final List<String> inputNames,
                 final List<String> groupFields,
-                final List<Aggregators> aggregatorsList) {
+                final List<Aggregators> aggregatorsList,
+                final boolean earliest) {
 
-            return new AggregationCombineFn(inputNames, groupFields, aggregatorsList);
+            return new AggregationCombineFn(inputNames, groupFields, aggregatorsList, earliest);
         }
 
         AggregationCombineFn(
                 final List<String> inputNames,
                 final List<String> groupFields,
-                final List<Aggregators> aggregatorsList) {
+                final List<Aggregators> aggregatorsList,
+                final boolean earliest) {
 
             this.inputNames = inputNames;
             this.groupFields = groupFields;
             this.aggregatorsList = aggregatorsList;
+            this.earliest = earliest;
         }
 
         private void init() {
@@ -159,6 +168,7 @@ public class Aggregation {
         public Accumulator addInput(Accumulator accum, final MElement input) {
             init();
             final String inputName = inputNames.get(input.getIndex());
+            accum.put(INPUT_EPOCH_MILLIS_KEY, selectEpochMillis(accum.get(INPUT_EPOCH_MILLIS_KEY), input.getEpochMillis()));
             return aggregatorsMap.get(inputName)
                     .addInput(accum, input);
         }
@@ -170,6 +180,13 @@ public class Aggregation {
             for(final Aggregators aggregators : aggregatorsMap.values()) {
                 accumulator = aggregators.mergeAccumulators(accumulator, accums);
             }
+            Object epochMillis = null;
+            for(final Accumulator accum : accums) {
+                epochMillis = selectEpochMillis(epochMillis, accum.get(INPUT_EPOCH_MILLIS_KEY));
+            }
+            if(epochMillis != null) {
+                accumulator.put(INPUT_EPOCH_MILLIS_KEY, epochMillis);
+            }
             return accumulator;
         }
 
@@ -180,7 +197,8 @@ public class Aggregation {
                 LOG.info("Skip null aggregation result");
                 return new HashMap<>();
             }
-            if(accumulator.isEmpty()) {
+            final Object epochMillis = accumulator.get(INPUT_EPOCH_MILLIS_KEY);
+            if(accumulator.isEmpty() || (epochMillis != null && accumulator.getMap().size() == 1 && accumulator.getSets().isEmpty())) {
                 LOG.info("Skip empty aggregation result");
                 return new HashMap<>();
             }
@@ -197,8 +215,21 @@ public class Aggregation {
             for(final Aggregators aggregators : aggregatorsMap.values()) {
                 values = aggregators.extractOutput(accumulator, values);
             }
+            values.put(INPUT_EPOCH_MILLIS_KEY, epochMillis);
 
             return values;
+        }
+
+        private Object selectEpochMillis(final Object current, final Object candidate) {
+            if(current == null) {
+                return candidate;
+            }
+            if(candidate == null) {
+                return current;
+            }
+            final long c = (Long) current;
+            final long n = (Long) candidate;
+            return earliest ? Math.min(c, n) : Math.max(c, n);
         }
 
         @Override

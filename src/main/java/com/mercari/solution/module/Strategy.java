@@ -54,6 +54,10 @@ public class Strategy implements Serializable {
         return window == null && trigger == null && mode == null;
     }
 
+    public TimestampCombiner getTimestampCombiner() {
+        return window == null ? null : window.timestampCombiner;
+    }
+
     public <T> Window<T> createWindow() {
         return createWindow(window, trigger, mode);
     }
